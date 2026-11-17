@@ -52,6 +52,7 @@ func validateTaskPluginDeletionHead(head TaskPluginCatalogHead, deletions []task
 // DeleteVersion is deliberately separate from ordinary CAS. It never promotes
 // another version, deletes a bundled distribution file, or erases an audit ID.
 // The same head lock serializes task binding persistence with reference checks.
+// Deletion owns its transaction so the reference scan cannot inherit a read view.
 func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision int64, key, version string) (int64, error) {
 	if store == nil || store.db == nil || ctx == nil {
 		return 0, taskplugin.ErrCatalogUnavailable
@@ -59,19 +60,26 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 	if revision <= 0 || revision == math.MaxInt64 || key == "" || version == "" {
 		return 0, taskplugin.ErrCatalogInvalid
 	}
-	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, table := range []any{&TaskPluginDeletion{}, &Task{}, &Channel{}, &Option{}} {
-			if !tx.Migrator().HasTable(table) {
-				return taskplugin.ErrCatalogUnavailable
-			}
+	db := store.db.WithContext(ctx)
+	if _, inherited := db.Statement.ConnPool.(gorm.TxCommitter); inherited {
+		return 0, taskplugin.ErrCatalogUnavailable
+	}
+	// Keep schema metadata reads outside the fresh transaction. Its first
+	// nonlocking read must follow the pricing/head locks, regardless of whether
+	// a server's INFORMATION_SCHEMA reads establish a consistent snapshot.
+	for _, table := range []any{&TaskPluginDeletion{}, &Task{}, &Channel{}, &Option{}} {
+		if !db.Migrator().HasTable(table) {
+			return 0, taskplugin.ErrCatalogUnavailable
 		}
+	}
+	if !db.Migrator().HasColumn(&TaskPluginDeletion{}, "models") {
+		return 0, taskplugin.ErrCatalogUnavailable
+	}
+	err := db.Transaction(func(tx *gorm.DB) error {
 		var head TaskPluginCatalogHead
 		// Match pricing writers before taking the catalog head or reading references.
 		if err := lockModelPricingRows(tx); err != nil {
 			return err
-		}
-		if !tx.Migrator().HasColumn(&TaskPluginDeletion{}, "models") {
-			return taskplugin.ErrCatalogUnavailable
 		}
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&head, 1).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -200,6 +208,17 @@ func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 		if taskPluginReference(value, m.Key, m.Version, pkg.Digest()) {
 			return taskplugin.ErrCatalogInUse
 		}
+		if _, object := value.(map[string]any); object {
+			// Match the typed persistence decoder's case-insensitive keys. Keep
+			// the recursive check above for legacy maps/arrays and unknown fields.
+			var private TaskPrivateData
+			if err := common.Unmarshal(raw, &private); err != nil {
+				return taskplugin.ErrCatalogUnavailable
+			}
+			if taskPluginTypedReference(private, m.Key, m.Version, pkg.Digest()) {
+				return taskplugin.ErrCatalogInUse
+			}
+		}
 	}
 	err = rows.Err()
 	if closeErr := rows.Close(); err == nil {
@@ -263,6 +282,23 @@ func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 		}
 	}
 	return nil
+}
+
+func taskPluginTypedReference(private TaskPrivateData, key, version, digest string) bool {
+	if binding := private.PluginBinding; binding != nil &&
+		(binding.PackageDigest == digest || binding.PluginKey == key && (binding.Version == "" || binding.Version == version)) {
+		return true
+	}
+	if context := private.BillingContext; context != nil {
+		if context.TaskBillingPlan != nil && context.TaskBillingPlan.ExpressionPlan != nil {
+			p := context.TaskBillingPlan.ExpressionPlan
+			if p.PackageDigest == digest || p.SelectedPluginKey == key || p.PluginKey == key && (p.PluginVersion == "" || p.PluginVersion == version) {
+				return true
+			}
+		}
+		return context.PricingUsageEnvelope != nil && context.PricingUsageEnvelope.PackageDigest == digest
+	}
+	return false
 }
 
 func taskPluginReference(value any, key, version, digest string) bool {

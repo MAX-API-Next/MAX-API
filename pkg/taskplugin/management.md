@@ -105,6 +105,12 @@ editing, JavaScript debugging and upstream execution code are outside this API.
 Pricing writers and deletion acquire the existing pricing-writer lock before
 the catalog head; channel references use head-before-channel order. Pricing
 validation reads current locked package rows rather than a prior MySQL snapshot.
+Deletion opens a fresh transaction from the root database handle; a store backed
+by an already active transaction is rejected to avoid inheriting an old read
+view. Schema preflight runs before that transaction, and ordinary reference
+reads follow the pricing/head locks. Task references are decoded with the same
+typed, case-insensitive JSON field rules as persistence, while recursive legacy
+map/array checks remain supported.
 The source-free declared-model index uses LONGTEXT on MySQL and TEXT on SQLite
 and PostgreSQL, with ASCII storage encoding for legacy character sets. Migrate
 existing experimental index columns before using deletion on upgraded nodes.

@@ -464,3 +464,94 @@ func TestTaskPluginSelectedPlanKeyPersistence(t *testing.T) {
 	ordinary := Task{TaskID: "ordinary-plan", PrivateData: TaskPrivateData{BillingContext: &TaskBillingContext{TaskBillingPlan: &types.TaskBillingPlan{ExpressionPlan: &types.TaskExpressionPlan{Driver: "go"}}}}}
 	require.NoError(t, db.Create(&ordinary).Error, "plans without plugin references remain unchanged")
 }
+
+func TestTaskPluginDeletionUsesTypedJSONReferences(t *testing.T) {
+	for _, shape := range []string{"binding", "plan", "envelope", "legacy array"} {
+		for _, upper := range []bool{false, true} {
+			if shape == "legacy array" && upper {
+				continue
+			}
+			t.Run(fmt.Sprintf("%s/uppercase=%t", shape, upper), func(t *testing.T) {
+				db := deletionDB(t)
+				store := NewTaskPluginCatalogStore(db)
+				pkg, entry := catalogFixture(t, "stored", "1.0.0", "json-reference-source")
+				_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+				require.NoError(t, err)
+				private := TaskPrivateData{}
+				switch shape {
+				case "binding":
+					private.PluginBinding = &types.TaskPluginBinding{PluginKey: "stored", Version: "1.0.0", PackageDigest: pkg.Digest()}
+				case "plan":
+					private.BillingContext = &TaskBillingContext{TaskBillingPlan: &types.TaskBillingPlan{ExpressionPlan: &types.TaskExpressionPlan{PluginKey: "stored", PluginVersion: "1.0.0", PackageDigest: pkg.Digest(), SelectedPluginKey: "stored"}}}
+				case "envelope":
+					private.BillingContext = &TaskBillingContext{PricingUsageEnvelope: &types.TaskPricingUsageEnvelope{PackageDigest: pkg.Digest()}}
+				}
+				raw, err := common.Marshal(private)
+				require.NoError(t, err)
+				if upper {
+					for _, key := range []string{"plugin_binding", "plugin_key", "version", "package_digest", "billing_context", "task_billing_plan", "expression_plan", "plugin_version", "selected_plugin_key", "pricing_usage_envelope"} {
+						raw = bytes.ReplaceAll(raw, []byte(`"`+key+`"`), []byte(`"`+strings.ToUpper(key)+`"`))
+					}
+				}
+				task := Task{TaskID: "json-reference"}
+				require.NoError(t, db.Create(&task).Error)
+				if shape == "legacy array" {
+					raw = []byte(`[{"historical":{"plugin_key":"stored","version":"1.0.0"}}]`)
+					require.NoError(t, db.Model(&Task{}).Where("id = ?", task.ID).UpdateColumn("private_data", string(raw)).Error)
+				} else {
+					require.NoError(t, db.Model(&Task{}).Where("id = ?", task.ID).Updates(map[string]any{"private_data": string(raw)}).Error, "exercise the actual typed write guard without canonicalizing stored keys")
+				}
+				before, err := store.Load(t.Context())
+				require.NoError(t, err)
+				_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+				require.ErrorIs(t, err, taskplugin.ErrCatalogInUse)
+				after, err := store.Load(t.Context())
+				require.NoError(t, err)
+				require.Equal(t, before, after, "reference rejection rolls back head, source and receipt")
+			})
+		}
+	}
+}
+
+func TestTaskPluginDeletionOwnsSnapshotBoundary(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	_, entry := catalogFixture(t, "stored", "1.0.0", "snapshot-boundary-source")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
+		_, err := NewTaskPluginCatalogStore(tx).DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+		require.ErrorIs(t, err, taskplugin.ErrCatalogUnavailable, "deletion cannot inherit a caller's old transaction snapshot")
+		return nil
+	}))
+	metadata := 0
+	metadataBeforeHead := 0
+	nonlockingBeforeHead := 0
+	headLocked := false
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("check_deletion_read_view", func(tx *gorm.DB) {
+		if _, inTransaction := tx.Statement.ConnPool.(gorm.TxCommitter); !inTransaction {
+			return
+		}
+		_, currentRead := tx.Statement.Clauses["FOR"]
+		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginCatalogHead") && currentRead {
+			headLocked = true
+		} else if !headLocked && !currentRead {
+			nonlockingBeforeHead++
+		}
+	}))
+	require.NoError(t, db.Callback().Row().Before("gorm:row").Register("check_metadata_snapshot_boundary", func(tx *gorm.DB) {
+		if !strings.Contains(tx.Statement.SQL.String(), "sqlite_master") {
+			return
+		}
+		metadata++
+		if _, inTransaction := tx.Statement.ConnPool.(gorm.TxCommitter); inTransaction && !headLocked {
+			metadataBeforeHead++
+		}
+	}))
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.NoError(t, err)
+	require.Positive(t, metadata, "exercise real migrator metadata queries")
+	require.True(t, headLocked, "deletion acquired a current-read head lock")
+	require.Zero(t, metadataBeforeHead, "schema preflight cannot establish a pre-lock read view")
+	require.Zero(t, nonlockingBeforeHead, "the first consistent read follows the catalog head lock")
+}
