@@ -291,8 +291,13 @@ for (const [name, document, expectedDigest] of [
 
 test('deleting an installed version requires node acknowledgement and closes only after a receipt', async () => {
   const f = fixture()
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
   f.api.mutate = async (command) => {
     f.writes.push(command)
+    await pending
     f.state.entries = []
     f.state.revision = '2'
     return {
@@ -310,7 +315,18 @@ test('deleting an installed version requires node acknowledgement and closes onl
   assert.equal((confirm as HTMLButtonElement).disabled, true)
   fireEvent.click(panel.getByRole('checkbox'))
   assert.equal((confirm as HTMLButtonElement).disabled, false)
-  fireEvent.click(confirm)
+  await act(async () => {
+    fireEvent.click(confirm)
+  })
+  try {
+    await waitFor(() => assert.equal(f.writes.length, 1))
+    assert.ok(v.getByRole('dialog'), 'the dialog stays open before the receipt')
+  } finally {
+    await act(async () => {
+      release()
+      await pending
+    })
+  }
   await v.findByText('No API extensions found')
   await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
   assert.equal(f.writes.length, 1)
@@ -748,42 +764,45 @@ test('an unknown operation can recover a failed reread inside the dialog without
   assert.equal(f.state.revision, '2')
 })
 
-test('empty and legacy sidebar settings expose and persist the task-plugin switch', async () => {
-  const adapter = api.defaults.adapter
-  const previous = useAuthStore.getState().auth.user
-  function NavigationProbe() {
-    const groups = useSidebarConfig(useSidebarData().navGroups)
-    const visible = groups
-      .flatMap((g) => g.items)
-      .some((item) => 'url' in item && item.url === '/task-plugins')
-    return (
-      <output>
-        {visible ? 'task-plugin-menu-visible' : 'task-plugin-menu-hidden'}
-      </output>
-    )
-  }
-  function SidebarSettingsProbe() {
-    const { status } = useStatus()
-    const serialized =
-      typeof status?.SidebarModulesAdmin === 'string'
-        ? status.SidebarModulesAdmin
-        : ''
-    const config = useMemo(
-      () => parseSidebarModulesAdmin(serialized),
-      [serialized]
-    )
-    return (
-      <SidebarModulesSection
-        config={config}
-        initialSerialized={serializeSidebarModulesAdmin(config)}
-      />
-    )
-  }
-  try {
-    useAuthStore
-      .getState()
-      .auth.setUser({ id: 901, username: 'fixture-root-role', role: 100 })
-    for (const initial of ['', '{"admin":{"enabled":true,"channel":false}}']) {
+for (const [caseName, initial] of [
+  ['empty', ''],
+  ['legacy', '{"admin":{"enabled":true,"channel":false}}'],
+]) {
+  test(`${caseName} sidebar settings expose and persist the task-plugin switch`, async () => {
+    const adapter = api.defaults.adapter
+    const previous = useAuthStore.getState().auth.user
+    function NavigationProbe() {
+      const groups = useSidebarConfig(useSidebarData().navGroups)
+      const visible = groups
+        .flatMap((g) => g.items)
+        .some((item) => 'url' in item && item.url === '/task-plugins')
+      return (
+        <output>
+          {visible ? 'task-plugin-menu-visible' : 'task-plugin-menu-hidden'}
+        </output>
+      )
+    }
+    function SidebarSettingsProbe() {
+      const { status } = useStatus()
+      const serialized =
+        typeof status?.SidebarModulesAdmin === 'string'
+          ? status.SidebarModulesAdmin
+          : ''
+      const config = useMemo(
+        () => parseSidebarModulesAdmin(serialized),
+        [serialized]
+      )
+      return (
+        <SidebarModulesSection
+          config={config}
+          initialSerialized={serializeSidebarModulesAdmin(config)}
+        />
+      )
+    }
+    try {
+      useAuthStore
+        .getState()
+        .auth.setUser({ id: 901, username: 'fixture-root-role', role: 100 })
       let saved = initial
       const requests: Array<{ key: string; value: string }> = []
       api.defaults.adapter = async (config) => {
@@ -822,12 +841,19 @@ test('empty and legacy sidebar settings expose and persist the task-plugin switc
         </I18nextProvider>
       )
       try {
-        assert.ok(v.getByText('task-plugin-menu-visible'))
-        const toggle = v.getByRole('switch', { name: 'API Extensions' })
+        const content = within(v.container)
+        const navigation = content.getByText('task-plugin-menu-visible')
+        const toggle = content.getByRole('switch', { name: 'API Extensions' })
+        const save = within(actions).getByRole('button', {
+          name: 'Save sidebar modules',
+        })
         assert.equal(toggle.getAttribute('aria-checked'), 'true')
         fireEvent.click(toggle)
-        fireEvent.click(v.getByRole('button', { name: 'Save sidebar modules' }))
-        await v.findByText('task-plugin-menu-hidden')
+        fireEvent.click(save)
+        await waitFor(() => {
+          assert.ok(navigation.isConnected)
+          assert.equal(navigation.textContent, 'task-plugin-menu-hidden')
+        })
         assert.equal(requests.length, 1)
         assert.equal(requests[0].key, 'SidebarModulesAdmin')
         assert.equal(JSON.parse(saved).admin.task_plugins, false)
@@ -836,13 +862,15 @@ test('empty and legacy sidebar settings expose and persist the task-plugin switc
         await waitFor(() =>
           assert.equal(toggle.getAttribute('aria-checked'), 'false')
         )
-        const save = v.getByRole('button', { name: 'Save sidebar modules' })
         await waitFor(() =>
           assert.equal((save as HTMLButtonElement).disabled, false)
         )
         fireEvent.click(toggle)
         fireEvent.click(save)
-        await v.findByText('task-plugin-menu-visible')
+        await waitFor(() => {
+          assert.ok(navigation.isConnected)
+          assert.equal(navigation.textContent, 'task-plugin-menu-visible')
+        })
         assert.equal(requests.length, 2)
         assert.equal(JSON.parse(saved).admin.task_plugins, true)
         await waitFor(() => {
@@ -851,15 +879,16 @@ test('empty and legacy sidebar settings expose and persist the task-plugin switc
         })
       } finally {
         await act(async () => {
+          await client.cancelQueries()
           v.unmount()
           client.clear()
         })
         actions.remove()
       }
+    } finally {
+      api.defaults.adapter = adapter
+      useAuthStore.getState().auth.setUser(previous)
+      window.localStorage.removeItem('status')
     }
-  } finally {
-    api.defaults.adapter = adapter
-    useAuthStore.getState().auth.setUser(previous)
-    window.localStorage.removeItem('status')
-  }
-})
+  })
+}

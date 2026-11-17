@@ -130,6 +130,14 @@ func TestTaskPluginDeletionReferencesRollbackAndRefresh(t *testing.T) {
 	for _, value := range []any{string(serialized), serialized} {
 		require.ErrorIs(t, db.Model(&Task{}).Where("id = ?", plain.ID).Updates(map[string]any{"private_data": value}).Error, taskplugin.ErrBindingRejected, "serialized bindings obey the same persistence guard")
 	}
+	for _, value := range []any{Task{PrivateData: task.PrivateData}, &Task{PrivateData: task.PrivateData}} {
+		require.ErrorIs(t, db.Model(&Task{}).Where("id = ?", plain.ID).Updates(value).Error, taskplugin.ErrBindingRejected, "struct updates cannot attach a deleted binding")
+		require.NoError(t, db.Model(&Task{}).Where("id = ?", plain.ID).Omit("private_data").Updates(value).Error)
+		require.NoError(t, db.Model(&Task{}).Where("id = ?", plain.ID).Select("status").Updates(value).Error)
+	}
+	var unchangedTask Task
+	require.NoError(t, db.First(&unchangedTask, plain.ID).Error)
+	require.Nil(t, unchangedTask.PrivateData.PluginBinding)
 	changed, _ := catalogFixture(t, "stored", "1.0.0", "different-source")
 	require.Error(t, restarted.Install(ctx, changed), "deletion does not permit changed bytes under the same identity")
 	require.NoError(t, restarted.Install(ctx, pkg), "exact unrevoked source can be installed again explicitly")

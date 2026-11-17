@@ -612,9 +612,9 @@ func (t *Task) submitResultUpdateValues() map[string]interface{} {
 }
 
 func (Task *Task) Update() error {
-	var err error
-	err = DB.Save(Task).Error
-	return err
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return tx.Save(Task).Error
+	})
 }
 
 func (t *Task) UpdateQuota() error {

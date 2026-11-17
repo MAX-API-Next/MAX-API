@@ -162,7 +162,7 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
     } catch (e) {
       if (mounted.current && validation.current.current(id))
         setError(
-          e instanceof PluginError ? e.message : 'API extension request failed'
+          e instanceof PluginError ? e.message : 'Task plugin request failed'
         )
     } finally {
       if (mounted.current && validation.current.current(id))

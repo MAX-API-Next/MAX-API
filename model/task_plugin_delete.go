@@ -338,6 +338,23 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 			candidate.PrivateData = private
 			task = &candidate
 		}
+	} else {
+		var update *Task
+		switch value := tx.Statement.Dest.(type) {
+		case Task:
+			update = &value
+		case *Task:
+			update = value
+		}
+		if update != nil {
+			selected, restricted := tx.Statement.SelectAndOmitColumns(false, true)
+			include, exists := selected["private_data"]
+			if (include || !exists && !restricted) && (update.PrivateData != (TaskPrivateData{}) || include) {
+				candidate := *task
+				candidate.PrivateData = update.PrivateData
+				task = &candidate
+			}
+		}
 	}
 	key, version, digest := "", "", ""
 	if binding := task.PrivateData.PluginBinding; binding != nil {

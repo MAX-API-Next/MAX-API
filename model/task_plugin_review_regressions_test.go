@@ -116,6 +116,64 @@ func TestTaskPluginModelIndexCodecBounds(t *testing.T) {
 	}
 }
 
+func TestTaskPluginSaveFallbackRetainsReferenceLock(t *testing.T) {
+	for _, kind := range []string{"task", "channel", "channel_without_key"} {
+		t.Run(kind, func(t *testing.T) {
+			db := deletionDB(t)
+			previousDB := DB
+			DB = db
+			t.Cleanup(func() { DB = previousDB })
+			pkg, entry := catalogFixture(t, "stored", "1.0.0", "fallback-source")
+			store := NewTaskPluginCatalogStore(db)
+			_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+			require.NoError(t, err)
+			target := db.NamingStrategy.TableName("Channel")
+			if kind == "task" {
+				target = db.NamingStrategy.TableName("Task")
+			}
+			observed, locked := false, false
+			require.NoError(t, db.Callback().Update().After("gorm:commit_or_rollback_transaction").Register("observe_missing_row_fallback", func(tx *gorm.DB) {
+				if tx.Statement.Table != target || tx.RowsAffected != 0 || tx.Error != nil {
+					return
+				}
+				observed = true
+				_, locked = tx.Statement.ConnPool.(gorm.TxCommitter)
+				if !locked {
+					_, err := store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+					tx.AddError(err)
+				}
+			}))
+			if kind == "task" {
+				task := Task{ID: 10001, TaskID: "retained", PrivateData: TaskPrivateData{PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", Version: "1.0.0", PackageDigest: pkg.Digest()}}}
+				err = task.Update()
+			} else {
+				channel := Channel{Id: 10001, Models: "catalog-model"}
+				if kind == "channel" {
+					err = channel.Save()
+				} else {
+					err = channel.SaveWithoutKey()
+				}
+			}
+			if kind == "channel_without_key" {
+				require.ErrorContains(t, err, "channels.key", "missing-row fallback must preserve the NOT NULL key failure")
+			} else {
+				require.NoError(t, err)
+			}
+			require.True(t, observed, "exercise the actual zero-row update before GORM fallback insert")
+			snapshot, err := store.Load(t.Context())
+			require.NoError(t, err)
+			require.Len(t, snapshot.Packages, 1, "a restored reference must not outlive the package deleted between Save transactions")
+			require.True(t, locked, "the guarded update must retain its transaction through fallback insert")
+			_, err = store.DeleteVersion(t.Context(), snapshot.Revision, "stored", "1.0.0")
+			if kind == "channel_without_key" {
+				require.NoError(t, err, "the failed fallback must not leave a channel reference")
+			} else {
+				require.ErrorIs(t, err, taskplugin.ErrCatalogInUse)
+			}
+		})
+	}
+}
+
 func TestTaskPluginCatalogMixedDeletionReadIsConflict(t *testing.T) {
 	db := deletionDB(t)
 	pkg, entry := catalogFixture(t, "stored", "1.0.0", "source")

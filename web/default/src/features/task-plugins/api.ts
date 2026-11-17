@@ -128,7 +128,7 @@ async function request<T>(
       const kind = classifyRequestError(status, write)
       throw new PluginError(
         kind,
-        typeof message === 'string' ? message : 'API extension request failed'
+        typeof message === 'string' ? message : 'Task plugin request failed'
       )
     }
     throw new PluginError(
