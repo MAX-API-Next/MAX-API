@@ -289,3 +289,95 @@ func TestTaskPluginDeletedSourceRejectsStalePricingWrite(t *testing.T) {
 	require.NoError(t, db.Order("key").Find(&after).Error)
 	require.Equal(t, before, after, "rejection changes neither price values nor coordination metadata")
 }
+
+func TestTaskPluginCatalogCASRejectsOmittedReinstalledVersion(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	pkg, first := catalogFixture(t, "stored", "1.0.0", "source")
+	_, other := catalogFixture(t, "other", "1.0.0", "other-source")
+	_, replacement := catalogFixture(t, "replacement", "1.0.0", "replacement-source")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{first, other})
+	require.NoError(t, err)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.NoError(t, err)
+	catalog, err := taskplugin.OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg), "identical reinstall remains supported")
+	before, err := store.Load(t.Context())
+	require.NoError(t, err)
+	require.EqualValues(t, 3, before.Revision)
+	var head TaskPluginCatalogHead
+	require.NoError(t, db.First(&head, 1).Error)
+	for name, proposed := range map[string][]taskplugin.StoredPackage{
+		"all omitted":              nil,
+		"reinstalled omitted":      {other},
+		"omitted with replacement": {other, replacement},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := store.CompareAndSwap(t.Context(), before.Revision, proposed)
+			require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+			after, err := store.Load(t.Context())
+			require.NoError(t, err)
+			require.Equal(t, before, after, "rejected omission must preserve packages, receipts and revision")
+			var actualHead TaskPluginCatalogHead
+			require.NoError(t, db.First(&actualHead, 1).Error)
+			require.Equal(t, head, actualHead)
+		})
+	}
+	updated := append([]taskplugin.StoredPackage(nil), before.Packages...)
+	updated[0].Enabled = false
+	revision, err := store.CompareAndSwap(t.Context(), before.Revision, updated)
+	require.NoError(t, err, "ordinary metadata updates keep every installed identity")
+	require.EqualValues(t, 4, revision)
+}
+
+func TestTaskPluginFrozenEnvelopePersistenceAfterDeletion(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	deleted, first := catalogFixture(t, "stored", "1.0.0", "source")
+	live, other := catalogFixture(t, "other", "1.0.0", "other-source")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{first, other})
+	require.NoError(t, err)
+	frozen := TaskPrivateData{BillingContext: &TaskBillingContext{PricingUsageEnvelope: &types.TaskPricingUsageEnvelope{PackageDigest: deleted.Digest()}}}
+	task := Task{TaskID: "frozen-before-delete", PrivateData: frozen}
+	require.NoError(t, db.Create(&task).Error)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.ErrorIs(t, err, taskplugin.ErrCatalogInUse, "committed frozen references block deletion")
+	require.NoError(t, db.Delete(&task).Error)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.NoError(t, err)
+	plain := Task{TaskID: "plain-after-delete"}
+	require.NoError(t, db.Create(&plain).Error)
+	raw, err := common.Marshal(frozen)
+	require.NoError(t, err)
+	for name, value := range map[string]any{"typed": frozen, "pointer": &frozen, "JSON string": string(raw), "JSON bytes": raw} {
+		t.Run(name, func(t *testing.T) {
+			err := db.Model(&Task{}).Where("id = ?", plain.ID).Updates(map[string]any{"private_data": value}).Error
+			require.ErrorIs(t, err, taskplugin.ErrBindingRejected)
+		})
+	}
+	for _, value := range []any{Task{PrivateData: frozen}, &Task{PrivateData: frozen}} {
+		require.ErrorIs(t, db.Model(&Task{}).Where("id = ?", plain.ID).Updates(value).Error, taskplugin.ErrBindingRejected)
+		require.NoError(t, db.Model(&Task{}).Where("id = ?", plain.ID).Omit("private_data").Updates(value).Error)
+	}
+	late := Task{TaskID: "frozen-after-delete", PrivateData: frozen}
+	require.ErrorIs(t, db.Create(&late).Error, taskplugin.ErrBindingRejected)
+	withBinding := frozen
+	withBinding.PluginBinding = &types.TaskPluginBinding{PluginKey: "other", Version: "1.0.0", PackageDigest: live.Digest()}
+	require.ErrorIs(t, db.Model(&Task{}).Where("id = ?", plain.ID).Updates(map[string]any{"private_data": withBinding}).Error, taskplugin.ErrBindingRejected, "a live binding cannot hide a stale frozen digest")
+	withPlan := TaskPrivateData{BillingContext: &TaskBillingContext{
+		TaskBillingPlan:      &types.TaskBillingPlan{ExpressionPlan: &types.TaskExpressionPlan{PluginKey: "other", PluginVersion: "1.0.0", PackageDigest: live.Digest()}},
+		PricingUsageEnvelope: frozen.BillingContext.PricingUsageEnvelope,
+	}}
+	require.ErrorIs(t, db.Model(&Task{}).Where("id = ?", plain.ID).Updates(map[string]any{"private_data": withPlan}).Error, taskplugin.ErrBindingRejected, "a live plan cannot hide a stale frozen digest")
+	var unchanged Task
+	require.NoError(t, db.First(&unchanged, plain.ID).Error)
+	require.Equal(t, TaskPrivateData{}, unchanged.PrivateData)
+	var count int64
+	require.NoError(t, db.Model(&Task{}).Count(&count).Error)
+	require.EqualValues(t, 1, count, "rejections must not insert a task")
+	valid := TaskPrivateData{BillingContext: &TaskBillingContext{PricingUsageEnvelope: &types.TaskPricingUsageEnvelope{PackageDigest: live.Digest()}}}
+	require.NoError(t, db.Model(&Task{}).Where("id = ?", plain.ID).Updates(map[string]any{"private_data": valid}).Error)
+	_, err = store.DeleteVersion(t.Context(), 2, "other", "1.0.0")
+	require.ErrorIs(t, err, taskplugin.ErrCatalogInUse, "a still-installed frozen digest remains persistable and protects its version")
+}

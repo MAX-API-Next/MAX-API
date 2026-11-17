@@ -6064,7 +6064,7 @@
     "Invalid API extension response": "無効な API 拡張レスポンス",
     "Bind API extensions": "API 拡張を関連付ける",
     "Bind registered API extensions to channels.": "登録済み API 拡張をチャネルに関連付けます。",
-    "Disabling blocks new bindings while keeping installed files and historical tasks available.": "無効化すると新規タスクの紐付けを停止し、インストール済みファイルと過去のタスクは保持します。",
+    "Disabling blocks new bindings while keeping installed files and historical tasks available.": "無効化すると新規の紐付けを停止し、インストール済みファイルと過去のタスクは保持します。",
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.": "タスク・チャネル・料金設定から参照されていなければ直接削除できます。インストール済みソースを削除し、配布パッケージと監査用識別情報を保持します。同じファイルを再インポートできます。",
     "Task plugin version is still referenced; remove task, channel or pricing references before deleting": "このバージョンは参照されています。削除する前にタスク・チャネル・料金設定の参照を解除してください。",
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "このバージョンは過去に永久失効されています。管理者に履歴レコードの処理を依頼してください。",

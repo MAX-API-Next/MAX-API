@@ -6064,7 +6064,7 @@
     "Invalid API extension response": "Phản hồi tiện ích mở rộng API không hợp lệ",
     "Bind API extensions": "Liên kết tiện ích mở rộng API",
     "Bind registered API extensions to channels.": "Liên kết các tiện ích mở rộng API đã đăng ký với kênh.",
-    "Disabling blocks new bindings while keeping installed files and historical tasks available.": "Tắt sẽ chặn liên kết tác vụ mới, đồng thời giữ lại tệp đã cài đặt và tác vụ lịch sử.",
+    "Disabling blocks new bindings while keeping installed files and historical tasks available.": "Tắt sẽ chặn liên kết mới, đồng thời giữ lại tệp đã cài đặt và tác vụ lịch sử.",
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.": "Có thể xóa trực tiếp khi không có tham chiếu từ tác vụ, kênh hoặc cấu hình giá. Mã nguồn đã cài sẽ bị xóa; gói phân phối và định danh kiểm toán được giữ lại. Có thể nhập lại cùng tệp.",
     "Task plugin version is still referenced; remove task, channel or pricing references before deleting": "Phiên bản này vẫn đang được tham chiếu; hãy gỡ tham chiếu từ tác vụ, kênh hoặc cấu hình giá trước khi xóa.",
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "Phiên bản này từng bị thu hồi vĩnh viễn; hãy liên hệ quản trị viên để xử lý bản ghi thu hồi cũ.",

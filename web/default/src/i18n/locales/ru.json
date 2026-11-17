@@ -6072,7 +6072,7 @@
     "Invalid API extension response": "Некорректный ответ расширения API",
     "Bind API extensions": "Привязка расширений API",
     "Bind registered API extensions to channels.": "Привязывать зарегистрированные расширения API к каналам.",
-    "Disabling blocks new bindings while keeping installed files and historical tasks available.": "Отключение запрещает привязку новых задач, сохраняя установленные файлы и исторические задачи.",
+    "Disabling blocks new bindings while keeping installed files and historical tasks available.": "Отключение запрещает новые привязки, сохраняя установленные файлы и исторические задачи.",
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.": "Версию можно удалить напрямую, если на неё не ссылаются задачи, каналы или тарифы. Установленный исходный код удаляется; дистрибутивы и идентификатор аудита сохраняются. Тот же файл можно импортировать снова.",
     "Task plugin version is still referenced; remove task, channel or pricing references before deleting": "На эту версию ещё есть ссылки; перед удалением уберите ссылки из задач, каналов и тарифов.",
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "Эта версия была отозвана навсегда; обратитесь к администратору для обработки исторической записи отзыва.",

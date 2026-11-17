@@ -282,12 +282,14 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 	// Input identities do not depend on database state. Compute them before
 	// taking the singleton head lock; keep transition validation in the transaction.
 	nextIdentities := make([]string, len(next.Packages))
+	retained := make(map[string]bool, len(next.Packages))
 	for i, entry := range next.Packages {
 		identity, err := taskPluginStorageIdentity(entry)
 		if err != nil {
 			return 0, err
 		}
 		nextIdentities[i] = identity
+		retained[identity] = true
 	}
 	mutationID := common.GetUUID()
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -331,6 +333,13 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 		}
 		if err := validateTaskPluginDeletionHead(committedHead, previous.Deletions); err != nil {
 			return err
+		}
+		// Ordinary CAS only adds or updates versions. Physical removal and its
+		// reference checks belong to DeleteVersion, even after identical reinstall.
+		for _, identity := range previousIdentities {
+			if !retained[identity] {
+				return taskplugin.ErrCatalogInvalid
+			}
 		}
 		next.Deletions = previous.Deletions
 		if err := taskplugin.ValidateCatalogTransition(previous, next); err != nil {

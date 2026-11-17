@@ -356,14 +356,25 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 			}
 		}
 	}
-	key, version, digest := "", "", ""
+	type reference struct{ key, version, digest string }
+	references := make([]reference, 0, 3)
 	if binding := task.PrivateData.PluginBinding; binding != nil {
-		key, version, digest = binding.PluginKey, binding.Version, binding.PackageDigest
-	} else if context := task.PrivateData.BillingContext; context != nil && context.TaskBillingPlan != nil && context.TaskBillingPlan.ExpressionPlan != nil {
-		p := context.TaskBillingPlan.ExpressionPlan
-		key, version, digest = p.PluginKey, p.PluginVersion, p.PackageDigest
+		if binding.PluginKey != "" || binding.PackageDigest != "" {
+			references = append(references, reference{binding.PluginKey, binding.Version, binding.PackageDigest})
+		}
 	}
-	if key == "" || !tx.Migrator().HasTable(&TaskPluginDeletion{}) {
+	if context := task.PrivateData.BillingContext; context != nil {
+		if context.TaskBillingPlan != nil && context.TaskBillingPlan.ExpressionPlan != nil {
+			p := context.TaskBillingPlan.ExpressionPlan
+			if p.PluginKey != "" || p.PackageDigest != "" {
+				references = append(references, reference{p.PluginKey, p.PluginVersion, p.PackageDigest})
+			}
+		}
+		if envelope := context.PricingUsageEnvelope; envelope != nil && envelope.PackageDigest != "" {
+			references = append(references, reference{digest: envelope.PackageDigest})
+		}
+	}
+	if len(references) == 0 || !tx.Migrator().HasTable(&TaskPluginDeletion{}) {
 		return nil
 	}
 	if _, ok := tx.Statement.ConnPool.(gorm.TxCommitter); !ok {
@@ -378,14 +389,20 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 	if err := tx.First(&head, 1).Error; err != nil {
 		return taskplugin.ErrBindingRejected
 	}
-	var record TaskPluginVersion
 	// A locking/current read matters under MySQL REPEATABLE READ: a funding
 	// transaction may have established its consistent snapshot before deletion.
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("identity", "digest").Where("identity = ? AND digest = ?", taskPluginIdentity(key, version), digest).First(&record).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return taskplugin.ErrBindingRejected
+	for _, reference := range references {
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("identity", "digest").Where("digest = ?", reference.digest)
+		if reference.key != "" {
+			query = query.Where("identity = ?", taskPluginIdentity(reference.key, reference.version))
 		}
-		return err
+		var record TaskPluginVersion
+		if err := query.First(&record).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return taskplugin.ErrBindingRejected
+			}
+			return err
+		}
 	}
 	return nil
 }
