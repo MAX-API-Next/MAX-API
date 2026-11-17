@@ -42,7 +42,12 @@ func TestManagementUsesObservedRevisionAndPreservesOldSessions(t *testing.T) {
 	require.NoError(t, a.MutateExpected(t.Context(), 2, ManagementMutation{Action: "install", Package: second}))
 	require.ErrorIs(t, a.MutateExpected(t.Context(), 3, ManagementMutation{Action: "enable", Key: m.Key, Version: "1.0.0"}), ErrCatalogInvalid)
 	require.NoError(t, a.MutateExpected(t.Context(), 3, ManagementMutation{Action: "activate", Key: m.Key, Version: "1.0.0"}))
-	require.NoError(t, a.MutateExpected(t.Context(), 4, ManagementMutation{Action: "revoke", Key: m.Key, Version: "1.0.0"}))
+	require.ErrorIs(t, a.MutateExpected(t.Context(), 4, ManagementMutation{Action: "revoke", Key: m.Key, Version: "1.0.0"}), ErrCatalogInvalid, "management no longer exposes permanent revocation")
+	_, rev, err = a.ManagementSnapshot(t.Context())
+	require.NoError(t, err)
+	require.EqualValues(t, 4, rev, "rejected legacy action must not commit")
+	// Runtime compatibility still rejects versions revoked by an older release.
+	require.NoError(t, a.Revoke(t.Context(), m.Key, "1.0.0"))
 	_, err = a.Host().Resolve(binding, actor)
 	require.ErrorIs(t, err, ErrBindingRejected)
 	require.ErrorIs(t, a.MutateExpected(t.Context(), 5, ManagementMutation{Action: "activate", Key: m.Key, Version: "1.0.0"}), ErrBindingRejected)
@@ -54,6 +59,58 @@ func TestManagementUsesObservedRevisionAndPreservesOldSessions(t *testing.T) {
 type unknownManagementStore struct {
 	CatalogStore
 	lose bool
+}
+
+type installValidationStore struct {
+	memoryCatalogStore
+	writes int
+}
+
+func (store *installValidationStore) CompareAndSwap(ctx context.Context, revision int64, packages []StoredPackage) (int64, error) {
+	store.writes++
+	return store.memoryCatalogStore.CompareAndSwap(ctx, revision, packages)
+}
+
+func TestManagementInstallPreflightIsReadOnlyAndDetectsHistoricalRestrictions(t *testing.T) {
+	pkg := testPackage(t, validManifest(), "source")
+	changed := testPackage(t, validManifest(), "different-source")
+	m := pkg.Manifest()
+	for _, tc := range []struct {
+		name     string
+		packages []StoredPackage
+		receipts []PackageDeletion
+		want     error
+	}{
+		{name: "new"},
+		{name: "deleted identical", receipts: []PackageDeletion{{Key: m.Key, Version: m.Version, Digest: pkg.Digest()}}},
+		{name: "deleted revoked", receipts: []PackageDeletion{{Key: m.Key, Version: m.Version, Digest: pkg.Digest(), Revoked: true}}, want: ErrCatalogRevoked},
+		{name: "deleted changed", receipts: []PackageDeletion{{Key: m.Key, Version: m.Version, Digest: changed.Digest()}}, want: ErrCatalogContentChanged},
+		{name: "installed revoked", packages: []StoredPackage{{Document: pkg.Document(), Digest: pkg.Digest(), Active: true, Revoked: true}}, want: ErrCatalogRevoked},
+		{name: "installed changed", packages: []StoredPackage{{Document: changed.Document(), Digest: changed.Digest(), Active: true, Enabled: true}}, want: ErrCatalogContentChanged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &installValidationStore{memoryCatalogStore: memoryCatalogStore{snapshot: CatalogSnapshot{Revision: 1, Packages: tc.packages, Deletions: tc.receipts}}}
+			catalog, err := OpenCatalog(t.Context(), store)
+			require.NoError(t, err)
+			before := cloneCatalogSnapshot(store.snapshot)
+			err = catalog.ValidateInstall(t.Context(), pkg)
+			if tc.want == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tc.want)
+			}
+			require.Equal(t, before, store.snapshot, "preflight never changes persisted state")
+			require.Equal(t, before, catalog.snapshot, "preflight never publishes a tentative active version")
+			require.Zero(t, store.writes)
+		})
+	}
+	store := &installValidationStore{}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	require.NoError(t, catalog.ValidateInstall(t.Context(), pkg))
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	require.ErrorIs(t, catalog.MutateExpected(t.Context(), 0, ManagementMutation{Action: "install", Package: pkg}), ErrCatalogConflict, "a successful preflight does not bypass write CAS")
+	require.Equal(t, 1, store.writes)
 }
 
 func (s *unknownManagementStore) CompareAndSwap(ctx context.Context, r int64, p []StoredPackage) (int64, error) {

@@ -46,11 +46,34 @@ type ManagementMutation struct {
 	Package              *Package
 }
 
+// ValidateInstall checks the current catalog without committing an installation.
+// The eventual write still requires the caller's observed revision and CAS.
+func (catalog *Catalog) ValidateInstall(ctx context.Context, pkg *Package) error {
+	catalog.mu.Lock()
+	defer catalog.mu.Unlock()
+	if err := catalog.refreshLocked(ctx); err != nil {
+		return err
+	}
+	if catalog.snapshot.Revision == math.MaxInt64 {
+		return ErrCatalogInvalid
+	}
+	next := cloneCatalogSnapshot(catalog.snapshot)
+	if err := installCatalogPackages(&next, pkg); err != nil {
+		return err
+	}
+	next.Revision++
+	_, err := buildCatalogState(next, catalog.snapshot, true)
+	return err
+}
+
 // MutateExpected uses the existing transition helpers and durable store CAS.
 // A stale operator cannot act on a newly active version; writes are never retried.
 func (catalog *Catalog) MutateExpected(ctx context.Context, expected int64, mutation ManagementMutation) error {
 	if expected < 0 || expected == math.MaxInt64 {
 		return ErrCatalogInvalid
+	}
+	if mutation.Action == "delete" {
+		return catalog.deleteExpected(ctx, expected, mutation.Key, mutation.Version)
 	}
 	return catalog.updateExpected(ctx, &expected, func(next *CatalogSnapshot) error {
 		switch mutation.Action {
@@ -70,10 +93,36 @@ func (catalog *Catalog) MutateExpected(ctx context.Context, expected int64, muta
 				return ErrCatalogInvalid
 			}
 			return setCatalogEnabled(next, mutation.Key, mutation.Action == "enable")
-		case "revoke":
-			return revokeCatalogVersion(next, mutation.Key, mutation.Version)
 		default:
 			return ErrCatalogInvalid
 		}
 	})
+}
+
+func (catalog *Catalog) deleteExpected(ctx context.Context, expected int64, key, version string) error {
+	catalog.mu.Lock()
+	defer catalog.mu.Unlock()
+	if err := catalog.refreshLocked(ctx); err != nil {
+		return err
+	}
+	if catalog.snapshot.Revision != expected {
+		return ErrCatalogConflict
+	}
+	store, ok := catalog.store.(CatalogVersionDeleter)
+	if !ok {
+		return ErrCatalogUnavailable
+	}
+	revision, err := store.DeleteVersion(ctx, expected, key, version)
+	if err != nil {
+		if err == ErrCatalogConflict || err == ErrCatalogInUse || err == ErrBindingRejected || err == ErrCatalogInvalid {
+			return err
+		}
+		catalog.host.state.Store(nil)
+		return ErrCatalogUnavailable
+	}
+	if revision != expected+1 {
+		catalog.host.state.Store(nil)
+		return ErrCatalogUnavailable
+	}
+	return catalog.refreshLocked(ctx)
 }

@@ -44,6 +44,12 @@ func taskPluginAdminError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, taskplugin.ErrCatalogConflict):
 		status, message = http.StatusConflict, "Task plugin catalog changed; refresh before retrying"
+	case errors.Is(err, taskplugin.ErrCatalogInUse):
+		status, message = http.StatusUnprocessableEntity, "Task plugin version is still referenced; remove task, channel or pricing references before deleting"
+	case errors.Is(err, taskplugin.ErrCatalogRevoked):
+		status, message = http.StatusUnprocessableEntity, "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record"
+	case errors.Is(err, taskplugin.ErrCatalogContentChanged):
+		status, message = http.StatusUnprocessableEntity, "Task plugin version has different content; import the original file or use a new version"
 	case errors.Is(err, taskplugin.ErrBindingRejected):
 		status, message = http.StatusNotFound, "Task plugin version unavailable"
 	case errors.Is(err, taskplugin.ErrCatalogUnavailable), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
@@ -115,11 +121,22 @@ func ValidateTaskPluginPackage(c *gin.Context) {
 		taskPluginAdminError(c, err)
 		return
 	}
+	catalog, err := service.CurrentTaskPluginCatalog()
+	if err != nil {
+		taskPluginAdminError(c, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 10*time.Second)
+	defer cancel()
+	if err := catalog.ValidateInstall(ctx, pkg); err != nil {
+		taskPluginAdminError(c, err)
+		return
+	}
 	common.ApiSuccess(c, service.TaskPluginManagementView(taskplugin.ManagementEntry{Manifest: pkg.Manifest(), Digest: pkg.Digest(), SourceDigest: pkg.SourceDigest(), FormatVersion: pkg.FormatVersion()}))
 }
 
 func MutateTaskPluginManagement(c *gin.Context) {
-	fields, err := taskPluginAdminFields(c, map[string]string{"expected_revision": "string", "action": "string", "key": "string", "version": "string", "document": "string", "expected_sha256": "string", "format2_nodes_ready": "boolean", "format3_nodes_ready": "boolean"})
+	fields, err := taskPluginAdminFields(c, map[string]string{"expected_revision": "string", "action": "string", "key": "string", "version": "string", "document": "string", "expected_sha256": "string", "format2_nodes_ready": "boolean", "format3_nodes_ready": "boolean", "deletion_nodes_ready": "boolean"})
 	if err != nil {
 		taskPluginAdminError(c, err)
 		return
@@ -130,6 +147,14 @@ func MutateTaskPluginManagement(c *gin.Context) {
 		return
 	}
 	mutation := taskplugin.ManagementMutation{Action: taskPluginAdminString(fields, "action"), Key: taskPluginAdminString(fields, "key"), Version: taskPluginAdminString(fields, "version")}
+	if mutation.Action == "delete" {
+		var ready bool
+		_ = common.Unmarshal(fields["deletion_nodes_ready"], &ready)
+		if !ready {
+			taskPluginAdminError(c, taskplugin.ErrCatalogInvalid)
+			return
+		}
+	}
 	if mutation.Action == "install" {
 		mutation.Package, err = taskPluginAdminPackage(fields)
 		if err != nil {

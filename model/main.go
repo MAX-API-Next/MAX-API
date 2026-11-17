@@ -423,6 +423,7 @@ func migrateDB() error {
 		&Task{},
 		&TaskPluginCatalogHead{},
 		&TaskPluginVersion{},
+		&TaskPluginDeletion{},
 		&Model{},
 		&Vendor{},
 		&PrefillGroup{},

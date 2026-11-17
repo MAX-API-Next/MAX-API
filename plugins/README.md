@@ -1,4 +1,4 @@
-# Official task plugin sources
+# API extension sources
 
 The original JavaScript releases under `tasks/` are by QuantumNous from
 [new-api-plugins](https://github.com/QuantumNous/new-api-plugins), licensed under
@@ -16,6 +16,34 @@ files remain byte-for-byte intact in `retainedVersions`; existing pinned downloa
 references continue to work. The picker recommends the compatible revisions.
 Upgrading an installed package remains an explicit catalog operation; old tasks
 keep their original package identity and are not silently repriced or rewritten.
+
+Custom JavaScript or MAX JSON packages may be uploaded without an external
+SHA-256: leave the optional field blank. MAX computes content digests and retains
+its existing compilation, manifest, size and immutable-version checks. A supplied
+hash is always checked; a mismatch is rejected. Computed digests identify bytes
+and do not authenticate a publisher.
+
+For a separately downloaded official `plugin.js`, the publisher's repository-root
+`index.json` lists each version's `sha256`. Upload the exact published bytes:
+Git's Windows line-ending conversion changes the hash. Extract the Git blob or
+download the raw file at the pinned commit rather than hashing a converted
+checkout and treating that new hash as the publisher's pin.
+
+An installed version can be deleted directly from its management details;
+disabling or revoking it first is not required. Deletion refuses historical task bindings, frozen task evidence, declared or
+mapped channel models, and plugin pricing references. It removes the installed
+source and version row without promoting another version. Distribution files
+embedded in the program remain available in the bundled picker. A source-free
+deletion receipt retains the identity and digest: identical bytes can be
+explicitly reinstalled, but changed bytes under the same identity are rejected.
+The management UI and API no longer offer permanent revocation. Historical
+revocation records from older releases remain enforced and are reported during
+validation, before an installation attempt.
+
+Before using deletion, upgrade every catalog node and let the master migrate
+the deletion-receipt table. Confirm this in the deletion dialog. Older nodes do
+not understand authorized history removal and may suspend their entire plugin
+host; rolling back to an older binary after deleting versions has the same risk.
 
 Bundling does not install, activate or certify a plugin's models, SDK features,
 provider access or paid settlement. Installation and deployment validation are

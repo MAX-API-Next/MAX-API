@@ -135,9 +135,9 @@ export function SidebarModulesSection({
         description: t('Manage catalog visibility and pricing.'),
       },
       task_plugins: {
-        title: t('Task Plugins'),
+        title: t('API Extensions'),
         description: t(
-          'Manage installed packages and versions. Enabling a package does not enable task execution or paid admission.'
+          'Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.'
         ),
       },
       redemption: {

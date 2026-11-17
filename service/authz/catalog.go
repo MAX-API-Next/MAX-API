@@ -91,7 +91,7 @@ var registry = []ResourceDefinition{
 	resource(ResourceDeployment, "Deployments", action(ActionRead, "Read deployments", "View model deployments and locations.", true), action(ActionWrite, "Edit deployments", "Change model deployment configuration.", true), action(ActionOperate, "Operate deployments", "Test deployment connections.", true)),
 	resource(ResourceRatioSync, "Ratio Sync", action(ActionRead, "Read ratio sync", "View ratio synchronization targets.", false), action(ActionOperate, "Run ratio sync", "Fetch and apply upstream ratios.", false)),
 	resource(ResourceSystem, "System", action(ActionRead, "Read system", "View system and instance information.", false), action(ActionOperate, "Operate system", "Run system maintenance operations.", false)),
-	resource(ResourceTaskPlugin, "Task Plugins", action(ActionBind, "Bind task plugins", "Bind registered task plugins to channels.", false)),
+	resource(ResourceTaskPlugin, "API Extensions", action(ActionBind, "Bind API extensions", "Bind registered API extensions to channels.", false)),
 }
 
 func resource(name, label string, actions ...ActionDefinition) ResourceDefinition {

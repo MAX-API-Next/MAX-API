@@ -44,7 +44,9 @@ func LoadJavaScript(reader io.Reader, expectedSHA256 string) (*Package, error) {
 	return &Package{manifest: cloneManifest(m), source: string(data), digest: hex.EncodeToString(digest[:]), document: document, size: len(document), formatVersion: 3, program: program}, nil
 }
 
-// LoadUpload supports existing JSON packages and exact raw official plugin.js.
+// LoadUpload accepts JSON packages and raw plugin.js with an optional external
+// pin. Omission fixes the actual upload bytes without claiming publisher trust.
+// Internal loaders and persisted package identities remain strictly pinned.
 // Legacy envelopes keep their data-only behavior, regardless of their Source.
 func LoadUpload(reader io.Reader, pin string) (*Package, error) {
 	if reader == nil {
@@ -53,6 +55,10 @@ func LoadUpload(reader io.Reader, pin string) (*Package, error) {
 	data, err := io.ReadAll(io.LimitReader(reader, MaxPackageBytes+1))
 	if err != nil || len(data) > MaxPackageBytes {
 		return nil, ErrPluginCompile
+	}
+	if pin == "" {
+		sum := sha256.Sum256(data)
+		pin = hex.EncodeToString(sum[:])
 	}
 	if bytes.HasPrefix(bytes.TrimSpace(data), []byte("{")) {
 		return LoadPackage(bytes.NewReader(data), pin)

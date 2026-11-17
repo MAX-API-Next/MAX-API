@@ -126,18 +126,19 @@ func TestTaskPluginManagementRootAPIAndDurableVersionGuards(t *testing.T) {
 	changed := bytes.Replace(wire, []byte("private-source-marker"), []byte("different-source"), 1)
 	upload["document"], upload["expected_sha256"], upload["expected_revision"] = string(changed), fmt.Sprintf("%x", sha256.Sum256(changed)), "1"
 	r = request("POST", "/api/task_plugins/mutate", upload, cookies)
-	require.Equal(t, 400, r.Code)
+	require.Equal(t, 422, r.Code)
+	require.Contains(t, r.Body.String(), "different content")
 	require.NotContains(t, r.Body.String(), "different-source")
 	r = request("POST", "/api/task_plugins/mutate", map[string]any{"action": "revoke", "key": "fixture", "version": "1.0.0", "expected_revision": "1"}, cookies)
+	require.Equal(t, 400, r.Code, "legacy revoke action is no longer exposed")
+	r = request("POST", "/api/task_plugins/mutate", map[string]any{"action": "disable", "key": "fixture", "version": "1.0.0", "expected_revision": "1"}, cookies)
 	require.Equal(t, 200, r.Code)
-	r = request("POST", "/api/task_plugins/mutate", map[string]any{"action": "activate", "key": "fixture", "version": "1.0.0", "expected_revision": "2", "format2_nodes_ready": true}, cookies)
-	require.Equal(t, 404, r.Code)
 	var logs []model.Log
 	require.NoError(t, db.Find(&logs).Error)
 	// Generic audit also records validation and rejected administrative attempts.
 	successfulChanges := 0
 	for _, l := range logs {
-		if l.Content == "task_plugin.install" || l.Content == "task_plugin.revoke" {
+		if l.Content == "task_plugin.install" || l.Content == "task_plugin.disable" {
 			successfulChanges++
 		}
 		require.NotContains(t, l.Content, "private-source-marker")
@@ -151,6 +152,175 @@ func TestTaskPluginManagementRootAPIAndDurableVersionGuards(t *testing.T) {
 	var head model.TaskPluginCatalogHead
 	require.NoError(t, db.First(&head, 1).Error)
 	require.EqualValues(t, 2, head.Revision)
+}
+
+func TestTaskPluginManagementDeletionRequiresRootAcknowledgementAndNoReferences(t *testing.T) {
+	engine, db, root := taskPluginManagementEngine(t)
+	require.NoError(t, db.AutoMigrate(&model.TaskPluginDeletion{}, &model.Task{}, &model.Channel{}, &model.Option{}))
+	login := httptest.NewRecorder()
+	engine.ServeHTTP(login, httptest.NewRequest("GET", "/plugin-test-login/root", nil))
+	cookies := login.Result().Cookies()
+	request := func(body map[string]any, authenticated bool) *httptest.ResponseRecorder {
+		wire, err := common.Marshal(body)
+		require.NoError(t, err)
+		req := httptest.NewRequest("POST", "/api/task_plugins/mutate", bytes.NewReader(wire))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("New-Api-User", fmt.Sprint(root.Id))
+		if authenticated {
+			for _, cookie := range cookies {
+				req.AddCookie(cookie)
+			}
+		}
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, req)
+		return response
+	}
+	document, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "private-delete-api-source", Manifest: taskplugin.Manifest{APIVersion: 1, Key: "deletable", Name: "Deletable", Version: "1.0.0", Models: []string{"fixture-model"}}})
+	require.NoError(t, err)
+	pkg, err := taskplugin.LoadPackage(bytes.NewReader(document), fmt.Sprintf("%x", sha256.Sum256(document)))
+	require.NoError(t, err)
+	catalog, err := service.CurrentTaskPluginCatalog()
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	command := map[string]any{"action": "delete", "key": "deletable", "version": "1.0.0", "expected_revision": "1"}
+	require.Contains(t, request(command, false).Body.String(), `"success":false`)
+	require.Equal(t, 400, request(command, true).Code)
+	command["deletion_nodes_ready"] = true
+	command["expected_revision"] = "0"
+	require.Equal(t, 409, request(command, true).Code)
+	command["expected_revision"] = "1"
+	channel := model.Channel{Models: "fixture-model"}
+	require.NoError(t, db.Create(&channel).Error)
+	response := request(command, true)
+	require.Equal(t, 422, response.Code, response.Body.String())
+	require.NotContains(t, response.Body.String(), "private-delete-api-source")
+	require.NoError(t, db.Delete(&channel).Error)
+	response = request(command, true)
+	require.Equal(t, 200, response.Code, response.Body.String())
+	require.Contains(t, response.Body.String(), `"revision":"2"`)
+	var count int64
+	require.NoError(t, db.Model(&model.TaskPluginVersion{}).Count(&count).Error)
+	require.Zero(t, count)
+	command["expected_revision"] = "2"
+	require.Equal(t, 404, request(command, true).Code, "deletion is not replayed as success")
+	var logs []model.Log
+	require.NoError(t, db.Where("content = ?", "task_plugin.delete").Find(&logs).Error)
+	require.Len(t, logs, 1)
+	require.NotContains(t, logs[0].Other, "private-delete-api-source")
+}
+
+func TestTaskPluginValidationRejectsDeletedRevocationBeforeInstallation(t *testing.T) {
+	engine, db, root := taskPluginManagementEngine(t)
+	require.NoError(t, db.AutoMigrate(&model.TaskPluginDeletion{}, &model.Task{}, &model.Channel{}, &model.Option{}))
+	login := httptest.NewRecorder()
+	engine.ServeHTTP(login, httptest.NewRequest("GET", "/plugin-test-login/root", nil))
+	document, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "private-revoked-source", Manifest: taskplugin.Manifest{APIVersion: 1, Key: "legacy-revoked", Name: "Legacy", Version: "1.0.0", Models: []string{"legacy-model"}}})
+	require.NoError(t, err)
+	pkg, err := taskplugin.LoadUpload(bytes.NewReader(document), "")
+	require.NoError(t, err)
+	catalog, err := service.CurrentTaskPluginCatalog()
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	require.NoError(t, catalog.Revoke(t.Context(), "legacy-revoked", "1.0.0"))
+	require.NoError(t, catalog.MutateExpected(t.Context(), 2, taskplugin.ManagementMutation{Action: "delete", Key: "legacy-revoked", Version: "1.0.0"}))
+	validate := func() *httptest.ResponseRecorder {
+		body, err := common.Marshal(map[string]any{"document": string(document)})
+		require.NoError(t, err)
+		req := httptest.NewRequest("POST", "/api/task_plugins/validate", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("New-Api-User", fmt.Sprint(root.Id))
+		for _, cookie := range login.Result().Cookies() {
+			req.AddCookie(cookie)
+		}
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, req)
+		return response
+	}
+	response := validate()
+	require.Equal(t, 422, response.Code, response.Body.String())
+	require.Contains(t, response.Body.String(), "permanently revoked")
+	require.NotContains(t, response.Body.String(), "private-revoked-source")
+	store := model.NewTaskPluginCatalogStore(db)
+	before, err := store.Load(t.Context())
+	require.NoError(t, err)
+	require.EqualValues(t, 3, before.Revision)
+	require.Empty(t, before.Packages)
+	require.True(t, before.Deletions[0].Revoked)
+	// Simulate the user's narrowly authorized local repair, then a backend restart.
+	require.NoError(t, db.Model(&model.TaskPluginDeletion{}).Where("plugin_key = ? AND version = ?", "legacy-revoked", "1.0.0").Update("revoked", false).Error)
+	require.NoError(t, db.Model(&model.TaskPluginCatalogHead{}).Where("id = ?", 1).Update("revision", 4).Error)
+	require.NoError(t, service.InitializeTaskPluginCatalog(t.Context(), db))
+	response = validate()
+	require.Equal(t, 200, response.Code, response.Body.String())
+	after, err := store.Load(t.Context())
+	require.NoError(t, err)
+	require.EqualValues(t, 4, after.Revision)
+	require.Empty(t, after.Packages, "validation after recovery still does not install")
+	require.False(t, after.Deletions[0].Revoked)
+}
+
+func TestTaskPluginManagementOptionalUploadPin(t *testing.T) {
+	for _, kind := range []string{"javascript", "json"} {
+		t.Run(kind, func(t *testing.T) {
+			engine, db, root := taskPluginManagementEngine(t)
+			login := httptest.NewRecorder()
+			engine.ServeHTTP(login, httptest.NewRequest("GET", "/plugin-test-login/root", nil))
+			cookies := login.Result().Cookies()
+			request := func(path string, body map[string]any) *httptest.ResponseRecorder {
+				wire, err := common.Marshal(body)
+				require.NoError(t, err)
+				req := httptest.NewRequest("POST", path, bytes.NewReader(wire))
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("New-Api-User", fmt.Sprint(root.Id))
+				for _, cookie := range cookies {
+					req.AddCookie(cookie)
+				}
+				response := httptest.NewRecorder()
+				engine.ServeHTTP(response, req)
+				return response
+			}
+			document := `export const meta = {apiVersion: 1, key: "custom-upload", name: "Custom Upload", version: "1.0.0", models: ["custom-model"]}; export function buildSubmitRequest(){return {}} export function parseSubmitResponse(){return {}} export function buildQueryRequest(){return {}} export function parseTaskResult(){return {}}`
+			if kind == "json" {
+				data, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "private-custom-source", Manifest: taskplugin.Manifest{APIVersion: 1, Key: "custom-upload", Name: "Custom Upload", Version: "1.0.0", Models: []string{"custom-model"}}})
+				require.NoError(t, err)
+				document = string(data)
+			}
+			upload := map[string]any{"document": document}
+			response := request("/api/task_plugins/validate", upload)
+			require.Equal(t, 200, response.Code, response.Body.String())
+			pin := fmt.Sprintf("%x", sha256.Sum256([]byte(document)))
+			require.Contains(t, response.Body.String(), pin, "server returns its computed identity even without a client pin")
+			var count int64
+			require.NoError(t, db.Model(&model.TaskPluginVersion{}).Count(&count).Error)
+			require.Zero(t, count, "validation does not install")
+			upload["expected_sha256"] = ""
+			require.Equal(t, 200, request("/api/task_plugins/validate", upload).Code)
+			for _, invalid := range []any{"invalid", strings.Repeat("0", 64), nil, 7} {
+				upload["expected_sha256"] = invalid
+				require.Equal(t, 400, request("/api/task_plugins/validate", upload).Code)
+			}
+			delete(upload, "expected_sha256")
+			upload["action"], upload["expected_revision"] = "install", "0"
+			if kind == "javascript" {
+				require.Equal(t, 400, request("/api/task_plugins/mutate", upload).Code, "optional SHA does not bypass format-3 compatibility acknowledgement")
+				upload["format3_nodes_ready"] = true
+			}
+			require.Equal(t, 200, request("/api/task_plugins/mutate", upload).Code)
+			upload["expected_revision"] = "1"
+			upload["expected_sha256"] = strings.Repeat("0", 64)
+			require.Equal(t, 400, request("/api/task_plugins/mutate", upload).Code)
+			delete(upload, "expected_sha256")
+			upload["document"] = strings.ReplaceAll(document, "Custom Upload", "Changed Source")
+			changedResponse := request("/api/task_plugins/mutate", upload)
+			require.Equal(t, 422, changedResponse.Code, "a content conflict is a known rejection, even without a supplied pin")
+			require.Contains(t, changedResponse.Body.String(), "different content")
+			var head model.TaskPluginCatalogHead
+			require.NoError(t, db.First(&head, 1).Error)
+			require.EqualValues(t, 1, head.Revision)
+			require.NoError(t, db.Model(&model.TaskPluginVersion{}).Count(&count).Error)
+			require.EqualValues(t, 1, count)
+		})
+	}
 }
 
 func TestTaskPluginManagementHistoricalEnableDisableIsInvalidNotConflict(t *testing.T) {

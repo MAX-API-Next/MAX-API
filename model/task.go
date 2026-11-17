@@ -86,9 +86,10 @@ func IsMiniMaxH3Task(task *Task) bool {
 	return false
 }
 
-func (t *Task) BeforeSave(*gorm.DB) error {
+func (t *Task) BeforeSave(tx *gorm.DB) error {
 	if t != nil {
 		t.FailReason = common.SanitizePersistedLogContent(t.FailReason)
+		return guardTaskPluginPersistence(tx, t)
 	}
 	return nil
 }

@@ -40,9 +40,10 @@ import (
 // One revision serializes catalog mutations across nodes, including bootstrap.
 // MutationID distinguishes a duplicate INSERT under MySQL CLIENT_FOUND_ROWS.
 type TaskPluginCatalogHead struct {
-	ID         uint   `gorm:"primaryKey;autoIncrement:false"`
-	Revision   int64  `gorm:"not null"`
-	MutationID string `gorm:"size:64;not null"`
+	ID                   uint   `gorm:"primaryKey;autoIncrement:false"`
+	Revision             int64  `gorm:"not null"`
+	MutationID           string `gorm:"size:64;not null"`
+	LastDeletionRevision int64  `gorm:"not null;default:0"`
 }
 
 type taskPluginDocument []byte
@@ -99,6 +100,15 @@ type TaskPluginVersion struct {
 	Active   bool               `gorm:"not null"`
 	Enabled  bool               `gorm:"not null"`
 	Revoked  bool               `gorm:"not null"`
+}
+
+// TaskPluginDeletion retains audit identity only; no package or JavaScript bytes.
+type TaskPluginDeletion struct {
+	Identity  string `gorm:"size:64;primaryKey" json:"-"`
+	PluginKey string `gorm:"size:128;not null" json:"-"`
+	Version   string `gorm:"not null" json:"-"`
+	Digest    string `gorm:"size:64;not null" json:"-"`
+	Revoked   bool   `gorm:"not null" json:"-"`
 }
 
 type TaskPluginCatalogStore struct{ db *gorm.DB }
@@ -171,6 +181,13 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		if err != nil {
 			return err
 		}
+		deletions, err := loadTaskPluginDeletions(tx)
+		if err != nil {
+			return err
+		}
+		if err := validateTaskPluginDeletionHead(head, deletions); err != nil {
+			return err
+		}
 		var after TaskPluginCatalogHead
 		err = tx.First(&after, 1).Error
 		// Under READ COMMITTED, reject a mixed snapshot. MySQL's consistent
@@ -179,13 +196,13 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return taskplugin.ErrCatalogConflict
 			}
-			if len(rows) != 0 {
+			if len(rows) != 0 || len(deletions) != 0 {
 				return taskplugin.ErrCatalogInvalid
 			}
 		} else if err != nil || head != after {
 			return taskplugin.ErrCatalogConflict
 		}
-		snapshot = taskplugin.CatalogSnapshot{Revision: head.Revision, Packages: rows}
+		snapshot = taskplugin.CatalogSnapshot{Revision: head.Revision, Packages: rows, Deletions: deletions}
 		return nil
 	})
 	if err != nil {
@@ -250,6 +267,18 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 			return taskplugin.ErrCatalogInvalid
 		}
 		previous := taskplugin.CatalogSnapshot{Revision: revision, Packages: previousRows}
+		previous.Deletions, err = loadTaskPluginDeletions(tx)
+		if err != nil {
+			return err
+		}
+		var committedHead TaskPluginCatalogHead
+		if err := tx.First(&committedHead, 1).Error; err != nil {
+			return err
+		}
+		if err := validateTaskPluginDeletionHead(committedHead, previous.Deletions); err != nil {
+			return err
+		}
+		next.Deletions = previous.Deletions
 		if err := taskplugin.ValidateCatalogTransition(previous, next); err != nil {
 			return err
 		}

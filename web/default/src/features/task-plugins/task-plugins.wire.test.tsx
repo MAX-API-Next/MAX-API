@@ -35,7 +35,7 @@ after(() => {
 })
 
 test(
-  'the mounted UI installs and disables through actual Root API and SQLite catalog',
+  'the mounted UI imports without an external hash and disables through actual Root API and SQLite catalog',
   { skip: !endpoint },
   async () => {
     assert.match(endpoint!, /^http:\/\/127\.0\.0\.1:[0-9]+$/)
@@ -72,9 +72,9 @@ test(
           </QueryClientProvider>
         </I18nextProvider>
       )
-      await view.findByText('No task plugin packages found')
+      await view.findByText('No API extensions found')
       fireEvent.click(
-        view.getByRole('button', { name: 'Install plugin package' })
+        view.getByRole('button', { name: 'Import API extension' })
       )
       const document = JSON.stringify({
         format_version: 1,
@@ -100,14 +100,16 @@ test(
           ],
         },
       })
-      fireEvent.change(view.getByLabelText('Trusted package SHA-256'), {
-        target: { value: pin },
-      })
+      assert.equal(
+        (view.getByLabelText('SHA-256 (optional)') as HTMLInputElement).value,
+        ''
+      )
       const validate = view.getByRole('button', { name: 'Validate package' })
       await waitFor(() =>
         assert.equal((validate as HTMLButtonElement).disabled, false)
       )
       fireEvent.click(validate)
+      await view.findByText(`Computed file SHA-256: ${pin}`)
       fireEvent.click(
         await view.findByRole('button', { name: 'Install and activate' })
       )

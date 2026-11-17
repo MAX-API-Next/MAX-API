@@ -22,6 +22,7 @@ package taskplugin
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -31,9 +32,12 @@ import (
 )
 
 var (
-	ErrCatalogConflict    = errors.New("task plugin catalog changed; refresh before retrying")
-	ErrCatalogInvalid     = errors.New("task plugin catalog is invalid")
-	ErrCatalogUnavailable = errors.New("task plugin catalog storage is unavailable")
+	ErrCatalogConflict       = errors.New("task plugin catalog changed; refresh before retrying")
+	ErrCatalogInvalid        = errors.New("task plugin catalog is invalid")
+	ErrCatalogUnavailable    = errors.New("task plugin catalog storage is unavailable")
+	ErrCatalogInUse          = errors.New("task plugin version is still referenced; remove references before deleting")
+	ErrCatalogRevoked        = errors.New("task plugin version was permanently revoked")
+	ErrCatalogContentChanged = errors.New("task plugin version has different content")
 )
 
 // StoredPackage contains host-private pinned bytes. Stores must preserve every
@@ -45,8 +49,21 @@ type StoredPackage struct {
 }
 
 type CatalogSnapshot struct {
-	Revision int64
-	Packages []StoredPackage
+	Revision  int64
+	Packages  []StoredPackage
+	Deletions []PackageDeletion
+}
+
+// PackageDeletion is an immutable, source-free deletion receipt. It lets other
+// nodes distinguish an authorized removal from lost history, and prevents a
+// deleted identity from being silently replaced or its revocation cleared.
+type PackageDeletion struct {
+	Key, Version, Digest string
+	Revoked              bool
+}
+
+type CatalogVersionDeleter interface {
+	DeleteVersion(context.Context, int64, string, string) (int64, error)
 }
 
 // CatalogStore commits a complete version set and the revision in one
@@ -141,7 +158,7 @@ func ValidateCatalogTransition(previous, next CatalogSnapshot) error {
 }
 
 func buildCatalogState(snapshot, previous CatalogSnapshot, checkPrevious bool) (*hostState, error) {
-	if snapshot.Revision < 0 || snapshot.Revision == 0 && len(snapshot.Packages) != 0 {
+	if snapshot.Revision < 0 || snapshot.Revision == 0 && (len(snapshot.Packages) != 0 || len(snapshot.Deletions) != 0) {
 		return nil, ErrCatalogInvalid
 	}
 	state := &hostState{generation: uint64(snapshot.Revision), active: map[string]*Package{}, history: map[string]*Package{}, revoked: map[string]bool{}}
@@ -184,6 +201,21 @@ func buildCatalogState(snapshot, previous CatalogSnapshot, checkPrevious bool) (
 		}
 	}
 	state.routes = registry.Snapshot()
+	deleted := make(map[string]PackageDeletion, len(snapshot.Deletions))
+	for _, receipt := range snapshot.Deletions {
+		id := packageIdentity(receipt.Key, receipt.Version)
+		pin, err := hex.DecodeString(receipt.Digest)
+		if receipt.Key == "" || receipt.Version == "" || err != nil || len(pin) != 32 {
+			return nil, ErrCatalogInvalid
+		}
+		if _, exists := deleted[id]; exists {
+			return nil, ErrCatalogInvalid
+		}
+		deleted[id] = receipt
+		if current := state.history[id]; current != nil && (current.digest != receipt.Digest || receipt.Revoked && !state.revoked[id]) {
+			return nil, ErrCatalogInvalid
+		}
+	}
 	if checkPrevious {
 		if snapshot.Revision < previous.Revision || snapshot.Revision == previous.Revision && catalogFingerprint(snapshot) != catalogFingerprint(previous) {
 			return nil, ErrCatalogInvalid
@@ -194,7 +226,19 @@ func buildCatalogState(snapshot, previous CatalogSnapshot, checkPrevious bool) (
 				return nil, ErrCatalogInvalid
 			}
 			id := packageIdentity(p.manifest.Key, p.manifest.Version)
-			if current := state.history[id]; current == nil || current.digest != old.Digest || old.Revoked && !state.revoked[id] {
+			current := state.history[id]
+			if current == nil {
+				receipt, exists := deleted[id]
+				if !exists || receipt.Digest != old.Digest || old.Revoked && !receipt.Revoked {
+					return nil, ErrCatalogInvalid
+				}
+			} else if current.digest != old.Digest || old.Revoked && !state.revoked[id] {
+				return nil, ErrCatalogInvalid
+			}
+		}
+		for _, receipt := range previous.Deletions {
+			current, exists := deleted[packageIdentity(receipt.Key, receipt.Version)]
+			if !exists || current.Digest != receipt.Digest || receipt.Revoked && !current.Revoked {
 				return nil, ErrCatalogInvalid
 			}
 		}
@@ -207,11 +251,15 @@ func catalogFingerprint(snapshot CatalogSnapshot) string {
 	for _, entry := range snapshot.Packages {
 		entries = append(entries, fmt.Sprintf("%s:%t:%t:%t", entry.Digest, entry.Active, entry.Enabled, entry.Revoked))
 	}
+	for _, receipt := range snapshot.Deletions {
+		entries = append(entries, fmt.Sprintf("deleted:%s:%s:%s:%t", receipt.Key, receipt.Version, receipt.Digest, receipt.Revoked))
+	}
 	sort.Strings(entries)
 	return strings.Join(entries, "\n")
 }
 
 func cloneCatalogSnapshot(snapshot CatalogSnapshot) CatalogSnapshot {
+	snapshot.Deletions = append([]PackageDeletion(nil), snapshot.Deletions...)
 	snapshot.Packages = append([]StoredPackage(nil), snapshot.Packages...)
 	for i := range snapshot.Packages {
 		snapshot.Packages[i].Document = append([]byte(nil), snapshot.Packages[i].Document...)
@@ -272,6 +320,16 @@ func installCatalogPackages(next *CatalogSnapshot, packages ...*Package) error {
 			return ErrCatalogInvalid
 		}
 		seen[p.manifest.Key] = true
+		for _, receipt := range next.Deletions {
+			if receipt.Key == p.manifest.Key && receipt.Version == p.manifest.Version {
+				if receipt.Revoked {
+					return errors.Join(ErrCatalogRevoked, ErrBindingRejected)
+				}
+				if receipt.Digest != p.digest {
+					return errors.Join(ErrCatalogContentChanged, ErrBindingRejected)
+				}
+			}
+		}
 		index := -1
 		for i := range next.Packages {
 			old, err := LoadPackage(bytes.NewReader(next.Packages[i].Document), next.Packages[i].Digest)
@@ -282,8 +340,11 @@ func installCatalogPackages(next *CatalogSnapshot, packages ...*Package) error {
 				continue
 			}
 			if old.manifest.Version == p.manifest.Version {
-				if old.digest != p.digest || next.Packages[i].Revoked {
-					return ErrCatalogInvalid
+				if next.Packages[i].Revoked {
+					return errors.Join(ErrCatalogRevoked, ErrCatalogInvalid)
+				}
+				if old.digest != p.digest {
+					return errors.Join(ErrCatalogContentChanged, ErrCatalogInvalid)
 				}
 				index = i
 			}

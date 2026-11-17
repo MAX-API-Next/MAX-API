@@ -3,18 +3,9 @@
 // upload and detail sheet. No upstream JS execution/editor/marketplace code.
 import { useEffect, useId, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Plus, RefreshCw, Info } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { SectionPageLayout } from '@/components/layout'
 import {
   taskPluginAPI,
@@ -24,6 +15,7 @@ import {
   type PluginEntry,
   type PluginMutation,
 } from './api'
+import { PluginCatalog } from './plugin-catalog'
 import {
   PluginDetailSheet,
   type PluginConfirmation,
@@ -51,7 +43,6 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
     readAfterUnknown,
     refresh,
   } = catalog
-  const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<string>()
   const [installOpen, setInstallOpen] = useState(false)
   const [installRevision, setInstallRevision] = useState('')
@@ -71,6 +62,7 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
     refetchOnWindowFocus: false,
   })
   const bundles = bundleList.isError ? [] : (bundleList.data ?? [])
+  const refetchBundles = bundleList.refetch
   const [bundleLoading, setBundleLoading] = useState(false)
   const [confirm, setConfirm] = useState<PluginConfirmation>()
   const validation = useRef(new PluginRequestOrder())
@@ -83,8 +75,8 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
   }
   useEffect(() => {
     if (installOpen && transport.bundled)
-      void bundleList.refetch({ cancelRefetch: true })
-  }, [installOpen, transport, bundleList.refetch])
+      void refetchBundles({ cancelRefetch: true })
+  }, [installOpen, transport, refetchBundles])
 
   useEffect(() => {
     mounted.current = true
@@ -164,13 +156,13 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
     try {
       const entry = await transport.validate({
         document,
-        expected_sha256: expectedHash,
+        expected_sha256: expectedHash || undefined,
       })
       if (mounted.current && validation.current.current(id)) setValidated(entry)
     } catch (e) {
       if (mounted.current && validation.current.current(id))
         setError(
-          e instanceof PluginError ? e.message : 'Task plugin request failed'
+          e instanceof PluginError ? e.message : 'API extension request failed'
         )
     } finally {
       if (mounted.current && validation.current.current(id))
@@ -185,17 +177,12 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
         setInstallOpen(false)
         resetValidation()
       }
+      if (command.action === 'delete') setSelected(undefined)
     })
   }
   const detail = snapshot?.entries.find(
     (e) => `${e.key}@${e.version}` === selected
   )
-  const rows =
-    snapshot?.entries.filter((e) =>
-      `${e.key} ${e.name} ${e.version} ${e.models.join(' ')}`
-        .toLowerCase()
-        .includes(search.toLowerCase())
-    ) ?? []
   const disabled = busy || loading || unknown || !snapshot
   const feedbackProps = {
     error,
@@ -219,13 +206,19 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
   return (
     <>
       <SectionPageLayout>
-        <SectionPageLayout.Title>{t('Task Plugins')}</SectionPageLayout.Title>
+        <SectionPageLayout.Title>
+          {t('API extension management')}
+        </SectionPageLayout.Title>
         <SectionPageLayout.Actions>
           <Button
             variant='outline'
             disabled={busy || loading}
             onClick={() => void refresh()}
           >
+            <RefreshCw
+              className={loading ? 'size-4 animate-spin' : 'size-4'}
+              aria-hidden='true'
+            />
             {t('Refresh')}
           </Button>
           <Button
@@ -236,76 +229,30 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
               setInstallOpen(true)
             }}
           >
-            {t('Install plugin package')}
+            <Plus className='size-4' aria-hidden='true' />
+            {t('Import API extension')}
           </Button>
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
-          <div className='space-y-4'>
-            <p className='text-muted-foreground text-sm'>
+          <div className='space-y-5'>
+            <p className='text-muted-foreground bg-muted/30 flex items-start gap-2.5 rounded-lg border px-4 py-3 text-xs leading-relaxed'>
+              <Info className='mt-0.5 size-4 shrink-0' aria-hidden='true' />
               {t(
-                'Manage installed packages and versions. Enabling a package does not enable task execution or paid admission.'
+                'Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.'
               )}
             </p>
             {!selected && !installOpen && (
               <TaskPluginFeedback {...feedbackProps} />
             )}
-            <Input
-              aria-label={t('Search task plugins')}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={t('Search task plugins')}
+            <PluginCatalog
+              entries={snapshot?.entries ?? []}
+              available={!!snapshot}
+              loading={loading}
+              status={status}
+              onDetails={(entry) =>
+                setSelected(`${entry.key}@${entry.version}`)
+              }
             />
-            {loading && <p role='status'>{t('Loading...')}</p>}
-            {!loading && snapshot && rows.length === 0 && (
-              <p>{t('No task plugin packages found')}</p>
-            )}
-            <div className='overflow-x-auto rounded-md border'>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t('Plugin')}</TableHead>
-                    <TableHead>{t('Version')}</TableHead>
-                    <TableHead>{t('Status')}</TableHead>
-                    <TableHead>{t('Models')}</TableHead>
-                    <TableHead>{t('Protocols')}</TableHead>
-                    <TableHead>{t('Execution')}</TableHead>
-                    <TableHead>{t('Actions')}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {rows.map((entry) => (
-                    <TableRow key={`${entry.key}@${entry.version}`}>
-                      <TableCell>
-                        <div className='font-medium'>{entry.name}</div>
-                        <div className='text-muted-foreground text-xs'>
-                          {entry.key}
-                        </div>
-                      </TableCell>
-                      <TableCell>{entry.version}</TableCell>
-                      <TableCell>
-                        <Badge variant='outline'>{status(entry)}</Badge>
-                      </TableCell>
-                      <TableCell>{entry.models.length}</TableCell>
-                      <TableCell>
-                        {entry.protocols.map((p) => p.name).join(', ') || '—'}
-                      </TableCell>
-                      <TableCell>{t('Execution not ready')}</TableCell>
-                      <TableCell>
-                        <Button
-                          size='sm'
-                          variant='outline'
-                          onClick={() =>
-                            setSelected(`${entry.key}@${entry.version}`)
-                          }
-                        >
-                          {t('Details')}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
           </div>
         </SectionPageLayout.Content>
       </SectionPageLayout>

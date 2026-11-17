@@ -1,6 +1,7 @@
 // Copyright (C) 2023-2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 // Extracted from MAX's catalog UI; QuantumNous/new-api 70e6af64 interaction reference retained.
 import type { ComponentProps } from 'react'
+import { Package, UploadCloud, ShieldCheck, CheckCircle2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -41,6 +42,11 @@ type Props = {
 }
 export function PluginInstallSheet(props: Props) {
   const { t } = useTranslation()
+  const fileDigest =
+    props.validated?.format_version === 3 &&
+    !props.document.trimStart().startsWith('{')
+      ? props.validated.source_sha256
+      : props.validated?.digest
   return (
     <Sheet
       open={props.installOpen}
@@ -52,19 +58,28 @@ export function PluginInstallSheet(props: Props) {
       }}
     >
       <SheetContent className='w-full overflow-y-auto sm:max-w-xl'>
-        <SheetHeader>
-          <SheetTitle>{t('Install plugin package')}</SheetTitle>
+        <SheetHeader className='border-b px-6 pt-6 pr-12 pb-5'>
+          <SheetTitle>{t('Import API extension')}</SheetTitle>
           <SheetDescription>
             {t(
               'Select a bundled JavaScript plugin or a MAX package. Compatibility revisions have explicit MAX versions and source hashes. Paid task admission requires separate verification.'
             )}
           </SheetDescription>
         </SheetHeader>
-        <div className='space-y-4 px-4 pb-6'>
+        <div className='space-y-5 px-6 pb-8 text-sm'>
           <TaskPluginFeedback {...props.feedbackProps} showRefresh />
           {props.bundles.length > 0 && (
-            <>
-              <Label htmlFor='official-plugin'>{t('Bundled plugins')}</Label>
+            <div className='space-y-3 rounded-xl border p-4'>
+              <Label
+                htmlFor='official-plugin'
+                className='flex items-center gap-2'
+              >
+                <Package
+                  className='text-muted-foreground size-4'
+                  aria-hidden='true'
+                />
+                {t('Bundled plugins')}
+              </Label>
               <select
                 id='official-plugin'
                 className='border-input h-9 w-full rounded-md border bg-transparent px-3 text-sm'
@@ -87,55 +102,86 @@ export function PluginInstallSheet(props: Props) {
                   </option>
                 ))}
               </select>
-            </>
+            </div>
           )}
-          <Label htmlFor='plugin-file'>{t('Package file')}</Label>
-          <Input
-            id='plugin-file'
-            type='file'
-            accept='.js,.json,text/javascript,application/javascript,application/json'
-            disabled={props.busy}
-            onChange={(e) => void props.loadFile(e.target.files?.[0])}
-          />
-          <p className='text-muted-foreground text-xs break-all'>
-            {props.fileName}
-          </p>
-          <Label htmlFor='plugin-pin'>{t('Trusted package SHA-256')}</Label>
-          <Input
-            id='plugin-pin'
-            value={props.expectedHash}
-            disabled={props.busy}
-            onChange={(e) => {
-              props.setExpectedHash(e.target.value.trim().toLowerCase())
-              props.resetValidation()
-            }}
-          />
-          <p className='text-muted-foreground text-sm'>
-            {t(
-              'Use a digest from a trusted publisher. A digest calculated from the uploaded file alone does not prove authenticity. Maximum package size: 1 MiB.'
-            )}
-          </p>
-          <Button
-            variant='outline'
-            disabled={
-              props.busy ||
-              props.validating ||
-              !props.document ||
-              !/^[a-f0-9]{64}$/.test(props.expectedHash)
-            }
-            onClick={() => void props.validate()}
-          >
-            {t('Validate package')}
-          </Button>
+          <div className='bg-muted/20 space-y-3 rounded-xl border border-dashed p-5'>
+            <Label htmlFor='plugin-file' className='flex items-center gap-2'>
+              <UploadCloud
+                className='text-muted-foreground size-4'
+                aria-hidden='true'
+              />
+              {t('Package file')}
+            </Label>
+            <Input
+              id='plugin-file'
+              type='file'
+              accept='.js,.json,text/javascript,application/javascript,application/json'
+              disabled={props.busy}
+              onChange={(e) => void props.loadFile(e.target.files?.[0])}
+            />
+            <p className='text-muted-foreground text-xs break-all'>
+              {props.fileName || 'JavaScript / JSON · 1 MiB'}
+            </p>
+          </div>
+          <div className='space-y-3 rounded-xl border p-4'>
+            <Label htmlFor='plugin-pin' className='flex items-center gap-2'>
+              <ShieldCheck
+                className='text-muted-foreground size-4'
+                aria-hidden='true'
+              />
+              {t('SHA-256 (optional)')}
+            </Label>
+            <Input
+              id='plugin-pin'
+              value={props.expectedHash}
+              className='font-mono text-xs'
+              disabled={props.busy}
+              onChange={(e) => {
+                props.setExpectedHash(e.target.value.trim().toLowerCase())
+                props.resetValidation()
+              }}
+            />
+            <p className='text-muted-foreground text-sm'>
+              {t(
+                'Leave blank to import a custom plugin. If provided, SHA-256 must match the uploaded file. The system always records content digests. Maximum package size: 1 MiB.'
+              )}
+            </p>
+            <p className='text-muted-foreground text-xs leading-relaxed'>
+              {t(
+                "For official plugin.js files, use the exact version's sha256 from the publisher's index.json. Use original file bytes; changing line endings invalidates the hash."
+              )}
+            </p>
+            <Button
+              variant='outline'
+              disabled={
+                props.busy ||
+                props.validating ||
+                !props.document ||
+                (props.expectedHash !== '' &&
+                  !/^[a-f0-9]{64}$/.test(props.expectedHash))
+              }
+              onClick={() => void props.validate()}
+            >
+              <ShieldCheck className='size-4' aria-hidden='true' />
+              {t('Validate package')}
+            </Button>
+          </div>
           {props.validated && (
-            <div className='space-y-3 rounded-md border p-3'>
-              <p>
+            <div className='space-y-4 rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 dark:border-emerald-900 dark:bg-emerald-950/20'>
+              <p className='flex items-start gap-2 font-medium break-all'>
+                <CheckCircle2
+                  className='mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400'
+                  aria-hidden='true'
+                />
                 {props.validated.name} · {props.validated.key}@
                 {props.validated.version}
               </p>
               <p>
                 {t('Package format')} {props.validated.format_version} ·{' '}
                 {props.validated.models.length} {t('Models')}
+              </p>
+              <p className='font-mono text-xs break-all'>
+                {t('Computed file SHA-256')}: {fileDigest ?? '—'}
               </p>
               {props.validated.format_version >= 2 && (
                 <label className='flex items-start gap-2'>
@@ -166,7 +212,7 @@ export function PluginInstallSheet(props: Props) {
                   void props.mutate({
                     action: 'install',
                     document: props.document,
-                    expected_sha256: props.expectedHash,
+                    expected_sha256: props.expectedHash || undefined,
                     expected_revision: props.installRevision,
                     format2_nodes_ready: props.nodesReady,
                     format3_nodes_ready: props.nodesReady,

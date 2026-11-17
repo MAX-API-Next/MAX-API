@@ -63,12 +63,13 @@ const receiptSchema = z.object({
 })
 export type PluginEntry = z.infer<typeof pluginSchema>
 export type PluginSnapshot = z.infer<typeof snapshotSchema>
-export type PluginAction = 'activate' | 'enable' | 'disable' | 'revoke'
-export type PluginUpload = { document: string; expected_sha256: string }
+export type PluginAction = 'activate' | 'enable' | 'disable' | 'delete'
+export type PluginUpload = { document: string; expected_sha256?: string }
 export type PluginMutation = {
   expected_revision: string
   format2_nodes_ready?: boolean
   format3_nodes_ready?: boolean
+  deletion_nodes_ready?: boolean
 } & (
   | ({ action: 'install' } & PluginUpload)
   | { action: PluginAction; key: string; version: string }
@@ -116,7 +117,7 @@ async function request<T>(
     if (!raw.success)
       throw new PluginError(
         'rejected',
-        raw.message || 'Invalid task plugin request'
+        raw.message || 'Invalid API extension request'
       )
     return schema.parse(raw.data)
   } catch (error) {
@@ -127,12 +128,12 @@ async function request<T>(
       const kind = classifyRequestError(status, write)
       throw new PluginError(
         kind,
-        typeof message === 'string' ? message : 'Task plugin request failed'
+        typeof message === 'string' ? message : 'API extension request failed'
       )
     }
     throw new PluginError(
       write ? 'unknown' : 'read',
-      'Invalid task plugin response'
+      'Invalid API extension response'
     )
   }
 }
@@ -164,13 +165,14 @@ export const taskPluginAPI = {
       pluginSchema
     )
     if (
+      upload.expected_sha256 &&
       entry.digest !== upload.expected_sha256 &&
       !(
         entry.format_version === 3 &&
         entry.source_sha256 === upload.expected_sha256
       )
     )
-      throw new PluginError('read', 'Invalid task plugin response')
+      throw new PluginError('read', 'Invalid API extension response')
     return entry
   },
   mutate: async (command: PluginMutation) => {
@@ -180,7 +182,7 @@ export const taskPluginAPI = {
       true
     )
     if (BigInt(receipt.revision) !== BigInt(command.expected_revision) + 1n)
-      throw new PluginError('unknown', 'Invalid task plugin response')
+      throw new PluginError('unknown', 'Invalid API extension response')
     return receipt
   },
 }

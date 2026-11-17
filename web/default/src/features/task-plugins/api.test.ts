@@ -87,6 +87,18 @@ test('validation rejects a receipt for different pinned bytes', async () => {
   )
 })
 
+test('custom uploads may omit or leave the external SHA-256 empty', async () => {
+  for (const upload of [
+    { document: 'custom upload' },
+    { document: 'custom upload', expected_sha256: '' },
+  ]) {
+    const calls = respond({ success: true, data: entry })
+    const result = await taskPluginAPI.validate(upload)
+    assert.equal(result.digest, entry.digest)
+    assert.equal(calls.length, 1)
+  }
+})
+
 test('official JavaScript validates its source pin independently of the stored envelope', async () => {
   respond({
     success: true,
@@ -153,10 +165,11 @@ test('mutations classify conflicts and unknown receipts without retrying', async
   await assert.rejects(
     () =>
       taskPluginAPI.mutate({
-        action: 'revoke',
+        action: 'delete',
         key: 'kling',
         version: '1.2.0',
         expected_revision: '4',
+        deletion_nodes_ready: true,
       }),
     (e) => e instanceof PluginError && e.kind === 'unknown'
   )
