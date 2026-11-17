@@ -145,6 +145,9 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		if err != nil {
 			return err
 		}
+		if len(models) > maxTaskPluginModelIndexBytes {
+			return taskplugin.ErrCatalogInvalid
+		}
 		record := TaskPluginDeletion{Identity: identity, PluginKey: key, Version: version, Digest: entry.Digest, Revoked: receipt.Revoked, Models: taskPluginModelIndex(models)}
 		if found {
 			if err := tx.Model(&TaskPluginDeletion{}).Where("identity = ?", identity).Updates(map[string]any{"revoked": receipt.Revoked, "models": record.Models}).Error; err != nil {

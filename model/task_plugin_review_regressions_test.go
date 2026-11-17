@@ -64,6 +64,58 @@ func TestTaskPluginDeletedModelIndexCapacity(t *testing.T) {
 	require.Empty(t, oldRow.Models)
 }
 
+func TestTaskPluginDeletionRejectsOversizedEscapedModelIndex(t *testing.T) {
+	db := deletionDB(t)
+	name := strings.Repeat("<", 200000)
+	document, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "source", Manifest: taskplugin.Manifest{APIVersion: 1, Key: "escaped", Name: "escaped", Version: "1.0.0", Models: []string{name}}})
+	require.NoError(t, err)
+	document = bytes.ReplaceAll(document, []byte(`\u003c`), []byte("<"))
+	require.Less(t, len(document), taskplugin.MaxPackageBytes)
+	pkg, err := taskplugin.LoadPackage(bytes.NewReader(document), fmt.Sprintf("%x", sha256.Sum256(document)))
+	require.NoError(t, err)
+	store := NewTaskPluginCatalogStore(db)
+	catalog, err := taskplugin.OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	before, err := store.Load(t.Context())
+	require.NoError(t, err)
+	require.ErrorIs(t, catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "escaped", Version: "1.0.0"}), taskplugin.ErrCatalogInvalid)
+	after, err := store.Load(t.Context())
+	require.NoError(t, err, "failed deletion must leave the catalog readable")
+	require.Equal(t, before, after, "failed deletion must preserve source, head and receipts")
+	require.NoError(t, db.Create(&Channel{Models: "unrelated"}).Error, "a rejected deletion must not poison channel writes")
+}
+
+func TestTaskPluginModelIndexCodecBounds(t *testing.T) {
+	for _, size := range []int{taskplugin.MaxPackageBytes - 1, taskplugin.MaxPackageBytes, taskplugin.MaxPackageBytes + 1} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			index := taskPluginModelIndex(strings.Repeat("x", size))
+			value, err := index.Value()
+			if size > taskplugin.MaxPackageBytes {
+				require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+				require.Nil(t, value)
+			} else {
+				require.NoError(t, err)
+				var decoded taskPluginModelIndex
+				require.NoError(t, decoded.Scan(value))
+				require.Equal(t, index, decoded)
+			}
+			encoded, err := taskPluginDocument(index).Value()
+			require.NoError(t, err)
+			for _, raw := range []any{string(index), encoded} {
+				var decoded taskPluginModelIndex
+				err := decoded.Scan(raw)
+				if size > taskplugin.MaxPackageBytes {
+					require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, index, decoded)
+				}
+			}
+		})
+	}
+}
+
 func TestTaskPluginCatalogMixedDeletionReadIsConflict(t *testing.T) {
 	db := deletionDB(t)
 	pkg, entry := catalogFixture(t, "stored", "1.0.0", "source")

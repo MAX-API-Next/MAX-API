@@ -127,3 +127,7 @@ validation reads current locked package rows rather than a prior MySQL snapshot.
 The source-free declared-model index uses LONGTEXT on MySQL and TEXT on SQLite
 and PostgreSQL, with ASCII storage encoding for legacy character sets. Migrate
 existing experimental index columns before using deletion on upgraded nodes.
+Deletion also requires the serialized JSON model index to fit within 1 MiB.
+Names that expand heavily under JSON escaping may exceed this limit even when
+the uploaded package fits. Such deletion is rejected atomically, preserving the
+installed version and catalog revision.

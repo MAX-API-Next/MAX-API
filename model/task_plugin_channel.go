@@ -63,7 +63,7 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 			continue
 		} // Legacy receipts predate the model index.
 		var names []string
-		if len(receipt.Models) > taskplugin.MaxPackageBytes || common.UnmarshalJsonStr(string(receipt.Models), &names) != nil {
+		if len(receipt.Models) > maxTaskPluginModelIndexBytes || common.UnmarshalJsonStr(string(receipt.Models), &names) != nil {
 			return taskplugin.ErrCatalogInvalid
 		}
 		for _, name := range names {

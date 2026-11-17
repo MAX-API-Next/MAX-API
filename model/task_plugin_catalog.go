@@ -96,7 +96,12 @@ func taskPluginLargeTextType(db *gorm.DB) string {
 
 type taskPluginModelIndex string
 
+const maxTaskPluginModelIndexBytes = taskplugin.MaxPackageBytes
+
 func (index taskPluginModelIndex) Value() (driver.Value, error) {
+	if len(index) > maxTaskPluginModelIndexBytes {
+		return nil, taskplugin.ErrCatalogInvalid
+	}
 	return taskPluginDocument(index).Value()
 }
 
@@ -108,6 +113,9 @@ func (index *taskPluginModelIndex) Scan(value any) error {
 	var document taskPluginDocument
 	if err := document.Scan(value); err != nil {
 		return err
+	}
+	if len(document) > maxTaskPluginModelIndexBytes {
+		return taskplugin.ErrCatalogInvalid
 	}
 	*index = taskPluginModelIndex(document)
 	return nil
