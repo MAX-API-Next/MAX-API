@@ -180,6 +180,13 @@ export function PluginCatalog(props: Props) {
     if (filter === 'revoked') matchesStatus = entry.revoked
     return matchesSearch && matchesStatus
   })
+  const isEmpty = !props.loading && props.available && rows.length === 0
+  const emptyTitle = props.entries.length
+    ? t('No matching plugins')
+    : t('No API extensions found')
+  const emptyHint = props.entries.length
+    ? t('Try a different search or status filter.')
+    : t('Install your first plugin package to get started.')
   return (
     <div className='space-y-4'>
       <div className='flex flex-wrap items-center justify-between gap-3 border-b pb-4'>
@@ -240,6 +247,14 @@ export function PluginCatalog(props: Props) {
           </div>
         </div>
       </div>
+      <p
+        role='status'
+        aria-label={t('API extension catalog')}
+        aria-atomic='true'
+        className='sr-only'
+      >
+        {isEmpty ? `${emptyTitle} ${emptyHint}` : ''}
+      </p>
       {props.loading && (
         <p
           role='status'
@@ -248,22 +263,14 @@ export function PluginCatalog(props: Props) {
           {t('Loading...')}
         </p>
       )}
-      {!props.loading && props.available && rows.length === 0 && (
+      {isEmpty && (
         <div className='flex flex-col items-center rounded-xl border border-dashed px-6 py-16 text-center'>
           <Package
             className='text-muted-foreground mb-4 size-8'
             aria-hidden='true'
           />
-          <h3 className='text-sm font-medium'>
-            {props.entries.length
-              ? t('No matching plugins')
-              : t('No API extensions found')}
-          </h3>
-          <p className='text-muted-foreground mt-2 text-sm'>
-            {props.entries.length
-              ? t('Try a different search or status filter.')
-              : t('Install your first plugin package to get started.')}
-          </p>
+          <h3 className='text-sm font-medium'>{emptyTitle}</h3>
+          <p className='text-muted-foreground mt-2 text-sm'>{emptyHint}</p>
         </div>
       )}
       {!props.loading &&

@@ -35,75 +35,126 @@ Object.defineProperty(globalThis, 'scrollTo', {
   configurable: true,
   value: () => {},
 })
-const { render, cleanup, fireEvent, waitFor } =
+const { render, cleanup, fireEvent, waitFor, within, act } =
   await import('@testing-library/react')
 const { TaskPlugins } = await import('./index')
 const { api } = await import('@/lib/api')
+const { taskPluginAPI } = await import('./api')
 const { useAuthStore } = await import('@/stores/auth-store')
-after(() => {
+const activeFixtures = new Set<Promise<void>>()
+
+after(async () => {
+  await Promise.allSettled([...activeFixtures])
   cleanup()
   if (originalScrollTo)
     Object.defineProperty(globalThis, 'scrollTo', originalScrollTo)
   else Reflect.deleteProperty(globalThis, 'scrollTo')
   env.teardown()
+  if (endpoint) await fetch(endpoint + '/plugin-test-stop', { method: 'POST' })
 })
 
-test(
-  'the mounted UI imports without an external hash and disables through actual Root API and SQLite catalog',
-  { skip: !endpoint },
-  async () => {
-    assert.match(endpoint!, /^http:\/\/127\.0\.0\.1:[0-9]+$/)
-    const login = await fetch(endpoint + '/plugin-test-login/root')
-    const cookie = login.headers.get('set-cookie')?.split(';')[0]
-    assert.ok(cookie, 'isolated server must issue its own synthetic session')
-    const original = api.defaults.baseURL,
-      originalCookie = api.defaults.headers.common.Cookie,
-      previous = useAuthStore.getState().auth.user
-    api.defaults.baseURL = endpoint
-    api.defaults.headers.common.Cookie = cookie
-    useAuthStore
-      .getState()
-      .auth.setUser({ id: 59123102, username: 'plugin-root', role: 100 })
-    const client = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-        mutations: { retry: false },
-      },
-    })
+async function withRootFixture(
+  run: (mount: () => ReturnType<typeof render>) => Promise<void>
+) {
+  const operation = runRootFixture(run)
+  activeFixtures.add(operation)
+  try {
+    await operation
+  } finally {
+    activeFixtures.delete(operation)
+  }
+}
+
+async function runRootFixture(
+  run: (mount: () => ReturnType<typeof render>) => Promise<void>
+) {
+  assert.match(endpoint!, /^http:\/\/127\.0\.0\.1:[0-9]+$/)
+  const login = await fetch(endpoint + '/plugin-test-login/root')
+  const cookie = login.headers.get('set-cookie')?.split(';')[0]
+  assert.ok(cookie, 'isolated server must issue its own synthetic session')
+  const original = api.defaults.baseURL,
+    originalCookie = api.defaults.headers.common.Cookie,
+    previous = useAuthStore.getState().auth.user
+  api.defaults.baseURL = endpoint
+  api.defaults.headers.common.Cookie = cookie
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 59123102, username: 'plugin-root', role: 100 })
+  const client = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  })
+  const mount = () => {
     const rootRoute = createRootRoute({ component: TaskPlugins })
     const router = createRouter({
       routeTree: rootRoute,
       history: createMemoryHistory(),
       defaultPendingMinMs: 0,
     })
-    try {
-      const view = render(
-        <I18nextProvider i18n={env.i18n}>
-          <QueryClientProvider client={client}>
-            <RouterContextProvider router={router}>
-              <TaskPlugins />
-            </RouterContextProvider>
-          </QueryClientProvider>
-        </I18nextProvider>
-      )
-      await view.findByText('No API extensions found')
+    return render(
+      <I18nextProvider i18n={env.i18n}>
+        <QueryClientProvider client={client}>
+          <RouterContextProvider router={router}>
+            <TaskPlugins />
+          </RouterContextProvider>
+        </QueryClientProvider>
+      </I18nextProvider>
+    )
+  }
+  try {
+    await run(mount)
+  } finally {
+    await act(async () => {
+      await client.cancelQueries()
+      cleanup()
+      client.clear()
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    })
+    api.defaults.baseURL = original
+    if (originalCookie === undefined) delete api.defaults.headers.common.Cookie
+    else api.defaults.headers.common.Cookie = originalCookie
+    useAuthStore.getState().auth.setUser(previous)
+  }
+}
+
+function packageDocument(key: string, name: string, model: string) {
+  return JSON.stringify({
+    format_version: 1,
+    manifest: {
+      APIVersion: 1,
+      Key: key,
+      Name: name,
+      Version: '1.0.0',
+      Models: [model],
+      UsageSchema: { units: { Type: 'number', Unit: 'credit' } },
+    },
+    source: 'opaque synthetic data; no JS execution',
+  })
+}
+
+test(
+  'the mounted UI imports without an external hash through actual Root API and SQLite catalog',
+  { skip: !endpoint },
+  async () => {
+    await withRootFixture(async (mount) => {
+      const before = await taskPluginAPI.read()
+      const view = mount()
+      const content = within(view.container)
+      await content.findByRole('button', { name: 'Import API extension' })
       fireEvent.click(
-        view.getByRole('button', { name: 'Import API extension' })
+        content.getByRole('button', { name: 'Import API extension' })
       )
-      const document = JSON.stringify({
-        format_version: 1,
-        manifest: {
-          APIVersion: 1,
-          Key: 'wire-fixture',
-          Name: 'Wire Fixture',
-          Version: '1.0.0',
-          Models: ['wire-model'],
-          UsageSchema: { units: { Type: 'number', Unit: 'credit' } },
-        },
-        source: 'opaque synthetic data; no JS execution',
-      })
+      const importDialog = await view.findByRole('dialog')
+      const install = within(importDialog)
+      const document = packageDocument(
+        'wire-import',
+        'Wire Import Fixture',
+        'wire-import-model'
+      )
       const pin = createHash('sha256').update(document).digest('hex')
-      fireEvent.change(view.getByLabelText('Package file'), {
+      fireEvent.change(install.getByLabelText('Package file'), {
         target: {
           files: [
             {
@@ -115,38 +166,70 @@ test(
         },
       })
       assert.equal(
-        (view.getByLabelText('SHA-256 (optional)') as HTMLInputElement).value,
+        (install.getByLabelText('SHA-256 (optional)') as HTMLInputElement)
+          .value,
         ''
       )
-      const validate = view.getByRole('button', { name: 'Validate package' })
+      const validate = install.getByRole('button', { name: 'Validate package' })
       await waitFor(() =>
         assert.equal((validate as HTMLButtonElement).disabled, false)
       )
       fireEvent.click(validate)
-      await view.findByText(`Submitted content SHA-256: ${pin}`)
+      await install.findByText(`Submitted content SHA-256: ${pin}`)
       fireEvent.click(
-        await view.findByRole('button', { name: 'Install and activate' })
+        await install.findByRole('button', { name: 'Install and activate' })
       )
-      await view.findByText('Wire Fixture')
-      fireEvent.click(view.getByRole('button', { name: 'Details' }))
-      fireEvent.click(await view.findByRole('button', { name: 'Disable' }))
-      fireEvent.click(view.getByRole('button', { name: 'Confirm' }))
-      await view.findByRole('button', { name: 'Enable' })
-      const { taskPluginAPI } = await import('./api')
+      await waitFor(() => assert.equal(importDialog.isConnected, false))
+      await content.findByText('Wire Import Fixture')
       const stored = await taskPluginAPI.read()
-      assert.equal(stored.revision, '2')
-      assert.equal(stored.entries[0].enabled, false)
-      assert.equal(stored.entries[0].digest, pin)
-      assert.equal(stored.entries[0].execution_ready, false)
-      assert.equal(stored.entries[0].admission_ready, false)
-    } finally {
-      cleanup()
-      api.defaults.baseURL = original
-      if (originalCookie === undefined)
-        delete api.defaults.headers.common.Cookie
-      else api.defaults.headers.common.Cookie = originalCookie
-      useAuthStore.getState().auth.setUser(previous)
-      await fetch(endpoint + '/plugin-test-stop', { method: 'POST' })
-    }
+      const entry = stored.entries.find((entry) => entry.key === 'wire-import')
+      assert.ok(entry)
+      assert.equal(stored.revision, String(BigInt(before.revision) + 1n))
+      assert.equal(entry.enabled, true)
+      assert.equal(entry.digest, pin)
+      assert.equal(entry.execution_ready, false)
+      assert.equal(entry.admission_ready, false)
+    })
+  }
+)
+
+test(
+  'the mounted UI disables an installed version through actual Root API and SQLite catalog',
+  { skip: !endpoint },
+  async () => {
+    await withRootFixture(async (mount) => {
+      const before = await taskPluginAPI.read()
+      const document = packageDocument(
+        'wire-disable',
+        'Wire Disable Fixture',
+        'wire-disable-model'
+      )
+      const pin = createHash('sha256').update(document).digest('hex')
+      const receipt = await taskPluginAPI.mutate({
+        expected_revision: before.revision,
+        action: 'install',
+        document,
+      })
+      const view = mount()
+      const content = within(view.container)
+      const heading = await content.findByRole('heading', {
+        name: 'Wire Disable Fixture',
+      })
+      const card = heading.closest('article')
+      assert.ok(card)
+      fireEvent.click(within(card).getByRole('button', { name: 'Details' }))
+      const details = within(await view.findByRole('dialog'))
+      fireEvent.click(await details.findByRole('button', { name: 'Disable' }))
+      fireEvent.click(details.getByRole('button', { name: 'Confirm' }))
+      await details.findByRole('button', { name: 'Enable' })
+      const stored = await taskPluginAPI.read()
+      const entry = stored.entries.find((entry) => entry.key === 'wire-disable')
+      assert.ok(entry)
+      assert.equal(stored.revision, String(BigInt(receipt.revision) + 1n))
+      assert.equal(entry.enabled, false)
+      assert.equal(entry.digest, pin)
+      assert.equal(entry.execution_ready, false)
+      assert.equal(entry.admission_ready, false)
+    })
   }
 )

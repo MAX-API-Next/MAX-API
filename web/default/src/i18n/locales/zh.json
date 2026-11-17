@@ -6067,7 +6067,7 @@
     "Invalid API extension response": "接口扩展响应无效",
     "Bind API extensions": "绑定接口扩展",
     "Bind registered API extensions to channels.": "将已注册的接口扩展绑定到渠道。",
-    "Disabling blocks new bindings while keeping installed files and historical tasks available.": "停用会阻止新绑定，保留已安装文件和历史任务。",
+    "Disabling blocks new bindings while keeping installed files and historical tasks available.": "停用会停止向此扩展路由新任务，保留已安装文件和历史任务。渠道仍可引用其模型。",
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.": "无任务、渠道或价格引用时可直接删除。删除会移除已安装源码，保留发行包和审计标识；之后可重新导入原文件。",
     "Task plugin version is still referenced; remove task, channel or pricing references before deleting": "该接口扩展版本仍被引用，暂不能删除。请先移除任务、渠道或价格配置中的引用。",
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "该接口扩展版本曾被永久撤销，请联系管理员处理历史撤销记录。",

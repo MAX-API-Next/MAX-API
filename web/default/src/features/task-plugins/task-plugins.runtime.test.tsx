@@ -423,6 +423,8 @@ test('catalog search includes models hidden behind card overflow and distinguish
   f.state.entries[0].models = ['one', 'two', 'three', 'four', 'hidden-model']
   const v = f.view()
   await v.findByText('Kling Fixture')
+  const searchStatus = v.getByRole('status', { name: 'API extension catalog' })
+  assert.equal(searchStatus.textContent, '')
   fireEvent.change(v.getByRole('textbox', { name: 'Search API extensions' }), {
     target: { value: ' hidden-model ' },
   })
@@ -432,11 +434,26 @@ test('catalog search includes models hidden behind card overflow and distinguish
   assert.ok(panel.getByText('hidden-model'))
   fireEvent.click(panel.getByRole('button', { name: 'Close' }))
   await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
-  fireEvent.change(v.getByRole('textbox', { name: 'Search API extensions' }), {
+  const searchInput = v.getByRole('textbox', { name: 'Search API extensions' })
+  await act(async () => searchInput.focus())
+  fireEvent.change(searchInput, {
     target: { value: 'does-not-exist' },
   })
   assert.ok(v.getByText('No matching plugins'))
+  assert.equal(
+    v.getByRole('status', { name: 'API extension catalog' }),
+    searchStatus
+  )
+  assert.match(searchStatus.textContent || '', /No matching plugins/)
+  assert.equal(document.activeElement, searchInput)
   assert.equal(v.queryByText('No API extensions found'), null)
+  fireEvent.change(searchInput, { target: { value: '' } })
+  assert.equal(
+    v.getByRole('status', { name: 'API extension catalog' }),
+    searchStatus
+  )
+  assert.equal(searchStatus.textContent, '')
+  assert.equal(document.activeElement, searchInput)
   assert.deepEqual(f.writes, [])
 })
 
