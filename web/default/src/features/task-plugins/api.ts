@@ -3,6 +3,7 @@
 // Independently adapted to MAX's pinned package transport and catalog CAS.
 import { z } from 'zod'
 import { isAxiosError } from 'axios'
+import { t } from 'i18next'
 import { api } from '@/lib/api'
 
 const revision = z
@@ -103,6 +104,22 @@ function classifyRequestError(
 
 const options = { skipBusinessError: true, skipErrorHandler: true }
 const endpoint = '/api/task_plugins'
+function requestErrorMessage(payload: unknown, fallback: string): string {
+  const mapping = z
+    .object({
+      code: z.literal('invalid_channel_mapping'),
+      channel_id: z.number().int().positive(),
+    })
+    .safeParse(payload)
+  if (mapping.success)
+    return (
+      t(
+        'Channel {{id}} has an invalid model mapping; repair it before deleting the API extension',
+        { id: mapping.data.channel_id, defaultValue: fallback }
+      ) || fallback
+    )
+  return fallback
+}
 async function request<T>(
   run: () => Promise<{ data: unknown }>,
   schema: z.ZodType<T>,
@@ -114,12 +131,14 @@ async function request<T>(
         success: z.boolean(),
         message: z.string().optional(),
         data: z.unknown().optional(),
+        code: z.unknown().optional(),
+        channel_id: z.unknown().optional(),
       })
       .parse((await run()).data)
     if (!raw.success)
       throw new PluginError(
         'rejected',
-        raw.message || 'Invalid task plugin request'
+        requestErrorMessage(raw, raw.message || 'Invalid task plugin request')
       )
     return schema.parse(raw.data)
   } catch (error) {
@@ -130,7 +149,10 @@ async function request<T>(
       const kind = classifyRequestError(status, write)
       throw new PluginError(
         kind,
-        typeof message === 'string' ? message : 'Task plugin request failed'
+        requestErrorMessage(
+          error.response?.data,
+          typeof message === 'string' ? message : 'Task plugin request failed'
+        )
       )
     }
     throw new PluginError(

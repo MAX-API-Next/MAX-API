@@ -35,7 +35,9 @@ mapped channel models, and plugin pricing references. It removes the installed
 source and version row without promoting another version. Distribution files
 embedded in the program remain available in the bundled picker. A source-free
 deletion receipt retains the identity and digest: identical bytes can be
-explicitly reinstalled, but changed bytes under the same identity are rejected.
+explicitly reinstalled if the version was not historically revoked. A revoked
+receipt continues to reject identical bytes. Changed bytes under the same
+identity are always rejected.
 
 Before acknowledging deletion readiness, upgrade every catalog consumer,
 channel writer **and task writer**, including workers that persist serialized

@@ -114,7 +114,7 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 			return taskplugin.ErrBindingRejected
 		}
 		entry := rows[index]
-		pkg, err := taskplugin.LoadPackage(bytes.NewReader(entry.Document), entry.Digest)
+		pkg, err := taskplugin.LoadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest)
 		if err != nil {
 			return taskplugin.ErrCatalogInvalid
 		}
@@ -142,7 +142,7 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		}
 		previous := taskplugin.CatalogSnapshot{Revision: revision, Packages: rows, Deletions: deletions}
 		next := taskplugin.CatalogSnapshot{Revision: revision + 1, Packages: nextRows, Deletions: nextDeletions}
-		if err := taskplugin.ValidateCatalogTransition(previous, next); err != nil {
+		if err := taskplugin.ValidateCatalogTransitionContext(ctx, previous, next); err != nil {
 			return err
 		}
 		models, err := common.Marshal(pkg.Manifest().Models)

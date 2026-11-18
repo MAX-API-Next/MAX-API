@@ -3,11 +3,13 @@ package model
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
@@ -15,6 +17,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/schema"
 )
 
@@ -212,8 +215,10 @@ func TestTaskPluginPricingAndDeletionLockOrder(t *testing.T) {
 	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("record_catalog_channel_locks", func(tx *gorm.DB) {
 		switch tx.Statement.Table {
 		case db.NamingStrategy.TableName("TaskPluginCatalogHead"):
+			require.Equal(t, "UPDATE", tx.Statement.Clauses["FOR"].Expression.(clause.Locking).Strength)
 			order = append(order, "head")
 		case db.NamingStrategy.TableName("Channel"):
+			require.Equal(t, "UPDATE", tx.Statement.Clauses["FOR"].Expression.(clause.Locking).Strength)
 			order = append(order, "channel")
 		case db.NamingStrategy.TableName("TaskPluginVersion"):
 			if _, ok := tx.Statement.Clauses["FOR"]; !ok {
@@ -248,12 +253,17 @@ func TestTaskPluginPricingAndDeletionLockOrder(t *testing.T) {
 	require.NoError(t, db.Callback().Query().Remove("record_catalog_channel_locks"))
 	order = nil
 	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("deletion_requires_price_lock_first", func(tx *gorm.DB) {
-		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginCatalogHead") && index("price") < 0 {
-			tx.AddError(errors.New("deletion must lock price writer first"))
+		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginCatalogHead") {
+			order = append(order, "deletion-head")
+			require.Equal(t, "UPDATE", tx.Statement.Clauses["FOR"].Expression.(clause.Locking).Strength)
+			if index("price") < 0 {
+				tx.AddError(errors.New("deletion must lock price writer first"))
+			}
 		}
 	}))
 	_, err = store.DeleteVersion(t.Context(), 1, pkg.Manifest().Key, pkg.Manifest().Version)
 	require.NoError(t, err)
+	require.NotEqual(t, -1, index("deletion-head"))
 }
 
 func TestTaskPluginDeletedPricingBindingRejectsWithoutPriceWrites(t *testing.T) {
@@ -826,6 +836,97 @@ func TestTaskPluginInvalidLegacyMappingIsKnownPrecondition(t *testing.T) {
 	require.Len(t, snapshot.Packages, 1)
 }
 
+func TestTaskPluginHeadBootstrapIgnoresMatchedRowCount(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	_, entry := catalogFixture(t, "stored", "1.0.0", "matched-row-source")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	require.NoError(t, db.Callback().Create().After("gorm:create").Register("emulate_mysql_found_rows", func(tx *gorm.DB) {
+		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginCatalogHead") && tx.Error == nil {
+			tx.RowsAffected = 1 // MySQL clientFoundRows can report the matched existing row.
+		}
+	}))
+	require.NoError(t, db.Create(&Channel{Models: "ordinary-model"}).Error)
+	snapshot, err := store.Load(t.Context())
+	require.NoError(t, err)
+	require.EqualValues(t, 1, snapshot.Revision)
+	require.Len(t, snapshot.Packages, 1)
+}
+
+func TestTaskPluginCASCannotRepairAnInvalidPreviousMarker(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	_, entry := catalogFixture(t, "stored", "1.0.0", "previous-marker")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&TaskPluginCatalogHead{}).Where("id = ?", 1).UpdateColumn("revision", 1).Error)
+	_, err = store.CompareAndSwap(t.Context(), 1, nil)
+	require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+	var head TaskPluginCatalogHead
+	require.NoError(t, db.First(&head, 1).Error)
+	require.EqualValues(t, 1, head.Revision)
+	require.EqualValues(t, 2, head.LastDeletionRevision)
+}
+
+func TestTaskPluginPricingReadDetectsChangedHeadBeforeMarkerValidation(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	_, entry := catalogFixture(t, "stored", "1.0.0", "read-interleave")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	interleaved := false
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register("simulate_committed_catalog_change", func(tx *gorm.DB) {
+		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginDeletion") && !interleaved {
+			interleaved = true
+			tx.AddError(tx.Session(&gorm.Session{NewDB: true, SkipHooks: true}).Model(&TaskPluginCatalogHead{}).Where("id = ?", 1).UpdateColumn("revision", 2).Error)
+		}
+	}))
+	err = db.Transaction(func(tx *gorm.DB) error { _, _, err := readPricingCatalog(tx, false); return err })
+	require.ErrorIs(t, err, ErrModelPricingConflict)
+	require.True(t, interleaved, "controlled query interleaving must actually change the head")
+}
+
+func TestTaskPluginRetainedDeclarationsAreMetadataReferences(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	_, retired := catalogFixture(t, "stored", "1.0.0", "retired-declaration")
+	_, active := catalogFixture(t, "stored", "2.0.0", "active-declaration")
+	retired.Active = false
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{retired, active})
+	require.NoError(t, err)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "2.0.0")
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&Channel{Models: "catalog-model"}).Error, "retired declaration intentionally retains configuration metadata")
+	catalog, err := taskplugin.OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	_, err = catalog.Host().PricingPackage("GET", "/stored/job", "catalog-model")
+	require.ErrorIs(t, err, taskplugin.ErrBindingRejected, "metadata acceptance does not enable a retired route")
+}
+
+func TestTaskPluginStoreMetadataLoadHonorsDeadline(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	_, entry := catalogFixture(t, "stored", "1.0.0", "original-source")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	var document taskplugin.PackageDocument
+	require.NoError(t, common.Unmarshal(entry.Document, &document))
+	document.FormatVersion = 3
+	document.Source = `for(;;){}; export const meta={};`
+	raw, err := common.Marshal(document)
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&TaskPluginVersion{}).Where("identity = ?", taskPluginIdentity("stored", "1.0.0")).Updates(map[string]any{"document": taskPluginDocument(raw), "digest": fmt.Sprintf("%x", sha256.Sum256(raw))}).Error)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err = store.Load(ctx)
+	require.Error(t, err)
+	require.Less(t, time.Since(started), 2*time.Second, "storage-side metadata validation shares the caller budget")
+}
+
 func TestTaskPluginSQLiteSchemaProbeKeepsWriteIntent(t *testing.T) {
 	db := deletionDB(t)
 	var journalMode string
@@ -838,6 +939,10 @@ func TestTaskPluginSQLiteSchemaProbeKeepsWriteIntent(t *testing.T) {
 	sqlDB, err := other.DB()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sqlDB.Close() })
+	require.NoError(t, other.Create(&Option{Key: "outside-wal-probe", Value: "1"}).Error)
+	var sameDatabase int64
+	require.NoError(t, db.Model(&Option{}).Where("key = ?", "outside-wal-probe").Count(&sameDatabase).Error)
+	require.EqualValues(t, 1, sameDatabase)
 	probed := false
 	var probeError error
 	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("probe_sqlite_read_upgrade", func(tx *gorm.DB) {
@@ -849,7 +954,9 @@ func TestTaskPluginSQLiteSchemaProbeKeepsWriteIntent(t *testing.T) {
 	channel := Channel{Name: "schema-race", Models: "ordinary-model"}
 	require.NoError(t, db.Create(&channel).Error, "a concurrent commit after schema reads must not break the new channel writer")
 	require.True(t, probed)
-	require.Error(t, probeError, "write intent prevents a second WAL writer overtaking the hook")
+	var busy interface{ Code() int }
+	require.ErrorAs(t, probeError, &busy)
+	require.Equal(t, 5, busy.Code()&255, "the second writer must report SQLITE_BUSY")
 	var stored Channel
 	require.NoError(t, db.First(&stored, channel.Id).Error)
 	require.Equal(t, channel.Name, stored.Name)

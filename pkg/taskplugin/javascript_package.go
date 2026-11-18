@@ -219,7 +219,11 @@ func (p *Program) Manifest(ctx context.Context) (Manifest, error) {
 }
 
 func (p *Program) matchesManifest(m Manifest) bool {
-	compiled, err := p.Manifest(context.Background())
+	return p.matchesManifestContext(context.Background(), m)
+}
+
+func (p *Program) matchesManifestContext(ctx context.Context, m Manifest) bool {
+	compiled, err := p.Manifest(ctx)
 	if err != nil {
 		return false
 	}

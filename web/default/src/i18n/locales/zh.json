@@ -6051,9 +6051,9 @@
     "Package integrity": "包完整性",
     "Delete version": "删除版本",
     "Disable the active version before deleting. Task, channel or pricing references block deletion. Installed source is removed; distribution bundles and audit identity are retained.": "请先禁用当前活跃版本。有任务、渠道或价格引用时拒绝删除。删除会移除已安装源码；发行包和审计标识仍保留。",
-    "All catalog nodes have been upgraded to support version deletion. Older nodes may suspend their plugin host after deletion.": "我已确认所有目录节点均已升级并支持删除版本。删除后，旧节点可能暂停其整个插件运行环境。",
+    "All catalog nodes have been upgraded to support version deletion. Older nodes may suspend their plugin host after deletion.": "所有目录节点、任务写入节点和渠道写入节点均已升级以支持版本删除。旧写入节点可能产生指向已删除版本的引用；旧读取节点可能暂停插件宿主。",
     "For official plugin.js files, use the exact version's sha256 from the publisher's index.json. Use original file bytes; changing line endings invalidates the hash.": "官方 plugin.js 的摘要可在发布仓库根目录 index.json 中找到，请使用对应版本的 sha256。上传原始文件；转换换行符会导致摘要不匹配。",
-    "Task plugin version is still referenced; disable it and remove task, channel or pricing references before deleting": "该接口扩展版本仍被引用，暂不能删除。请先禁用，并检查任务、渠道或价格配置中的引用。",
+    "Task plugin version is still referenced; disable it and remove task, channel or pricing references before deleting": "该接口扩展版本仍被引用，暂不能删除。请先禁用，并移除任务、渠道或价格配置中的引用。",
     "SHA-256 (optional)": "SHA-256（可选）",
     "Leave blank to import a custom plugin. If provided, SHA-256 must match the uploaded file. The system always records content digests. Maximum package size: 1 MiB.": "导入自定义插件时可留空；填写后必须与上传文件的 SHA-256 一致。系统始终记录内容摘要。最大包体积：1 MiB。",
     "Computed file SHA-256": "系统计算的文件 SHA-256",
@@ -6076,6 +6076,7 @@
     "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 对应实际提交的 UTF-8 文本，包含保留的 BOM。仅计算摘要不能证明发布者身份。",
     "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "所有目录节点均已支持 UTF-8 BOM 插件包。旧节点可能暂停整个插件宿主。",
     "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "所有目录节点均已支持此包格式和 UTF-8 BOM 插件包。旧节点可能暂停整个插件宿主。",
-    "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB"
+    "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB",
+    "Channel {{id}} has an invalid model mapping; repair it before deleting the API extension": "渠道 {{id}} 的模型映射无效，请修复后再删除接口扩展。"
   }
 }

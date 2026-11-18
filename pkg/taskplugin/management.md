@@ -33,7 +33,14 @@ Back up and restore the catalog head, all retained packages and all deletion
 receipts as one consistent set. The last-deletion marker detects loss of the
 entire receipt set; it is not a fingerprint of every individual receipt and
 cannot certify a partially restored database. No normal catalog operation may
-drop receipts. Restore consistency must be established before serving traffic.
+drop receipts. Task, channel and pricing records must come from the same recovery
+point or be reconciled against the restored catalog before traffic resumes.
+An old receipt does not prove that a reinstalled version was deleted again.
+Do not use a partially restored set as proof of valid history.
+Stop every catalog reader and writer before restoring an older backup. Restore
+the consistent set, create fresh Catalog instances, and verify their load before
+resuming traffic. A live instance remembers its highest observed revision and
+will reject a rollback; repeated Refresh calls cannot reset that history.
 
 All management routes require fresh Root authentication:
 
@@ -101,6 +108,9 @@ channel coverage for an unreconciled legacy catalog. The current channel guard
 scans indexed receipts under the head lock, so deletion history size affects
 channel-write latency. A durable per-model lookup/backfill remains separate
 scalability work; the current implementation does not provide indexed lookup.
+Any retained non-revoked declaration intentionally satisfies this metadata
+reference check, including inactive or disabled versions. This preserves channel
+configuration and does not prove an active route, executor or paid admission.
 
 The console and management API no longer expose `revoke`; legacy requests are
 rejected without committing. Existing revocation records remain readable for

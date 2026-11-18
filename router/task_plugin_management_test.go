@@ -207,6 +207,8 @@ func TestTaskPluginManagementDeletionRequiresRootAcknowledgementAndNoReferences(
 	response = request(command, true)
 	require.Equal(t, 422, response.Code, response.Body.String())
 	require.Contains(t, response.Body.String(), fmt.Sprintf("Channel %d", legacy.Id))
+	require.Contains(t, response.Body.String(), `"code":"invalid_channel_mapping"`)
+	require.Contains(t, response.Body.String(), fmt.Sprintf(`"channel_id":%d`, legacy.Id))
 	require.NotContains(t, response.Body.String(), "private-legacy-name")
 	require.NoError(t, db.Delete(&legacy).Error)
 	response = request(command, true)

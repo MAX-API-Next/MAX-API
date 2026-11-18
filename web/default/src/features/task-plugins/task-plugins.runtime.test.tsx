@@ -24,6 +24,10 @@ env.i18n.addResourceBundle('en', 'translation', {
   'No task plugin packages found':
     english.translation['No task plugin packages found'],
   'Plugin catalog': english.translation['Plugin catalog'],
+  'All catalog nodes have been upgraded to support version deletion. Older nodes may suspend their plugin host after deletion.':
+    english.translation[
+      'All catalog nodes have been upgraded to support version deletion. Older nodes may suspend their plugin host after deletion.'
+    ],
   'Task Plugins': english.translation['Task Plugins'],
   'Plugin details': english.translation['Plugin details'],
   'Install plugin package': english.translation['Install plugin package'],
@@ -229,6 +233,17 @@ test('catalog filters retain exact version selection across card and table views
   )
 })
 
+test('closing unchanged details restores the opening button', async () => {
+  const f = fixture(),
+    v = f.view()
+  const opener = await v.findByRole('button', { name: 'Details kling@1.2.0' })
+  fireEvent.click(opener)
+  await v.findByRole('dialog')
+  fireEvent.keyDown(document, { key: 'Escape', code: 'Escape', keyCode: 27 })
+  await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
+  await waitFor(() => assert.equal(document.activeElement, opener))
+})
+
 test('custom package validation and installation work without an external SHA-256', async () => {
   const f = fixture()
   const uploads: unknown[] = []
@@ -340,6 +355,10 @@ test('deleting an installed version requires node acknowledgement and closes onl
   const panel = within(await v.findByRole('dialog'))
   fireEvent.click(panel.getByRole('button', { name: 'Delete version' }))
   const confirm = panel.getByRole('button', { name: 'Confirm' })
+  assert.match(
+    panel.getByRole('checkbox').parentElement!.textContent!,
+    /task writers and channel writers/
+  )
   assert.equal((confirm as HTMLButtonElement).disabled, true)
   fireEvent.click(panel.getByRole('checkbox'))
   assert.equal((confirm as HTMLButtonElement).disabled, false)

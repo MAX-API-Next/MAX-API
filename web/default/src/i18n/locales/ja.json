@@ -6048,9 +6048,9 @@
     "Package integrity": "パッケージの整合性",
     "Delete version": "バージョンを削除",
     "Disable the active version before deleting. Task, channel or pricing references block deletion. Installed source is removed; distribution bundles and audit identity are retained.": "削除する前にアクティブなバージョンを無効にしてください。タスク、チャネル、料金設定から参照されている場合は削除できません。インストール済みソースを削除しますが、配布パッケージと監査用の識別情報は保持します。",
-    "All catalog nodes have been upgraded to support version deletion. Older nodes may suspend their plugin host after deletion.": "すべてのカタログノードを、バージョン削除に対応した版へ更新済みです。古いノードは削除後にプラグインホストを停止する可能性があります。",
+    "All catalog nodes have been upgraded to support version deletion. Older nodes may suspend their plugin host after deletion.": "すべてのカタログノード、タスク書き込みノード、チャネル書き込みノードをバージョン削除に対応するよう更新しました。古い書き込みノードは削除済みバージョンへの参照を作成し、古い読み取りノードはプラグインホストを停止する場合があります。",
     "For official plugin.js files, use the exact version's sha256 from the publisher's index.json. Use original file bytes; changing line endings invalidates the hash.": "公式 plugin.js には、公開元の index.json にある該当バージョンの sha256 を使用してください。元のファイルを使用し、改行コードを変換しないでください。変換するとハッシュが一致しなくなります。",
-    "Task plugin version is still referenced; disable it and remove task, channel or pricing references before deleting": "この API 拡張のバージョンは参照されています。無効化し、タスク、チャネル、料金設定の参照を確認してから削除してください。",
+    "Task plugin version is still referenced; disable it and remove task, channel or pricing references before deleting": "この API 拡張のバージョンは参照されています。無効化し、タスク、チャネル、料金設定の参照を解除してから削除してください。",
     "SHA-256 (optional)": "SHA-256（任意）",
     "Leave blank to import a custom plugin. If provided, SHA-256 must match the uploaded file. The system always records content digests. Maximum package size: 1 MiB.": "独自プラグインのインポートでは空欄にできます。SHA-256 を指定した場合は、アップロードしたファイルと一致する必要があります。内容のハッシュは常に記録されます。最大サイズ：1 MiB。",
     "Computed file SHA-256": "計算したファイルの SHA-256",
@@ -6073,6 +6073,7 @@
     "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 は、保持された BOM を含む送信済み UTF-8 テキストを識別します。計算したダイジェストだけでは発行者を認証できません。",
     "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "すべてのカタログノードが UTF-8 BOM 付きパッケージに対応しています。古いノードではプラグインホスト全体が停止する場合があります。",
     "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "すべてのカタログノードがこのパッケージ形式と UTF-8 BOM 付きパッケージに対応しています。古いノードではプラグインホスト全体が停止する場合があります。",
-    "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB"
+    "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB",
+    "Channel {{id}} has an invalid model mapping; repair it before deleting the API extension": "チャネル {{id}} のモデルマッピングが無効です。修正してから API 拡張を削除してください。"
   }
 }

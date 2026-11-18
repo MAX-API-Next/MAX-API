@@ -52,6 +52,8 @@ const { render, cleanup, fireEvent, waitFor, within, act } =
   await import('@testing-library/react')
 const { TaskPlugins } = await import('./index')
 const { api } = await import('@/lib/api')
+const originalTimeout = api.defaults.timeout
+api.defaults.timeout = 3000
 const { taskPluginAPI } = await import('./api')
 const { useAuthStore } = await import('@/stores/auth-store')
 const activeFixtures = new Set<Promise<void>>()
@@ -63,6 +65,7 @@ after(async () => {
     Object.defineProperty(globalThis, 'scrollTo', originalScrollTo)
   else Reflect.deleteProperty(globalThis, 'scrollTo')
   env.teardown()
+  api.defaults.timeout = originalTimeout
   if (endpoint)
     await fetch(endpoint + '/plugin-test-stop', {
       method: 'POST',

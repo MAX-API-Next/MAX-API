@@ -43,9 +43,11 @@ func GetBundledTaskPluginSource(c *gin.Context) {
 func taskPluginAdminError(c *gin.Context, err error) {
 	status, message := http.StatusBadRequest, "Invalid task plugin request"
 	var mapping *taskplugin.CatalogChannelMappingError
+	response := gin.H{"success": false}
 	switch {
 	case errors.As(err, &mapping):
 		status, message = http.StatusUnprocessableEntity, fmt.Sprintf("Channel %d has an invalid model mapping; repair it before deleting the API extension", mapping.ChannelID)
+		response["code"], response["channel_id"] = "invalid_channel_mapping", mapping.ChannelID
 	case errors.Is(err, taskplugin.ErrCatalogConflict):
 		status, message = http.StatusConflict, "Task plugin catalog changed; refresh before retrying"
 	case errors.Is(err, taskplugin.ErrCatalogInUse):
@@ -61,7 +63,8 @@ func taskPluginAdminError(c *gin.Context, err error) {
 	case errors.Is(err, taskplugin.ErrCatalogInvalid):
 		message = "Task plugin catalog transition rejected"
 	}
-	c.JSON(status, gin.H{"success": false, "message": message}) // Never return source/driver errors.
+	response["message"] = message
+	c.JSON(status, response) // Never return source/driver errors.
 }
 
 func taskPluginAdminFields(c *gin.Context, allowed map[string]string) (map[string]json.RawMessage, error) {

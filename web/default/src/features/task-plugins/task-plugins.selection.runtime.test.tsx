@@ -41,7 +41,7 @@ mock.module('./plugin-catalog', () => ({
       {props.entries.map((entry) => (
         <button
           key={`${entry.key}@${entry.version}`}
-          onClick={() => props.onDetails(entry)}
+          onClick={(event) => props.onDetails(entry, event.currentTarget)}
         >
           Open {entry.version}
         </button>

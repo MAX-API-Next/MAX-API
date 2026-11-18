@@ -144,7 +144,7 @@ func (catalog *Catalog) refreshLocked(ctx context.Context) error {
 		}
 		return ErrCatalogUnavailable
 	}
-	state, err := buildCatalogState(snapshot, catalog.snapshot, catalog.state != nil)
+	state, err := buildCatalogStateContext(ctx, snapshot, catalog.snapshot, catalog.state != nil)
 	if err != nil {
 		catalog.host.state.Store(nil)
 		return err
@@ -162,11 +162,23 @@ func (catalog *Catalog) publish(snapshot CatalogSnapshot, state *hostState) {
 // ValidateCatalogTransition is shared with durable stores so even a direct
 // store call cannot rewrite history, clear revocations or publish bad routes.
 func ValidateCatalogTransition(previous, next CatalogSnapshot) error {
-	_, err := buildCatalogState(next, previous, true)
+	return ValidateCatalogTransitionContext(context.Background(), previous, next)
+}
+
+// ValidateCatalogTransitionContext keeps metadata checks within the caller's budget.
+func ValidateCatalogTransitionContext(ctx context.Context, previous, next CatalogSnapshot) error {
+	_, err := buildCatalogStateContext(ctx, next, previous, true)
 	return err
 }
 
 func buildCatalogState(snapshot, previous CatalogSnapshot, checkPrevious bool) (*hostState, error) {
+	return buildCatalogStateContext(context.Background(), snapshot, previous, checkPrevious)
+}
+
+func buildCatalogStateContext(ctx context.Context, snapshot, previous CatalogSnapshot, checkPrevious bool) (*hostState, error) {
+	if err := managementContextError(ctx); err != nil {
+		return nil, err
+	}
 	if snapshot.Revision < 0 || snapshot.Revision == 0 && (len(snapshot.Packages) != 0 || len(snapshot.Deletions) != 0) {
 		return nil, ErrCatalogInvalid
 	}
@@ -174,11 +186,17 @@ func buildCatalogState(snapshot, previous CatalogSnapshot, checkPrevious bool) (
 	activeKeys := map[string]bool{}
 	total := 0
 	for _, entry := range snapshot.Packages {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if len(entry.Document) > MaxPackageBytes || total > MaxRetainedPackageBytes-len(entry.Document) {
 			return nil, ErrCatalogInvalid
 		}
 		total += len(entry.Document)
-		p, err := LoadPackage(bytes.NewReader(entry.Document), entry.Digest)
+		p, err := LoadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if err != nil || entry.Digest != p.digest {
 			return nil, ErrCatalogInvalid
 		}
@@ -230,7 +248,10 @@ func buildCatalogState(snapshot, previous CatalogSnapshot, checkPrevious bool) (
 			return nil, ErrCatalogInvalid
 		}
 		for _, old := range previous.Packages {
-			p, err := LoadPackage(bytes.NewReader(old.Document), old.Digest)
+			p, err := LoadPackageContext(ctx, bytes.NewReader(old.Document), old.Digest)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			if err != nil {
 				return nil, ErrCatalogInvalid
 			}
@@ -297,7 +318,7 @@ func (catalog *Catalog) updateExpected(ctx context.Context, expected *int64, cha
 		return err
 	}
 	next.Revision++
-	state, err := buildCatalogState(next, catalog.snapshot, true)
+	state, err := buildCatalogStateContext(ctx, next, catalog.snapshot, true)
 	if err != nil {
 		return err
 	}
@@ -319,12 +340,19 @@ func (catalog *Catalog) Install(ctx context.Context, packages ...*Package) error
 	if len(packages) == 0 {
 		return ErrCatalogInvalid
 	}
-	return catalog.update(ctx, func(next *CatalogSnapshot) error { return installCatalogPackages(next, packages...) })
+	return catalog.update(ctx, func(next *CatalogSnapshot) error { return installCatalogPackagesContext(ctx, next, packages...) })
 }
 
 func installCatalogPackages(next *CatalogSnapshot, packages ...*Package) error {
+	return installCatalogPackagesContext(context.Background(), next, packages...)
+}
+
+func installCatalogPackagesContext(ctx context.Context, next *CatalogSnapshot, packages ...*Package) error {
 	seen := map[string]bool{}
 	for _, p := range packages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if p == nil || seen[p.manifest.Key] {
 			return ErrCatalogInvalid
 		}
@@ -342,7 +370,10 @@ func installCatalogPackages(next *CatalogSnapshot, packages ...*Package) error {
 		}
 		index := -1
 		for i := range next.Packages {
-			old, err := LoadPackage(bytes.NewReader(next.Packages[i].Document), next.Packages[i].Digest)
+			old, err := LoadPackageContext(ctx, bytes.NewReader(next.Packages[i].Document), next.Packages[i].Digest)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			if err != nil {
 				return ErrCatalogInvalid
 			}

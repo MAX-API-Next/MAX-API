@@ -24,7 +24,7 @@ type Props = {
   loading: boolean
   available: boolean
   status: (entry: PluginEntry) => string
-  onDetails: (entry: PluginEntry) => void
+  onDetails: (entry: PluginEntry, opener: HTMLElement) => void
 }
 
 export function PluginStatusBadge(props: {
@@ -78,7 +78,7 @@ function PluginIdentity(props: { entry: PluginEntry }) {
 function PluginCard(props: {
   entry: PluginEntry
   status: string
-  onDetails: () => void
+  onDetails: (opener: HTMLElement) => void
 }) {
   const { t } = useTranslation()
   return (
@@ -138,7 +138,7 @@ function PluginCard(props: {
                 type='button'
                 aria-label={`${t('Declared models')}: +${props.entry.models.length - 4} ${props.entry.key}@${props.entry.version}`}
                 className='text-muted-foreground hover:text-foreground rounded-md border px-2 text-xs focus-visible:outline-2'
-                onClick={props.onDetails}
+                onClick={(event) => props.onDetails(event.currentTarget)}
               >
                 +{props.entry.models.length - 4}
               </button>
@@ -157,7 +157,7 @@ function PluginCard(props: {
           variant='ghost'
           size='sm'
           aria-label={`${t('Details')} ${props.entry.key}@${props.entry.version}`}
-          onClick={props.onDetails}
+          onClick={(event) => props.onDetails(event.currentTarget)}
         >
           {t('Details')}
           <ChevronRight className='size-3.5' aria-hidden='true' />
@@ -291,7 +291,7 @@ export function PluginCatalog({ onSearchReady, ...props }: Props) {
                 key={`${entry.key}@${entry.version}`}
                 entry={entry}
                 status={props.status(entry)}
-                onDetails={() => props.onDetails(entry)}
+                onDetails={(opener) => props.onDetails(entry, opener)}
               />
             ))}
           </div>
@@ -333,7 +333,9 @@ export function PluginCatalog({ onSearchReady, ...props }: Props) {
                         size='sm'
                         variant='outline'
                         aria-label={`${t('Details')} ${entry.key}@${entry.version}`}
-                        onClick={() => props.onDetails(entry)}
+                        onClick={(event) =>
+                          props.onDetails(entry, event.currentTarget)
+                        }
                       >
                         {t('Details')}
                       </Button>

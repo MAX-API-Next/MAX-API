@@ -1,6 +1,6 @@
 // Copyright (C) 2023-2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 // Extracted from MAX's catalog UI; QuantumNous/new-api 70e6af64 interaction reference retained.
-import type { ComponentProps, RefObject } from 'react'
+import type { ComponentProps } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
   Package,
@@ -43,7 +43,7 @@ export type PluginConfirmation = {
   revision: string
 }
 type Props = {
-  finalFocus: RefObject<HTMLInputElement | null>
+  finalFocus: () => HTMLElement | null
   selected: string | undefined
   setSelected: (value: string | undefined) => void
   detail: PluginEntry | undefined

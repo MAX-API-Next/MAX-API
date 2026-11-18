@@ -29,4 +29,8 @@ func TestCatalogRemovalNeedsMatchingDurableReceipt(t *testing.T) {
 	require.ErrorIs(t, ValidateCatalogTransition(next, CatalogSnapshot{Revision: 3}), ErrCatalogInvalid, "deletion receipts cannot be dropped")
 	next.Revision = 0
 	require.ErrorIs(t, ValidateCatalogTransition(CatalogSnapshot{}, next), ErrCatalogInvalid)
+	_, err := buildCatalogState(CatalogSnapshot{}, CatalogSnapshot{}, false)
+	require.NoError(t, err)
+	_, err = buildCatalogState(next, CatalogSnapshot{}, false)
+	require.ErrorIs(t, err, ErrCatalogInvalid, "cold start also rejects revision-zero receipts without comparing fingerprints")
 }

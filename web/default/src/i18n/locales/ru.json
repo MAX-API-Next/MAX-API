@@ -6056,9 +6056,9 @@
     "Package integrity": "Целостность пакета",
     "Delete version": "Удалить версию",
     "Disable the active version before deleting. Task, channel or pricing references block deletion. Installed source is removed; distribution bundles and audit identity are retained.": "Перед удалением отключите активную версию. Ссылки из задач, каналов или тарифов блокируют удаление. Установленный исходный код удаляется; дистрибутивы и идентификаторы аудита сохраняются.",
-    "All catalog nodes have been upgraded to support version deletion. Older nodes may suspend their plugin host after deletion.": "Все узлы каталога обновлены до версии с поддержкой удаления. Старые узлы могут приостановить работу хоста плагинов после удаления.",
+    "All catalog nodes have been upgraded to support version deletion. Older nodes may suspend their plugin host after deletion.": "Все узлы каталога и службы записи задач и каналов обновлены для удаления версий. Старые службы записи могут создать ссылки на удалённые версии; старые читатели могут приостановить хост плагинов.",
     "For official plugin.js files, use the exact version's sha256 from the publisher's index.json. Use original file bytes; changing line endings invalidates the hash.": "Для официального plugin.js используйте sha256 нужной версии из index.json издателя. Загружайте исходные байты файла: изменение окончаний строк нарушает соответствие хеша.",
-    "Task plugin version is still referenced; disable it and remove task, channel or pricing references before deleting": "На эту версию расширения API ещё есть ссылки. Перед удалением отключите её и проверьте ссылки из задач, каналов и тарифов.",
+    "Task plugin version is still referenced; disable it and remove task, channel or pricing references before deleting": "Эта версия расширения API ещё используется. Отключите её и уберите ссылки из задач, каналов или настроек цен перед удалением.",
     "SHA-256 (optional)": "SHA-256 (необязательно)",
     "Leave blank to import a custom plugin. If provided, SHA-256 must match the uploaded file. The system always records content digests. Maximum package size: 1 MiB.": "Оставьте поле пустым для импорта собственного плагина. Указанный SHA-256 должен совпадать с загруженным файлом. Система всегда сохраняет хеши содержимого. Максимальный размер: 1 МиБ.",
     "Computed file SHA-256": "Вычисленный SHA-256 файла",
@@ -6081,6 +6081,7 @@
     "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 относится к отправленному тексту UTF-8, включая сохранённый BOM. Вычисленная контрольная сумма сама по себе не подтверждает издателя.",
     "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "Все узлы каталога поддерживают пакеты UTF-8 с BOM. Старые узлы могут приостановить весь хост плагинов.",
     "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "Все узлы каталога поддерживают этот формат пакета и пакеты UTF-8 с BOM. Старые узлы могут приостановить весь хост плагинов.",
-    "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB"
+    "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB",
+    "Channel {{id}} has an invalid model mapping; repair it before deleting the API extension": "Сопоставление моделей канала {{id}} недопустимо; исправьте его перед удалением расширения API."
   }
 }

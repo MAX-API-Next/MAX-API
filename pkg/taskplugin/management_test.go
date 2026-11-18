@@ -3,11 +3,13 @@ package taskplugin
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	"github.com/stretchr/testify/require"
 )
@@ -287,4 +289,20 @@ func TestManagementRetainedRevocationPrecedesReceiptContentConflict(t *testing.T
 	catalog, err := OpenCatalog(t.Context(), store)
 	require.NoError(t, err)
 	require.ErrorIs(t, catalog.ValidateInstall(t.Context(), changed), ErrCatalogRevoked)
+}
+
+func TestManagementPreflightDeadlineReachesRetainedMetadata(t *testing.T) {
+	store := &memoryCatalogStore{}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	manifest := Manifest{APIVersion: 1, Key: "custom-upload", Name: "Custom", Version: "1.0.0", Models: []string{"custom-model"}}
+	document, err := common.Marshal(PackageDocument{FormatVersion: 3, Manifest: manifest, Source: `for(;;){};` + validUploadSource})
+	require.NoError(t, err)
+	store.snapshot = CatalogSnapshot{Revision: 1, Packages: []StoredPackage{{Document: document, Digest: fmt.Sprintf("%x", sha256.Sum256(document)), Active: true}}}
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err = catalog.ValidateInstall(ctx, testPackage(t, validManifest(), "candidate-source"))
+	require.Error(t, err)
+	require.Less(t, time.Since(started), 2*time.Second, "metadata must stop at the request deadline, not the independent five-second call limit")
 }

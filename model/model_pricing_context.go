@@ -142,6 +142,20 @@ func readPricingCatalog(tx *gorm.DB, lock bool) ([]taskplugin.StoredPackage, boo
 	if loadErr != nil {
 		return nil, false, loadErr
 	}
+	if !lock {
+		var after TaskPluginCatalogHead
+		afterErr := tx.Session(&gorm.Session{NewDB: true}).First(&after, 1).Error
+		if afterErr != nil && !errors.Is(afterErr, gorm.ErrRecordNotFound) {
+			return nil, false, afterErr
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if !errors.Is(afterErr, gorm.ErrRecordNotFound) {
+				return nil, false, ErrModelPricingConflict
+			}
+		} else if afterErr != nil || head != after {
+			return nil, false, ErrModelPricingConflict
+		}
+	}
 	if errors.Is(err, gorm.ErrRecordNotFound) && len(deletions) > 0 {
 		return nil, false, taskplugin.ErrCatalogInvalid
 	}
@@ -149,7 +163,7 @@ func readPricingCatalog(tx *gorm.DB, lock bool) ([]taskplugin.StoredPackage, boo
 		return nil, false, err
 	}
 	snapshot := taskplugin.CatalogSnapshot{Revision: head.Revision, Packages: rows, Deletions: deletions}
-	if err := taskplugin.ValidateCatalogTransition(taskplugin.CatalogSnapshot{}, snapshot); err != nil {
+	if err := taskplugin.ValidateCatalogTransitionContext(tx.Statement.Context, taskplugin.CatalogSnapshot{}, snapshot); err != nil {
 		return nil, false, err
 	}
 	return rows, true, nil

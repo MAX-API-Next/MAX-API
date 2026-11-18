@@ -71,6 +71,12 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
   const files = useRef(new PluginRequestOrder())
   const mounted = useRef(true)
   const catalogSearch = useRef<HTMLInputElement>(null)
+  const detailOpener = useRef<HTMLElement | null>(null)
+  const detailFinalFocus = useCallback(() => {
+    return detailOpener.current?.isConnected
+      ? detailOpener.current
+      : catalogSearch.current
+  }, [])
   const onSearchReady = useCallback((element: HTMLInputElement | null) => {
     catalogSearch.current = element
   }, [])
@@ -183,15 +189,19 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
   async function mutate(command: PluginMutation) {
     if (busy || unknown || !snapshot) return
     setConfirm(undefined)
+    const deletingOpener =
+      command.action === 'delete' ? detailOpener.current : null
     await catalog.mutate(command, () => {
       if (command.action === 'install') {
         setInstallOpen(false)
         resetValidation()
       }
-      if (command.action === 'delete')
+      if (command.action === 'delete') {
+        if (detailOpener.current === deletingOpener) detailOpener.current = null
         setSelected((current) =>
           current === `${command.key}@${command.version}` ? undefined : current
         )
+      }
     })
   }
   const detail = snapshot?.entries.find(
@@ -220,9 +230,7 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
   return (
     <>
       <SectionPageLayout>
-        <SectionPageLayout.Title>
-          {t('API extension management')}
-        </SectionPageLayout.Title>
+        <SectionPageLayout.Title>{t('Task Plugins')}</SectionPageLayout.Title>
         <SectionPageLayout.Actions>
           <Button
             variant='outline'
@@ -264,16 +272,17 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
               available={!!snapshot}
               loading={loading}
               status={status}
-              onDetails={(entry) =>
+              onDetails={(entry, opener) => {
+                detailOpener.current = opener
                 setSelected(`${entry.key}@${entry.version}`)
-              }
+              }}
             />
           </div>
         </SectionPageLayout.Content>
       </SectionPageLayout>
 
       <PluginDetailSheet
-        finalFocus={catalogSearch}
+        finalFocus={detailFinalFocus}
         selected={selected}
         setSelected={setSelected}
         detail={detail}

@@ -21,6 +21,7 @@ package taskplugin
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -56,6 +57,18 @@ type Package struct {
 // from outside the document. Computing a hash from an untrusted upload alone
 // does not establish publisher authenticity.
 func LoadPackage(reader io.Reader, expectedSHA256 string) (*Package, error) {
+	return LoadPackageContext(context.Background(), reader, expectedSHA256)
+}
+
+// LoadPackageContext also bounds executable metadata evaluation by the caller's
+// context. The byte, manifest and trusted-pin contract is identical to LoadPackage.
+func LoadPackageContext(ctx context.Context, reader io.Reader, expectedSHA256 string) (*Package, error) {
+	if ctx == nil {
+		return nil, ErrCatalogUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	expected, err := hex.DecodeString(expectedSHA256)
 	if reader == nil || err != nil || len(expected) != sha256.Size {
 		return nil, errors.New("task plugin package requires a SHA-256 pin")
@@ -104,8 +117,11 @@ func LoadPackage(reader io.Reader, expectedSHA256 string) (*Package, error) {
 	}
 	var program *Program
 	if document.FormatVersion == 3 {
-		program, err = CompileJavaScript(document.Source, RuntimeOptions{})
-		if err != nil || !program.matchesManifest(document.Manifest) {
+		program, err = compileJavaScriptContext(ctx, document.Source, RuntimeOptions{})
+		if err != nil || !program.matchesManifestContext(ctx, document.Manifest) {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			return nil, ErrPluginCompile
 		}
 	}

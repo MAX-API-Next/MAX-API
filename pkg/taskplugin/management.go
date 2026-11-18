@@ -66,11 +66,11 @@ func (catalog *Catalog) ValidateInstall(ctx context.Context, pkg *Package) error
 		return ErrCatalogInvalid
 	}
 	next := cloneCatalogSnapshot(catalog.snapshot)
-	if err := installCatalogPackages(&next, pkg); err != nil {
+	if err := installCatalogPackagesContext(ctx, &next, pkg); err != nil {
 		return err
 	}
 	next.Revision++
-	_, err := buildCatalogState(next, catalog.snapshot, true)
+	_, err := buildCatalogStateContext(ctx, next, catalog.snapshot, true)
 	return err
 }
 
@@ -99,7 +99,7 @@ func (catalog *Catalog) MutateExpected(ctx context.Context, expected int64, muta
 			if mutation.Package == nil {
 				return ErrCatalogInvalid
 			}
-			return installCatalogPackages(next, mutation.Package)
+			return installCatalogPackagesContext(ctx, next, mutation.Package)
 		case "activate":
 			return activateCatalogVersion(next, mutation.Key, mutation.Version)
 		case "enable", "disable":
