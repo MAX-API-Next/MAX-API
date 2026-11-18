@@ -6042,9 +6042,9 @@
     "Plugin catalog": "Danh mục tiện ích mở rộng API",
     "Filter by status": "Lọc theo trạng thái",
     "All statuses": "Tất cả trạng thái",
-    "No matching plugins": "Không có plugin phù hợp",
+    "No matching plugins": "Không có tiện ích mở rộng API phù hợp",
     "Try a different search or status filter.": "Hãy thử từ khóa hoặc bộ lọc trạng thái khác.",
-    "Install your first plugin package to get started.": "Cài đặt gói plugin đầu tiên để bắt đầu.",
+    "Install your first plugin package to get started.": "Nhập tiện ích mở rộng API đầu tiên để bắt đầu.",
     "Package integrity": "Tính toàn vẹn của gói",
     "Delete version": "Xóa phiên bản",
     "Disable the active version before deleting. Task, channel or pricing references block deletion. Installed source is removed; distribution bundles and audit identity are retained.": "Tắt phiên bản đang hoạt động trước khi xóa. Tham chiếu từ tác vụ, kênh hoặc giá sẽ chặn việc xóa. Mã nguồn đã cài sẽ bị xóa; gói phân phối và định danh kiểm toán được giữ lại.",
@@ -6071,6 +6071,7 @@
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "Phiên bản này từng bị thu hồi vĩnh viễn; hãy liên hệ quản trị viên để xử lý bản ghi thu hồi cũ.",
     "Task plugin version has different content; import the original file or use a new version": "Nội dung phiên bản này khác với lịch sử; hãy nhập tệp gốc hoặc dùng phiên bản mới.",
     "Submitted content SHA-256": "SHA-256 của nội dung gửi",
-    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 xác định văn bản UTF-8 đã gửi, bao gồm BOM được giữ lại. Chỉ tính giá trị băm không thể xác thực nhà phát hành."
+    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 xác định văn bản UTF-8 đã gửi, bao gồm BOM được giữ lại. Chỉ tính giá trị băm không thể xác thực nhà phát hành.",
+    "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "Tất cả nút danh mục đều hỗ trợ gói UTF-8 có BOM. Các nút cũ có thể tạm dừng toàn bộ máy chủ plugin."
   }
 }

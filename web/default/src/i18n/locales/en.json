@@ -6045,9 +6045,9 @@
     "Plugin catalog": "API extension catalog",
     "Filter by status": "Filter by status",
     "All statuses": "All statuses",
-    "No matching plugins": "No matching plugins",
+    "No matching plugins": "No matching API extensions",
     "Try a different search or status filter.": "Try a different search or status filter.",
-    "Install your first plugin package to get started.": "Install your first plugin package to get started.",
+    "Install your first plugin package to get started.": "Import your first API extension to get started.",
     "Package integrity": "Package integrity",
     "Delete version": "Delete version",
     "Disable the active version before deleting. Task, channel or pricing references block deletion. Installed source is removed; distribution bundles and audit identity are retained.": "Disable the active version before deleting. Task, channel or pricing references block deletion. Installed source is removed; distribution bundles and audit identity are retained.",
@@ -6074,6 +6074,7 @@
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "API extension version was permanently revoked; contact the administrator to resolve the historical revocation record",
     "Task plugin version has different content; import the original file or use a new version": "API extension version has different content; import the original file or use a new version",
     "Submitted content SHA-256": "Submitted content SHA-256",
-    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 identifies the submitted UTF-8 text, including its preserved BOM. A computed digest alone does not authenticate the publisher."
+    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 identifies the submitted UTF-8 text, including its preserved BOM. A computed digest alone does not authenticate the publisher.",
+    "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host."
   }
 }

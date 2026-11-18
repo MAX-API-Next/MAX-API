@@ -50,6 +50,7 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
   const [document, setDocument] = useState('')
   const [fileName, setFileName] = useState('')
   const [expectedHash, setExpectedHash] = useState('')
+  const [bundledHash, setBundledHash] = useState<string>()
   const [validated, setValidated] = useState<PluginEntry>()
   const [validating, setValidating] = useState(false)
   const [nodesReady, setNodesReady] = useState(false)
@@ -102,6 +103,8 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
     const id = files.current.next()
     setBundleLoading(true)
     setDocument('')
+    setBundledHash(undefined)
+    setExpectedHash('')
     setError('')
     try {
       const upload = await queryClient.fetchQuery({
@@ -113,6 +116,7 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
       if (mounted.current && files.current.current(id)) {
         setDocument(upload.document)
         setExpectedHash(upload.expected_sha256)
+        setBundledHash(upload.expected_sha256)
         setFileName(`${key}@${version}/plugin.js`)
         setNodesReady(false)
       }
@@ -129,6 +133,8 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
   }
 
   async function loadFile(file: File | undefined) {
+    if (bundledHash !== undefined) setExpectedHash('')
+    setBundledHash(undefined)
     setBundleLoading(false)
     setNodesReady(false)
     resetValidation()
@@ -297,7 +303,9 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
         loadBundled={loadBundled}
         fileName={fileName}
         expectedHash={expectedHash}
+        expectedHashLocked={bundledHash !== undefined}
         setExpectedHash={(value) => {
+          if (bundledHash !== undefined) return
           if (bundleLoading) files.current.next()
           setBundleLoading(false)
           setExpectedHash(value)

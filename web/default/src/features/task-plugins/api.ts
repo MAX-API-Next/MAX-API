@@ -26,6 +26,7 @@ export const pluginSchema = z.object({
   version: z.string(),
   digest,
   source_sha256: digest.optional(),
+  bom_prefixed: z.boolean().optional(),
   format_version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   active: z.boolean(),
   enabled: z.boolean(),
@@ -69,6 +70,7 @@ export type PluginMutation = {
   expected_revision: string
   format2_nodes_ready?: boolean
   format3_nodes_ready?: boolean
+  bom_nodes_ready?: boolean
   deletion_nodes_ready?: boolean
 } & (
   | ({ action: 'install' } & PluginUpload)

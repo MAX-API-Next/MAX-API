@@ -12,6 +12,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	"github.com/MAX-API-Next/MAX-API/types"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
@@ -241,6 +242,7 @@ func TestTaskPluginPricingAndDeletionLockOrder(t *testing.T) {
 	}
 	require.NotEqual(t, -1, index("head"))
 	require.NotEqual(t, -1, index("channel"))
+	require.NotEqual(t, -1, index("price"))
 	require.Less(t, index("price"), index("head"))
 	require.Less(t, index("head"), index("channel"))
 	require.NoError(t, db.Callback().Query().Remove("record_catalog_channel_locks"))
@@ -650,9 +652,10 @@ func TestTaskPluginSerializedReferencesAreAllValidated(t *testing.T) {
 	require.NoError(t, db.Create(&task).Error)
 	raw := fmt.Sprintf(`{"plugin_binding":{"plugin_key":"retained","version":"1.0.0","package_digest":%q},"history":[{"plugin_key":"missing"}]}`, pkg.Digest())
 	require.ErrorIs(t, db.Model(&task).Updates(map[string]any{"private_data": raw}).Error, taskplugin.ErrBindingRejected)
-	for _, malformed := range []any{"", []byte(nil), []byte("[")} {
+	for _, malformed := range []any{"", []byte(nil), []byte("["), `[{"historical":{"plugin_key":"retained","version":"1.0.0"}}]`} {
 		require.ErrorIs(t, db.Model(&task).Updates(map[string]any{"private_data": malformed}).Error, taskplugin.ErrCatalogInvalid)
 	}
+	require.NoError(t, db.Model(&task).Updates(map[string]any{"private_data": "null"}).Error)
 	plain := `{"historical":{"unrelated":"value"},"values":[0,false,null]}`
 	require.NoError(t, db.Model(&task).Updates(map[string]any{"private_data": plain}).Error)
 	var persisted string
@@ -686,5 +689,101 @@ func TestTaskPluginSerializedLegacyIdentityDimensions(t *testing.T) {
 		fmt.Sprintf(`{"history":{"package_digest":%q}}`, removed.Digest()),
 	} {
 		require.ErrorIs(t, db.Model(&task).Updates(map[string]any{"private_data": raw}).Error, taskplugin.ErrBindingRejected)
+	}
+}
+
+func TestTaskPluginPinnedSelectionDoesNotReferenceOtherVersions(t *testing.T) {
+	for _, serialized := range []bool{false, true} {
+		t.Run(fmt.Sprint(serialized), func(t *testing.T) {
+			db := deletionDB(t)
+			store := NewTaskPluginCatalogStore(db)
+			_, old := catalogFixture(t, "stored", "1.0.0", "old-source")
+			pkg, current := catalogFixture(t, "stored", "2.0.0", "current-source")
+			old.Active, old.Enabled = false, false
+			_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{old, current})
+			require.NoError(t, err)
+			private := TaskPrivateData{BillingContext: &TaskBillingContext{TaskBillingPlan: &types.TaskBillingPlan{ExpressionPlan: &types.TaskExpressionPlan{SelectedPluginKey: "stored", PluginKey: "stored", PluginVersion: "2.0.0", PackageDigest: pkg.Digest()}}}}
+			task := Task{TaskID: "pinned-v2"}
+			if !serialized {
+				task.PrivateData = private
+			}
+			require.NoError(t, db.Create(&task).Error)
+			if serialized {
+				data, err := common.Marshal(private)
+				require.NoError(t, err)
+				require.NoError(t, db.Model(&task).Updates(map[string]any{"private_data": string(data)}).Error)
+			}
+			_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+			require.NoError(t, err, "a pinned v2 plan does not own unrelated v1")
+			_, err = store.DeleteVersion(t.Context(), 2, "stored", "2.0.0")
+			require.ErrorIs(t, err, taskplugin.ErrCatalogInUse)
+		})
+	}
+}
+
+func TestTaskPluginSQLiteSchemaProbeKeepsWriteIntent(t *testing.T) {
+	db := deletionDB(t)
+	require.NoError(t, db.Exec("PRAGMA journal_mode=WAL").Error)
+	var location struct{ File string }
+	require.NoError(t, db.Raw("PRAGMA database_list").Scan(&location).Error)
+	other, err := gorm.Open(sqlite.Open(location.File+"?_pragma=busy_timeout(20)"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := other.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	probed := false
+	var probeError error
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("probe_sqlite_read_upgrade", func(tx *gorm.DB) {
+		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginCatalogHead") && !probed {
+			probed = true
+			probeError = other.Create(&Option{Key: "unrelated-wal-probe", Value: "1"}).Error
+		}
+	}))
+	channel := Channel{Name: "schema-race", Models: "ordinary-model"}
+	require.NoError(t, db.Create(&channel).Error, "a concurrent commit after schema reads must not break the new channel writer")
+	require.True(t, probed)
+	require.Error(t, probeError, "write intent prevents a second WAL writer overtaking the hook")
+	var stored Channel
+	require.NoError(t, db.First(&stored, channel.Id).Error)
+	require.Equal(t, channel.Name, stored.Name)
+}
+
+func TestTaskPluginDeletionPreservesDeclaredTaskDefault(t *testing.T) {
+	for _, alternate := range []bool{false, true} {
+		t.Run(fmt.Sprint(alternate), func(t *testing.T) {
+			db := setupModelPricingTest(t)
+			require.NoError(t, db.AutoMigrate(&Task{}, &TaskPluginDeletion{}))
+			rows := installPricingPluginForTest(t, db, "1.0.0", "credit", nil, 0)
+			store := NewTaskPluginCatalogStore(db)
+			revision := int64(1)
+			if alternate {
+				var document taskplugin.PackageDocument
+				require.NoError(t, common.Unmarshal(rows[0].Document, &document))
+				document.Manifest.Key, document.Manifest.Name = "alternate", "Alternate"
+				data, err := common.Marshal(document)
+				require.NoError(t, err)
+				rows = append(rows, taskplugin.StoredPackage{Document: data, Digest: fmt.Sprintf("%x", sha256.Sum256(data)), Active: true, Enabled: true})
+				_, err = store.CompareAndSwap(t.Context(), 1, rows)
+				require.NoError(t, err)
+				revision++
+			}
+			entry := pricingEntryForTest(t, db, "kling-v1")
+			draft := types.ModelPricingValues{"billing_setting.billing_mode": "tiered_expr", "billing_setting.billing_expr": `u("units") * 0.1`}
+			_, err := UpdateModelPricing([]types.ModelPricingChange{pricingChangeForTest(entry, draft)})
+			require.NoError(t, err)
+			before, err := store.Load(t.Context())
+			require.NoError(t, err)
+			_, err = store.DeleteVersion(t.Context(), revision, "kling", "1.0.0")
+			if alternate {
+				require.NoError(t, err, "another declared source keeps the unchanged default valid")
+				pricingEntryForTest(t, db, "kling-v1")
+			} else {
+				require.ErrorIs(t, err, taskplugin.ErrCatalogInUse, "deletion must not strand a valid stored task default")
+				after, err := store.Load(t.Context())
+				require.NoError(t, err)
+				require.Equal(t, before, after)
+			}
+			require.Equal(t, `u("units") * 0.1`, rawPricingObjectForTest(t, db, "billing_setting.billing_expr")["kling-v1"])
+		})
 	}
 }

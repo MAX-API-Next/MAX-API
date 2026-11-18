@@ -61,6 +61,18 @@ func TestTaskPluginChannelReferencesCannotOutliveDeletion(t *testing.T) {
 	var afterCount int64
 	require.NoError(t, db.Model(&Channel{}).Count(&afterCount).Error)
 	require.Equal(t, beforeCount, afterCount, "a rejected batch rolls back preceding channel and ability writes")
+	var beforeAbilities, afterAbilities int64
+	require.NoError(t, db.Model(&Ability{}).Count(&beforeAbilities).Error)
+	chunked := make([]Channel, 51)
+	for i := range chunked {
+		chunked[i] = Channel{Name: fmt.Sprintf("chunked-%d", i), Models: "ordinary-model", Group: "default"}
+	}
+	chunked[50].Models = "catalog-model"
+	require.ErrorIs(t, BatchInsertChannels(chunked), taskplugin.ErrBindingRejected)
+	require.NoError(t, db.Model(&Channel{}).Count(&afterCount).Error)
+	require.NoError(t, db.Model(&Ability{}).Count(&afterAbilities).Error)
+	require.Equal(t, beforeCount, afterCount, "a rejected later chunk rolls back completed channel writes")
+	require.Equal(t, beforeAbilities, afterAbilities, "a rejected later chunk rolls back completed ability writes")
 	safe.Models = "ordinary-model"
 	safe.ModelMapping = nil
 	require.NoError(t, safe.UpdateFields("models"), "unrelated model writes remain supported")

@@ -167,3 +167,71 @@ func TestManagementDeletionConflictSuspendsStaleHost(t *testing.T) {
 		})
 	}
 }
+
+func TestManagementExpiredPreflightDoesNotUnpublishHost(t *testing.T) {
+	store := &memoryCatalogStore{}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	pkg := testPackage(t, validManifest(), "source")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	published, calls := catalog.host.state.Load(), store.loadCalls
+	ctx, cancel := context.WithCancel(t.Context())
+	catalog.mu.Lock()
+	started, done := make(chan struct{}), make(chan error, 1)
+	go func() { close(started); done <- catalog.ValidateInstall(ctx, pkg) }()
+	<-started
+	cancel()
+	catalog.mu.Unlock()
+	require.ErrorIs(t, <-done, context.Canceled)
+	require.Same(t, published, catalog.host.state.Load())
+	require.Equal(t, calls, store.loadCalls, "expired preflight never reaches storage")
+	_, _, err = catalog.ManagementSnapshot(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Same(t, published, catalog.host.state.Load(), "an expired administrative read also leaves the healthy publication intact")
+	require.Equal(t, calls, store.loadCalls)
+}
+
+type confirmedDeletionStore struct {
+	memoryCatalogStore
+	afterCommit func()
+}
+
+func (s *confirmedDeletionStore) DeleteVersion(_ context.Context, expected int64, key, version string) (int64, error) {
+	s.Lock()
+	defer s.Unlock()
+	if s.snapshot.Revision != expected || len(s.snapshot.Packages) != 1 {
+		return 0, ErrCatalogConflict
+	}
+	row := s.snapshot.Packages[0]
+	s.snapshot = CatalogSnapshot{Revision: expected + 1, Deletions: []PackageDeletion{{Key: key, Version: version, Digest: row.Digest}}}
+	s.failLoad = true
+	if s.afterCommit != nil {
+		s.afterCommit()
+	}
+	return expected + 1, nil
+}
+
+func TestManagementConfirmedDeletionSurvivesRefreshFailure(t *testing.T) {
+	for _, expires := range []bool{false, true} {
+		t.Run(fmt.Sprint(expires), func(t *testing.T) {
+			store := &confirmedDeletionStore{}
+			catalog, err := OpenCatalog(t.Context(), store)
+			require.NoError(t, err)
+			pkg := testPackage(t, validManifest(), "source")
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if expires {
+				store.afterCommit = cancel
+			}
+			require.NoError(t, catalog.MutateExpected(ctx, 1, ManagementMutation{Action: "delete", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version}), "store-confirmed commit must still produce a successful receipt")
+			require.Nil(t, catalog.host.state.Load(), "failed local publication remains suspended")
+			store.failLoad = false
+			entries, revision, err := catalog.ManagementSnapshot(t.Context())
+			require.NoError(t, err)
+			require.Empty(t, entries)
+			require.EqualValues(t, 2, revision)
+			require.NotNil(t, catalog.host.state.Load(), "fresh authoritative read recovers the Host")
+		})
+	}
+}

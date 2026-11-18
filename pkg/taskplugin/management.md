@@ -21,9 +21,19 @@ references remain writable; omitted fields do not participate in the check.
 
 File uploads preserve a leading UTF-8 BOM and line endings. The server accepts a
 leading BOM in JSON packages while hashing and retaining the original bytes.
+Installation and activation require `bom_nodes_ready: true` for these packages,
+including format 1. Upgrade every catalog reader first: previous loaders reject
+the BOM and can suspend their entire Host. The console asks for this readiness
+acknowledgement separately from the upload's optional publisher hash.
 Previously installed text normalized by older clients keeps its immutable
 identity; uploading the original BOM-bearing file does not overwrite that
 identity. No migration rewrites existing packages or their digests.
+
+Back up and restore the catalog head, all retained packages and all deletion
+receipts as one consistent set. The last-deletion marker detects loss of the
+entire receipt set; it is not a fingerprint of every individual receipt and
+cannot certify a partially restored database. No normal catalog operation may
+drop receipts. Restore consistency must be established before serving traffic.
 
 All management routes require fresh Root authentication:
 
@@ -47,12 +57,18 @@ sandbox and immutable stored identities. If a nonempty SHA-256 is supplied, it
 must be valid and match; a mismatch never falls back to optional mode. `null`,
 incorrect types and unknown fields remain invalid. The bounded JSON request
 permits escaping overhead.
+Raw JavaScript must also fit within the 1 MiB generated package limit: wrapping
+the source and manifest in JSON adds escaping and metadata overhead, so a source
+file below 1 MiB can still exceed the stored-package bound. Local files must be
+valid UTF-8; invalid byte sequences are rejected rather than silently replaced.
 
 The validation response returns the stored package `digest`, and executable
 format-3 uploads also return `source_sha256` for the raw JavaScript bytes. A
 locally computed digest records content identity; it does not authenticate a
 publisher. Internal/persisted package loading and bundled source pins remain
 mandatory, independently of the optional upload field.
+The console binds a bundled document to its supplied pin. Selecting a custom
+file clears that bundle pin; a manually entered custom-file pin stays editable.
 
 Every mutation includes `expected_revision` as a canonical decimal **string**
 (including `"0"` for the empty catalog). Install also includes `document` and
@@ -101,12 +117,18 @@ Executable format-3 installation/activation similarly requires
 `format3_nodes_ready: true`. Omitting an upload hash does not waive either
 compatibility acknowledgement, Root authorization or the revision guard.
 
-Stale revisions return HTTP 409. Storage/unknown outcomes return 503 and suspend
+Stale revisions return HTTP 409. Unconfirmed storage outcomes return 503 and suspend
 the local Host until a successful refresh. Writes are not automatically retried.
 The client rereads authoritative state and retains an unknown-result notice;
 even matching state cannot prove the earlier request failed or finished. A
 successful receipt contains `committed: true`, its exact resulting revision and
 `execution_ready: false`, `admission_ready: false`.
+
+A store-confirmed deletion still returns its committed receipt when the local
+follow-up refresh fails. The local Host remains suspended until an authoritative
+read succeeds; that publication failure does not make the confirmed deletion
+unknown or suppress its management audit. A store that does not confirm the
+commit still produces the existing unknown-result error, without automatic replay.
 
 Interaction/protocol reference: QuantumNous/new-api `70e6af64`, task-plugin
 list/upload/version/detail workflows (AGPL-3.0). MAX uses its independent pinned
@@ -121,7 +143,13 @@ by an already active transaction is rejected to avoid inheriting an old read
 view. Schema preflight runs before that transaction, and ordinary reference
 reads follow the pricing/head locks. Task references are decoded with the same
 typed, case-insensitive JSON field rules as persistence, while recursive legacy
-map/array checks remain supported.
+map/array checks inside the private-data object remain supported. New serialized
+non-null task writes still require an object, matching the typed task/recovery decoder;
+accepting an array at the root would create an unreadable task record.
+Valid task defaults that depend on the removed package are checked under the
+same pricing lock. Deletion cannot newly invalidate such a default, but remains
+allowed when another declared source satisfies it. Prices are never rewritten.
+
 The source-free declared-model index uses LONGTEXT on MySQL and TEXT on SQLite
 and PostgreSQL, with ASCII storage encoding for legacy character sets. Migrate
 existing experimental index columns before using deletion on upgraded nodes.

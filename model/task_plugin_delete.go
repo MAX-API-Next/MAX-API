@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
 	"gorm.io/gorm"
@@ -23,7 +24,7 @@ func loadTaskPluginDeletions(tx *gorm.DB) ([]taskplugin.PackageDeletion, error) 
 		return nil, nil
 	}
 	var records []TaskPluginDeletion
-	if err := tx.Order("identity").Find(&records).Error; err != nil {
+	if err := tx.Select("identity", "plugin_key", "version", "digest", "revoked").Order("identity").Find(&records).Error; err != nil {
 		return nil, err
 	}
 	result := make([]taskplugin.PackageDeletion, 0, len(records))
@@ -97,14 +98,6 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		if err := validateTaskPluginDeletionHead(head, deletions); err != nil {
 			return err
 		}
-		result := tx.Model(&TaskPluginCatalogHead{}).Where("id = ? AND revision = ?", 1, revision).
-			Updates(map[string]any{"revision": revision + 1, "mutation_id": common.GetUUID(), "last_deletion_revision": revision + 1})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return taskplugin.ErrCatalogConflict
-		}
 		rows, identities, err := loadTaskPluginVersions(tx)
 		if err != nil {
 			return err
@@ -144,6 +137,9 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 			nextDeletions = append(nextDeletions, receipt)
 		}
 		nextRows := append(append([]taskplugin.StoredPackage(nil), rows[:index]...), rows[index+1:]...)
+		if err := rejectTaskPluginDefaultRemoval(tx, pkg, nextRows); err != nil {
+			return err
+		}
 		previous := taskplugin.CatalogSnapshot{Revision: revision, Packages: rows, Deletions: deletions}
 		next := taskplugin.CatalogSnapshot{Revision: revision + 1, Packages: nextRows, Deletions: nextDeletions}
 		if err := taskplugin.ValidateCatalogTransition(previous, next); err != nil {
@@ -155,6 +151,14 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		}
 		if len(models) > maxTaskPluginModelIndexBytes {
 			return taskplugin.ErrCatalogInvalid
+		}
+		result := tx.Model(&TaskPluginCatalogHead{}).Where("id = ? AND revision = ?", 1, revision).
+			Updates(map[string]any{"revision": revision + 1, "mutation_id": common.GetUUID(), "last_deletion_revision": revision + 1})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return taskplugin.ErrCatalogConflict
 		}
 		record := TaskPluginDeletion{Identity: identity, PluginKey: key, Version: version, Digest: entry.Digest, Revoked: receipt.Revoked, Models: taskPluginModelIndex(models)}
 		if found {
@@ -292,13 +296,51 @@ func taskPluginTypedReference(private TaskPrivateData, key, version, digest stri
 	if context := private.BillingContext; context != nil {
 		if context.TaskBillingPlan != nil && context.TaskBillingPlan.ExpressionPlan != nil {
 			p := context.TaskBillingPlan.ExpressionPlan
-			if p.PackageDigest == digest || p.SelectedPluginKey == key || p.PluginKey == key && (p.PluginVersion == "" || p.PluginVersion == version) {
+			unversionedSelection := p.SelectedPluginKey == key && (p.PluginKey != p.SelectedPluginKey || p.PluginVersion == "")
+			if p.PackageDigest == digest || unversionedSelection || p.PluginKey == key && (p.PluginVersion == "" || p.PluginVersion == version) {
 				return true
 			}
 		}
 		return context.PricingUsageEnvelope != nil && context.PricingUsageEnvelope.PackageDigest == digest
 	}
 	return false
+}
+
+// Called under pricing/head locks before changing the catalog. Only reject
+// newly invalid defaults; do not rewrite prices or block removal when another
+// declared source still satisfies the existing configuration contract.
+func rejectTaskPluginDefaultRemoval(tx *gorm.DB, pkg *taskplugin.Package, remaining []taskplugin.StoredPackage) error {
+	values, err := readModelPricingMaps(tx)
+	if err != nil {
+		return taskplugin.ErrCatalogUnavailable
+	}
+	var before *pricingAuthority
+	for _, model := range pkg.Manifest().Models {
+		draft := effectiveModelPricing(values, model)
+		expression, _ := draft["billing_setting.billing_expr"].(string)
+		if draft["billing_setting.billing_mode"] != "tiered_expr" {
+			continue
+		}
+		keys, err := billingexpr.TaskUsageKeys(expression)
+		if err != nil || len(keys) == 0 {
+			continue
+		}
+		if before == nil {
+			before, err = readPricingAuthority(tx, false)
+			if err != nil {
+				return taskplugin.ErrCatalogUnavailable
+			}
+		}
+		if validateDefaultTaskPricing(expression, draft, before.contexts(model), keys) != nil {
+			continue // Existing diagnosed drift is not introduced by this deletion.
+		}
+		after := *before
+		after.plugins = remaining
+		if validateDefaultTaskPricing(expression, draft, after.contexts(model), keys) != nil {
+			return taskplugin.ErrCatalogInUse
+		}
+	}
+	return nil
 }
 
 type taskPluginReferenceIdentity struct{ key, version, digest string }
@@ -308,17 +350,24 @@ type taskPluginReferenceIdentity struct{ key, version, digest string }
 func visitTaskPluginReferences(value any, visit func(taskPluginReferenceIdentity) bool) bool {
 	switch v := value.(type) {
 	case map[string]any:
+		key, _ := v["plugin_key"].(string)
+		boundVersion, _ := v["version"].(string)
+		if explicit, ok := v["plugin_version"].(string); ok {
+			boundVersion = explicit
+		}
 		if digest, ok := v["package_digest"].(string); ok && digest != "" && visit(taskPluginReferenceIdentity{digest: digest}) {
 			return true
 		}
-		if key, ok := v["selected_plugin_key"].(string); ok && key != "" && visit(taskPluginReferenceIdentity{key: key}) {
-			return true
-		}
-		if key, ok := v["plugin_key"].(string); ok && key != "" {
-			boundVersion, _ := v["version"].(string)
-			if explicit, ok := v["plugin_version"].(string); ok {
-				boundVersion = explicit
+		if selected, ok := v["selected_plugin_key"].(string); ok && selected != "" {
+			ref := taskPluginReferenceIdentity{key: selected}
+			if selected == key {
+				ref.version = boundVersion
 			}
+			if visit(ref) {
+				return true
+			}
+		}
+		if key != "" {
 			if visit(taskPluginReferenceIdentity{key: key, version: boundVersion}) {
 				return true
 			}
@@ -405,7 +454,13 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 			references = append(references, taskPluginReferenceIdentity{digest: envelope.PackageDigest})
 		}
 	}
-	if len(references) == 0 && len(legacy) == 0 || !tx.Migrator().HasTable(&TaskPluginDeletion{}) {
+	if len(references) == 0 && len(legacy) == 0 {
+		return nil
+	}
+	if err := taskPluginSQLiteWriteIntent(tx, &Task{}); err != nil {
+		return err
+	}
+	if !tx.Migrator().HasTable(&TaskPluginDeletion{}) {
 		return nil
 	}
 	if _, ok := tx.Statement.ConnPool.(gorm.TxCommitter); !ok {
@@ -454,12 +509,11 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 				}
 				retainedKeys = map[string]bool{}
 				for _, record := range records {
-					var document taskplugin.PackageDocument
-					sum := sha256.Sum256(record.Document)
-					if hex.EncodeToString(sum[:]) != record.Digest || common.Unmarshal(bytes.TrimPrefix(record.Document, []byte{0xef, 0xbb, 0xbf}), &document) != nil || document.Manifest.Key == "" || document.Manifest.Version == "" || taskPluginIdentity(document.Manifest.Key, document.Manifest.Version) != record.Identity {
-						return taskplugin.ErrCatalogInvalid
+					manifest, err := taskPluginRetainedManifest(record)
+					if err != nil {
+						return err
 					}
-					retainedKeys[document.Manifest.Key] = true
+					retainedKeys[manifest.Key] = true
 				}
 			}
 			if !retainedKeys[reference.key] {
@@ -482,4 +536,32 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 		}
 	}
 	return nil
+}
+
+// Immutable rows have already passed the executable loader on installation.
+// Metadata-only reference checks verify their bytes and identity without
+// executing JavaScript again while the catalog head is locked.
+func taskPluginRetainedManifest(record TaskPluginVersion) (taskplugin.Manifest, error) {
+	var document taskplugin.PackageDocument
+	sum := sha256.Sum256(record.Document)
+	if len(record.Document) > taskplugin.MaxPackageBytes || hex.EncodeToString(sum[:]) != record.Digest || common.Unmarshal(bytes.TrimPrefix(record.Document, []byte{0xef, 0xbb, 0xbf}), &document) != nil || taskPluginIdentity(document.Manifest.Key, document.Manifest.Version) != record.Identity || taskplugin.ValidateManifest(document.Manifest) != nil {
+		return taskplugin.Manifest{}, taskplugin.ErrCatalogInvalid
+	}
+	if document.FormatVersion < 1 || document.FormatVersion > 3 {
+		return taskplugin.Manifest{}, taskplugin.ErrCatalogInvalid
+	}
+	return document.Manifest, nil
+}
+
+func taskPluginSQLiteWriteIntent(tx *gorm.DB, target any) error {
+	if tx.Dialector.Name() != "sqlite" {
+		return nil
+	}
+	if _, transactional := tx.Statement.ConnPool.(gorm.TxCommitter); !transactional {
+		return nil // Legacy stores without the receipt schema still permit writes.
+	}
+	// A zero-row write takes SQLite write intent before schema SELECTs can
+	// establish a WAL snapshot. No task/channel values or global PRAGMAs change.
+	return tx.Session(&gorm.Session{NewDB: true, SkipHooks: true, SkipDefaultTransaction: true}).
+		Model(target).Where("1 = 0").UpdateColumn("id", gorm.Expr("id")).Error
 }

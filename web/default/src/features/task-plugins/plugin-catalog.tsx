@@ -152,7 +152,12 @@ function PluginCard(props: {
         <span className='text-muted-foreground text-xs'>
           {t('Package format')} {props.entry.format_version}
         </span>
-        <Button variant='ghost' size='sm' onClick={props.onDetails}>
+        <Button
+          variant='ghost'
+          size='sm'
+          aria-label={`${t('Details')} ${props.entry.key}@${props.entry.version}`}
+          onClick={props.onDetails}
+        >
           {t('Details')}
           <ChevronRight className='size-3.5' aria-hidden='true' />
         </Button>
@@ -323,6 +328,7 @@ export function PluginCatalog(props: Props) {
                       <Button
                         size='sm'
                         variant='outline'
+                        aria-label={`${t('Details')} ${entry.key}@${entry.version}`}
                         onClick={() => props.onDetails(entry)}
                       >
                         {t('Details')}

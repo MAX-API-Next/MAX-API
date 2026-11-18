@@ -14,6 +14,7 @@ import {
   SheetDescription,
 } from '@/components/ui/sheet'
 import type { PluginEntry, PluginMutation, PluginSnapshot } from './api'
+import { isJSONPluginUpload } from './file-reader'
 import { TaskPluginFeedback } from './task-plugin-feedback'
 
 type Props = {
@@ -26,6 +27,7 @@ type Props = {
   loadFile: (file: File | undefined) => Promise<void>
   fileName: string
   expectedHash: string
+  expectedHashLocked: boolean
   setExpectedHash: (value: string) => void
   document: string
   validating: boolean
@@ -42,9 +44,11 @@ type Props = {
 }
 export function PluginInstallSheet(props: Props) {
   const { t } = useTranslation()
+  const needsNodesReady =
+    !!props.validated &&
+    (props.validated.format_version >= 2 || !!props.validated.bom_prefixed)
   const fileDigest =
-    props.validated?.format_version === 3 &&
-    !props.document.trimStart().startsWith('{')
+    props.validated?.format_version === 3 && !isJSONPluginUpload(props.document)
       ? props.validated.source_sha256
       : props.validated?.digest
   return (
@@ -134,6 +138,7 @@ export function PluginInstallSheet(props: Props) {
             <Input
               id='plugin-pin'
               value={props.expectedHash}
+              readOnly={props.expectedHashLocked}
               className='font-mono text-xs'
               disabled={props.busy}
               onChange={(e) => {
@@ -188,7 +193,7 @@ export function PluginInstallSheet(props: Props) {
                   'SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.'
                 )}
               </p>
-              {props.validated.format_version >= 2 && (
+              {needsNodesReady && (
                 <label className='flex items-start gap-2'>
                   <input
                     type='checkbox'
@@ -196,7 +201,9 @@ export function PluginInstallSheet(props: Props) {
                     onChange={(e) => props.setNodesReady(e.target.checked)}
                   />
                   {t(
-                    'All catalog nodes support this package format. Older nodes may suspend their entire plugin host.'
+                    props.validated.bom_prefixed
+                      ? 'All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.'
+                      : 'All catalog nodes support this package format. Older nodes may suspend their entire plugin host.'
                   )}
                 </label>
               )}
@@ -211,7 +218,7 @@ export function PluginInstallSheet(props: Props) {
                 disabled={
                   props.disabled ||
                   props.installRevision !== props.snapshot?.revision ||
-                  (props.validated.format_version >= 2 && !props.nodesReady)
+                  (needsNodesReady && !props.nodesReady)
                 }
                 onClick={() =>
                   void props.mutate({
@@ -221,6 +228,9 @@ export function PluginInstallSheet(props: Props) {
                     expected_revision: props.installRevision,
                     format2_nodes_ready: props.nodesReady,
                     format3_nodes_ready: props.nodesReady,
+                    bom_nodes_ready: props.validated?.bom_prefixed
+                      ? props.nodesReady
+                      : undefined,
                   })
                 }
               >

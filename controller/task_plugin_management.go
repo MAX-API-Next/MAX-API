@@ -132,11 +132,11 @@ func ValidateTaskPluginPackage(c *gin.Context) {
 		taskPluginAdminError(c, err)
 		return
 	}
-	common.ApiSuccess(c, service.TaskPluginManagementView(taskplugin.ManagementEntry{Manifest: pkg.Manifest(), Digest: pkg.Digest(), SourceDigest: pkg.SourceDigest(), FormatVersion: pkg.FormatVersion()}))
+	common.ApiSuccess(c, service.TaskPluginManagementView(taskplugin.ManagementEntry{Manifest: pkg.Manifest(), Digest: pkg.Digest(), SourceDigest: pkg.SourceDigest(), FormatVersion: pkg.FormatVersion(), BOMPrefixed: pkg.BOMPrefixed()}))
 }
 
 func MutateTaskPluginManagement(c *gin.Context) {
-	fields, err := taskPluginAdminFields(c, map[string]string{"expected_revision": "string", "action": "string", "key": "string", "version": "string", "document": "string", "expected_sha256": "string", "format2_nodes_ready": "boolean", "format3_nodes_ready": "boolean", "deletion_nodes_ready": "boolean"})
+	fields, err := taskPluginAdminFields(c, map[string]string{"expected_revision": "string", "action": "string", "key": "string", "version": "string", "document": "string", "expected_sha256": "string", "format2_nodes_ready": "boolean", "format3_nodes_ready": "boolean", "bom_nodes_ready": "boolean", "deletion_nodes_ready": "boolean"})
 	if err != nil {
 		taskPluginAdminError(c, err)
 		return
@@ -175,8 +175,10 @@ func MutateTaskPluginManagement(c *gin.Context) {
 	defer cancel()
 	if mutation.Action == "activate" || mutation.Action == "install" {
 		format := 0
+		bomPrefixed := false
 		if mutation.Package != nil {
 			format = mutation.Package.FormatVersion()
+			bomPrefixed = mutation.Package.BOMPrefixed()
 		} else {
 			rows, revision, readErr := catalog.ManagementSnapshot(ctx)
 			if readErr != nil {
@@ -190,6 +192,7 @@ func MutateTaskPluginManagement(c *gin.Context) {
 			for _, row := range rows {
 				if row.Manifest.Key == mutation.Key && row.Manifest.Version == mutation.Version {
 					format = row.FormatVersion
+					bomPrefixed = row.BOMPrefixed
 				}
 			}
 		}
@@ -202,6 +205,14 @@ func MutateTaskPluginManagement(c *gin.Context) {
 		if format >= 2 && !ready {
 			taskPluginAdminError(c, taskplugin.ErrCatalogInvalid)
 			return
+		}
+		if bomPrefixed {
+			ready = false
+			_ = common.Unmarshal(fields["bom_nodes_ready"], &ready)
+			if !ready {
+				taskPluginAdminError(c, taskplugin.ErrCatalogInvalid)
+				return
+			}
 		}
 	}
 	if err := catalog.MutateExpected(ctx, expected, mutation); err != nil {

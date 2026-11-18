@@ -186,6 +186,12 @@ func TestTaskPluginManagementDeletionRequiresRootAcknowledgementAndNoReferences(
 	require.Contains(t, request(command, false).Body.String(), `"success":false`)
 	require.Equal(t, 400, request(command, true).Code)
 	command["deletion_nodes_ready"] = true
+	unauthorized := request(command, false)
+	require.Equal(t, http.StatusUnauthorized, unauthorized.Code, unauthorized.Body.String())
+	entries, revision, err := catalog.ManagementSnapshot(t.Context())
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.EqualValues(t, 1, revision)
 	command["expected_revision"] = "0"
 	require.Equal(t, 409, request(command, true).Code)
 	command["expected_revision"] = "1"
@@ -260,7 +266,7 @@ func TestTaskPluginValidationRejectsDeletedRevocationBeforeInstallation(t *testi
 }
 
 func TestTaskPluginManagementOptionalUploadPin(t *testing.T) {
-	for _, kind := range []string{"javascript", "json"} {
+	for _, kind := range []string{"javascript", "json", "bom-json"} {
 		t.Run(kind, func(t *testing.T) {
 			engine, db, root := taskPluginManagementEngine(t)
 			login := httptest.NewRecorder()
@@ -280,16 +286,35 @@ func TestTaskPluginManagementOptionalUploadPin(t *testing.T) {
 				return response
 			}
 			document := `export const meta = {apiVersion: 1, key: "custom-upload", name: "Custom Upload", version: "1.0.0", models: ["custom-model"]}; export function buildSubmitRequest(){return {}} export function parseSubmitResponse(){return {}} export function buildQueryRequest(){return {}} export function parseTaskResult(){return {}}`
-			if kind == "json" {
+			if kind != "javascript" {
 				data, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "private-custom-source", Manifest: taskplugin.Manifest{APIVersion: 1, Key: "custom-upload", Name: "Custom Upload", Version: "1.0.0", Models: []string{"custom-model"}}})
 				require.NoError(t, err)
 				document = string(data)
+				if kind == "bom-json" {
+					document = "\ufeff" + document
+				}
 			}
 			upload := map[string]any{"document": document}
 			response := request("/api/task_plugins/validate", upload)
 			require.Equal(t, 200, response.Code, response.Body.String())
 			pin := fmt.Sprintf("%x", sha256.Sum256([]byte(document)))
-			require.Contains(t, response.Body.String(), pin, "server returns its computed identity even without a client pin")
+			var validated struct {
+				Data struct {
+					Digest       string `json:"digest"`
+					SourceDigest string `json:"source_sha256"`
+					BOM          bool   `json:"bom_prefixed"`
+				} `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &validated))
+			loaded, err := taskplugin.LoadUpload(strings.NewReader(document), pin)
+			require.NoError(t, err)
+			require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(loaded.Document())), validated.Data.Digest)
+			if kind == "javascript" {
+				require.Equal(t, pin, validated.Data.SourceDigest)
+			} else {
+				require.Equal(t, pin, validated.Data.Digest)
+			}
+			require.Equal(t, kind == "bom-json", validated.Data.BOM)
 			var count int64
 			require.NoError(t, db.Model(&model.TaskPluginVersion{}).Count(&count).Error)
 			require.Zero(t, count, "validation does not install")
@@ -305,6 +330,10 @@ func TestTaskPluginManagementOptionalUploadPin(t *testing.T) {
 				require.Equal(t, 400, request("/api/task_plugins/mutate", upload).Code, "optional SHA does not bypass format-3 compatibility acknowledgement")
 				upload["format3_nodes_ready"] = true
 			}
+			if kind == "bom-json" {
+				require.Equal(t, 400, request("/api/task_plugins/mutate", upload).Code, "old readers cannot load this otherwise format-1 package")
+				upload["bom_nodes_ready"] = true
+			}
 			require.Equal(t, 200, request("/api/task_plugins/mutate", upload).Code)
 			upload["expected_revision"] = "1"
 			upload["expected_sha256"] = strings.Repeat("0", 64)
@@ -319,6 +348,17 @@ func TestTaskPluginManagementOptionalUploadPin(t *testing.T) {
 			require.EqualValues(t, 1, head.Revision)
 			require.NoError(t, db.Model(&model.TaskPluginVersion{}).Count(&count).Error)
 			require.EqualValues(t, 1, count)
+			if kind == "bom-json" {
+				activate := map[string]any{"action": "activate", "key": "custom-upload", "version": "1.0.0", "expected_revision": "1"}
+				require.Equal(t, 400, request("/api/task_plugins/mutate", activate).Code)
+				activate["bom_nodes_ready"] = true
+				require.Equal(t, 200, request("/api/task_plugins/mutate", activate).Code)
+				catalog, err := service.CurrentTaskPluginCatalog()
+				require.NoError(t, err)
+				entries, _, err := catalog.ManagementSnapshot(t.Context())
+				require.NoError(t, err)
+				require.True(t, entries[0].BOMPrefixed)
+			}
 		})
 	}
 }

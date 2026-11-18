@@ -11,8 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const validUploadSource = `export const meta = {apiVersion: 1, key: "custom-upload", name: "Custom", version: "1.0.0", models: ["custom-model"]}; export function buildSubmitRequest(){return {}} export function parseSubmitResponse(){return {}} export function buildQueryRequest(){return {}} export function parseTaskResult(){return {}}`
+
 func TestLoadUploadAllowsOmittedPinButPreservesComputedIdentity(t *testing.T) {
-	source := []byte(`export const meta = {apiVersion: 1, key: "custom-upload", name: "Custom", version: "1.0.0", models: ["custom-model"]}; export function buildSubmitRequest(){return {}} export function parseSubmitResponse(){return {}} export function buildQueryRequest(){return {}} export function parseTaskResult(){return {}}`)
+	source := []byte(validUploadSource)
 	legacy := testPackage(t, validManifest(), "data-only source")
 	for name, data := range map[string][]byte{"javascript": source, "json": legacy.Document()} {
 		t.Run(name, func(t *testing.T) {
@@ -41,12 +43,22 @@ func TestOptionalUploadPinDoesNotRelaxInternalLoadersOrPackageValidation(t *test
 	legacy := testPackage(t, validManifest(), "data-only source")
 	_, err := LoadPackage(bytes.NewReader(legacy.Document()), "")
 	require.Error(t, err, "persisted packages still require their exact digest")
-	_, err = LoadJavaScript(strings.NewReader(`export const meta = {};`), "")
+	_, err = LoadJavaScript(strings.NewReader(validUploadSource), fmt.Sprintf("%x", sha256.Sum256([]byte(validUploadSource))))
+	require.NoError(t, err)
+	_, err = LoadJavaScript(strings.NewReader(validUploadSource), "")
 	require.Error(t, err, "official/internal JS loading remains explicitly pinned")
 	for _, invalid := range []string{"", "{}", `export const meta = {};`, strings.Repeat("x", MaxPackageBytes+1)} {
 		_, err := LoadUpload(strings.NewReader(invalid), "")
 		require.Error(t, err, "optional pin does not bypass manifest, compilation or size checks")
 	}
+}
+
+func TestLoadUploadWhitespaceBOMBoundary(t *testing.T) {
+	data := []byte(" \ufeff{};\r\n" + validUploadSource)
+	pkg, err := LoadUpload(bytes.NewReader(data), fmt.Sprintf("%x", sha256.Sum256(data)))
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(data)), pkg.SourceDigest())
+	require.NotEqual(t, pkg.SourceDigest(), pkg.Digest())
 }
 
 func TestLoadUploadPreservesUTF8BOMIdentity(t *testing.T) {

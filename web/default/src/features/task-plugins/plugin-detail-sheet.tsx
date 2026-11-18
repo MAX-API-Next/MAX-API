@@ -220,7 +220,7 @@ export function PluginDetailSheet(props: Props) {
                     </label>
                   )}
                   {confirmation.action === 'activate' &&
-                    detail.format_version >= 2 && (
+                    (detail.format_version >= 2 || detail.bom_prefixed) && (
                       <label className='flex items-start gap-2'>
                         <input
                           type='checkbox'
@@ -230,7 +230,9 @@ export function PluginDetailSheet(props: Props) {
                           }
                         />
                         {t(
-                          'All catalog nodes support this package format. Older nodes may suspend their entire plugin host.'
+                          detail.bom_prefixed
+                            ? 'All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.'
+                            : 'All catalog nodes support this package format. Older nodes may suspend their entire plugin host.'
                         )}
                       </label>
                     )}
@@ -247,7 +249,7 @@ export function PluginDetailSheet(props: Props) {
                       confirmation.revision !== props.snapshot?.revision ||
                       (confirmation.action === 'delete' && !props.nodesReady) ||
                       (confirmation.action === 'activate' &&
-                        detail.format_version >= 2 &&
+                        (detail.format_version >= 2 || detail.bom_prefixed) &&
                         !props.nodesReady)
                     }
                     onClick={() =>
@@ -258,6 +260,9 @@ export function PluginDetailSheet(props: Props) {
                         expected_revision: confirmation.revision,
                         format2_nodes_ready: props.nodesReady,
                         format3_nodes_ready: props.nodesReady,
+                        bom_nodes_ready: detail.bom_prefixed
+                          ? props.nodesReady
+                          : undefined,
                         deletion_nodes_ready: props.nodesReady,
                       })
                     }

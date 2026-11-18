@@ -2,7 +2,6 @@
 package model
 
 import (
-	"bytes"
 	"reflect"
 	"strings"
 
@@ -19,7 +18,13 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 	if err != nil {
 		return err
 	}
-	if models == nil && mapping == nil || !tx.Migrator().HasTable(&TaskPluginDeletion{}) {
+	if models == nil && mapping == nil {
+		return nil
+	}
+	if err := taskPluginSQLiteWriteIntent(tx, &Channel{}); err != nil {
+		return err
+	}
+	if !tx.Migrator().HasTable(&TaskPluginDeletion{}) {
 		return nil
 	}
 	references := map[string]bool{}
@@ -84,11 +89,11 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 		if version.Revoked {
 			continue
 		}
-		pkg, err := taskplugin.LoadPackage(bytes.NewReader(version.Document), version.Digest)
+		manifest, err := taskPluginRetainedManifest(version)
 		if err != nil {
 			return taskplugin.ErrCatalogInvalid
 		}
-		for _, name := range pkg.Manifest().Models {
+		for _, name := range manifest.Models {
 			delete(deletedModels, name)
 		}
 	}

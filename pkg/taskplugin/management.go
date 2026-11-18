@@ -14,12 +14,16 @@ type ManagementEntry struct {
 	Digest                   string
 	SourceDigest             string
 	FormatVersion            int
+	BOMPrefixed              bool
 	Active, Enabled, Revoked bool
 }
 
 func (catalog *Catalog) ManagementSnapshot(ctx context.Context) ([]ManagementEntry, int64, error) {
 	catalog.mu.Lock()
 	defer catalog.mu.Unlock()
+	if err := managementContextError(ctx); err != nil {
+		return nil, 0, err
+	}
 	if err := catalog.refreshLocked(ctx); err != nil {
 		return nil, 0, err
 	}
@@ -31,7 +35,7 @@ func (catalog *Catalog) ManagementSnapshot(ctx context.Context) ([]ManagementEnt
 	for _, row := range catalog.snapshot.Packages {
 		// The published generation already validated these exact immutable bytes.
 		pkg := byDigest[row.Digest]
-		entries = append(entries, ManagementEntry{Manifest: pkg.Manifest(), Digest: row.Digest, SourceDigest: pkg.SourceDigest(), FormatVersion: pkg.FormatVersion(), Active: row.Active, Enabled: row.Enabled, Revoked: row.Revoked})
+		entries = append(entries, ManagementEntry{Manifest: pkg.Manifest(), Digest: row.Digest, SourceDigest: pkg.SourceDigest(), FormatVersion: pkg.FormatVersion(), BOMPrefixed: pkg.BOMPrefixed(), Active: row.Active, Enabled: row.Enabled, Revoked: row.Revoked})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].Manifest.Key != entries[j].Manifest.Key {
@@ -52,6 +56,9 @@ type ManagementMutation struct {
 func (catalog *Catalog) ValidateInstall(ctx context.Context, pkg *Package) error {
 	catalog.mu.Lock()
 	defer catalog.mu.Unlock()
+	if err := managementContextError(ctx); err != nil {
+		return err
+	}
 	if err := catalog.refreshLocked(ctx); err != nil {
 		return err
 	}
@@ -65,6 +72,16 @@ func (catalog *Catalog) ValidateInstall(ctx context.Context, pkg *Package) error
 	next.Revision++
 	_, err := buildCatalogState(next, catalog.snapshot, true)
 	return err
+}
+
+func managementContextError(ctx context.Context) error {
+	if ctx == nil {
+		return ErrCatalogUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(ErrCatalogUnavailable, err)
+	}
+	return nil
 }
 
 // MutateExpected uses the existing transition helpers and durable store CAS.
@@ -129,5 +146,8 @@ func (catalog *Catalog) deleteExpected(ctx context.Context, expected int64, key,
 		catalog.host.state.Store(nil)
 		return ErrCatalogUnavailable
 	}
-	return catalog.refreshLocked(ctx)
+	// The durable store has confirmed the exact commit. Publication failure
+	// suspends the local Host, but cannot turn that receipt into an unknown write.
+	_ = catalog.refreshLocked(ctx)
+	return nil
 }

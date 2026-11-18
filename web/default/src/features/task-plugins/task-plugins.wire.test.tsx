@@ -13,7 +13,16 @@ import { createHash } from 'node:crypto'
 import { after, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
 
-const endpoint = process.env.TASK_PLUGIN_ADMIN_UI_FIXTURE_URL
+const configuredEndpoint = process.env.TASK_PLUGIN_ADMIN_UI_FIXTURE_URL
+const endpoint =
+  configuredEndpoint &&
+  /^http:\/\/127\.0\.0\.1:[0-9]+$/.test(configuredEndpoint)
+    ? configuredEndpoint
+    : undefined
+if (configuredEndpoint && !endpoint)
+  throw new Error(
+    'The task plugin UI fixture must use an explicit loopback origin'
+  )
 const env = createReactTestEnvironment()
 await env.setup()
 env.i18n.addResourceBundle('en', 'translation', {
@@ -180,6 +189,11 @@ test(
       fireEvent.click(validate)
       await install.findByText(`Submitted content SHA-256: ${pin}`)
       fireEvent.click(
+        install.getByRole('checkbox', {
+          name: 'All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.',
+        })
+      )
+      fireEvent.click(
         await install.findByRole('button', { name: 'Install and activate' })
       )
       await waitFor(() => assert.equal(importDialog.isConnected, false))
@@ -220,7 +234,7 @@ test(
       })
       const card = heading.closest('article')
       assert.ok(card)
-      fireEvent.click(within(card).getByRole('button', { name: 'Details' }))
+      fireEvent.click(within(card).getByRole('button', { name: /^Details\b/ }))
       const details = within(await view.findByRole('dialog'))
       fireEvent.click(await details.findByRole('button', { name: 'Disable' }))
       fireEvent.click(details.getByRole('button', { name: 'Confirm' }))

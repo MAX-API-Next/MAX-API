@@ -6042,9 +6042,9 @@
     "Plugin catalog": "API 拡張カタログ",
     "Filter by status": "状態で絞り込む",
     "All statuses": "すべての状態",
-    "No matching plugins": "一致するプラグインはありません",
+    "No matching plugins": "一致する API 拡張はありません",
     "Try a different search or status filter.": "検索条件や状態のフィルターを変更してください。",
-    "Install your first plugin package to get started.": "最初のプラグインパッケージをインストールしてください。",
+    "Install your first plugin package to get started.": "最初の API 拡張をインポートして開始してください。",
     "Package integrity": "パッケージの整合性",
     "Delete version": "バージョンを削除",
     "Disable the active version before deleting. Task, channel or pricing references block deletion. Installed source is removed; distribution bundles and audit identity are retained.": "削除する前にアクティブなバージョンを無効にしてください。タスク、チャネル、料金設定から参照されている場合は削除できません。インストール済みソースを削除しますが、配布パッケージと監査用の識別情報は保持します。",
@@ -6071,6 +6071,7 @@
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "このバージョンは過去に永久失効されています。管理者に履歴レコードの処理を依頼してください。",
     "Task plugin version has different content; import the original file or use a new version": "このバージョンの内容が履歴と異なります。元のファイルをインポートするか、新しいバージョンを使用してください。",
     "Submitted content SHA-256": "送信内容の SHA-256",
-    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 は、保持された BOM を含む送信済み UTF-8 テキストを識別します。計算したダイジェストだけでは発行者を認証できません。"
+    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 は、保持された BOM を含む送信済み UTF-8 テキストを識別します。計算したダイジェストだけでは発行者を認証できません。",
+    "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "すべてのカタログノードが UTF-8 BOM 付きパッケージに対応しています。古いノードではプラグインホスト全体が停止する場合があります。"
   }
 }

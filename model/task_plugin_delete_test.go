@@ -21,7 +21,7 @@ import (
 
 func deletionDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "deletion.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "deletion.db")+"?_pragma=busy_timeout(5000)"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&TaskPluginCatalogHead{}, &TaskPluginVersion{}, &TaskPluginDeletion{}, &Task{}, &Channel{}, &Option{}))
 	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("guard_catalog_update_columns", func(tx *gorm.DB) {
@@ -221,7 +221,7 @@ func TestTaskPluginDeletionSerializesWithNewTaskBinding(t *testing.T) {
 	}
 	close(release)
 	require.NoError(t, <-created)
-	require.Error(t, <-removed, "deletion cannot succeed after a concurrent binding commits")
+	require.ErrorIs(t, <-removed, taskplugin.ErrCatalogInUse, "the reference scan must reject after the concurrent binding commits")
 	snapshot, err := store.Load(t.Context())
 	require.NoError(t, err)
 	require.EqualValues(t, 1, snapshot.Revision)

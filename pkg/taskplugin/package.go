@@ -115,6 +115,9 @@ func LoadPackage(reader io.Reader, expectedSHA256 string) (*Package, error) {
 func (p *Package) Manifest() Manifest { return cloneManifest(p.manifest) }
 func (p *Package) Digest() string     { return p.digest }
 func (p *Package) FormatVersion() int { return p.formatVersion }
+func (p *Package) BOMPrefixed() bool {
+	return p != nil && bytes.HasPrefix(p.document, []byte{0xef, 0xbb, 0xbf})
+}
 
 // ModelUsageSchema returns detached metadata for the exact mapped model.
 // Profile packages never fall back for an unprofiled/unknown model.

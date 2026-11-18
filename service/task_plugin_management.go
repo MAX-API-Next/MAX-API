@@ -32,6 +32,7 @@ type TaskPluginManagementEntry struct {
 	Digest         string                          `json:"digest"`
 	SourceDigest   string                          `json:"source_sha256,omitempty"`
 	FormatVersion  int                             `json:"format_version"`
+	BOMPrefixed    bool                            `json:"bom_prefixed,omitempty"`
 	Active         bool                            `json:"active"`
 	Enabled        bool                            `json:"enabled"`
 	Revoked        bool                            `json:"revoked"`
@@ -59,7 +60,7 @@ func taskPluginUsageView(input map[string]taskplugin.UsageField) map[string]type
 func TaskPluginManagementView(input taskplugin.ManagementEntry) TaskPluginManagementEntry {
 	m := input.Manifest
 	out := TaskPluginManagementEntry{Key: m.Key, Name: m.Name, Version: m.Version, Digest: input.Digest, FormatVersion: input.FormatVersion,
-		SourceDigest: input.SourceDigest, Active: input.Active, Enabled: input.Enabled, Revoked: input.Revoked, Models: m.Models,
+		SourceDigest: input.SourceDigest, BOMPrefixed: input.BOMPrefixed, Active: input.Active, Enabled: input.Enabled, Revoked: input.Revoked, Models: m.Models,
 		Protocols: []TaskPluginProtocolView{}, Routes: []TaskPluginRouteView{}, UsageProfiles: []TaskPluginProfileView{}, UsageSchema: taskPluginUsageView(m.UsageSchema)}
 	for _, p := range m.Protocols {
 		out.Protocols = append(out.Protocols, TaskPluginProtocolView{Name: p.Name, Supports: append([]string{}, p.Supports...), Models: append([]string(nil), p.Models...)})

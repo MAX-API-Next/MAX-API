@@ -12,6 +12,7 @@ import {
 import english from '@/i18n/locales/en.json'
 import { createReactTestEnvironment } from '@/test/react'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { after as afterAll, afterEach, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
 import type { PluginEntry, PluginMutation, TaskPluginAPI } from './api'
@@ -212,7 +213,7 @@ test('catalog filters retain exact version selection across card and table views
     'true'
   )
   assert.equal(v.queryByText('Kling Fixture'), null)
-  fireEvent.click(v.getByRole('button', { name: 'Details' }))
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
   const panel = within(await v.findByRole('dialog'))
   assert.ok(panel.getByRole('heading', { name: 'Historical Fixture' }))
   assert.ok(panel.getByText('kling · 1.1.0'))
@@ -265,17 +266,25 @@ test('custom package validation and installation work without an external SHA-25
   assert.equal(f.writes[0].expected_sha256, undefined)
 })
 
-for (const [name, document, expectedDigest] of [
-  ['raw JavaScript', 'export const meta = {};', 'b'.repeat(64)],
-  ['format-3 JSON envelope', '{"format_version":3}', entry.digest],
+for (const [name, document] of [
+  ['raw JavaScript', '\uFEFFexport const meta = {};\r\n'],
+  ['format-3 JSON envelope', '\uFEFF{"format_version":3}\r\n'],
+  ['raw JavaScript with a later BOM', ' \uFEFF{}; export const meta = {};\r\n'],
 ]) {
   test(`computed upload digest identifies the file bytes for ${name}`, async () => {
     const f = fixture()
-    f.api.validate = async () => ({
-      ...entry,
-      format_version: 3,
-      source_sha256: 'b'.repeat(64),
-    })
+    const bytes = new TextEncoder().encode(document)
+    const expectedDigest = createHash('sha256').update(bytes).digest('hex')
+    f.api.validate = async (upload) => {
+      const actual = createHash('sha256').update(upload.document).digest('hex')
+      return {
+        ...entry,
+        format_version: 3,
+        digest: name === 'format-3 JSON envelope' ? actual : entry.digest,
+        source_sha256:
+          name === 'format-3 JSON envelope' ? 'b'.repeat(64) : actual,
+      }
+    }
     const v = f.view()
     await v.findByText('Kling Fixture')
     fireEvent.click(v.getByRole('button', { name: 'Import API extension' }))
@@ -319,7 +328,7 @@ test('deleting an installed version requires node acknowledgement and closes onl
     }
   }
   const v = f.view()
-  fireEvent.click(await v.findByRole('button', { name: 'Details' }))
+  fireEvent.click(await v.findByRole('button', { name: /^Details\b/ }))
   const panel = within(await v.findByRole('dialog'))
   fireEvent.click(panel.getByRole('button', { name: 'Delete version' }))
   const confirm = panel.getByRole('button', { name: 'Confirm' })
@@ -346,11 +355,68 @@ test('deleting an installed version requires node acknowledgement and closes onl
   assert.equal(f.writes[0].deletion_nodes_ready, true)
 })
 
+for (const custom of [false, true]) {
+  test(`bundled source pin is paired with its document (custom=${custom})`, async () => {
+    const f = fixture()
+    const uploads: { document: string; expected_sha256?: string }[] = []
+    f.api.bundled = async () => [
+      { key: 'kling', version: '1.2.0', sha256: 'a'.repeat(64) },
+    ]
+    f.api.bundle = async () => ({
+      document: 'bundled-source',
+      expected_sha256: 'a'.repeat(64),
+    })
+    f.api.validate = async (upload) => {
+      uploads.push(upload)
+      return entry
+    }
+    const v = f.view()
+    await v.findByText('Kling Fixture')
+    fireEvent.click(v.getByRole('button', { name: 'Import API extension' }))
+    const panel = within(await v.findByRole('dialog'))
+    fireEvent.change(await panel.findByLabelText('Bundled plugins'), {
+      target: { value: 'kling@1.2.0' },
+    })
+    const pin = panel.getByLabelText('SHA-256 (optional)') as HTMLInputElement
+    await waitFor(() => assert.equal(pin.value, 'a'.repeat(64)))
+    assert.equal(pin.readOnly, true)
+    if (custom) {
+      fireEvent.change(panel.getByLabelText('Package file'), {
+        target: {
+          files: [
+            {
+              name: 'custom.js',
+              size: 13,
+              arrayBuffer: async () =>
+                new TextEncoder().encode('custom-source').buffer,
+            },
+          ],
+        },
+      })
+      await waitFor(() => assert.equal(pin.readOnly, false))
+      assert.equal(pin.value, '')
+    } else {
+      fireEvent.change(pin, { target: { value: '' } })
+      assert.equal(pin.value, 'a'.repeat(64))
+    }
+    const validate = panel.getByRole('button', { name: 'Validate package' })
+    await waitFor(() =>
+      assert.equal((validate as HTMLButtonElement).disabled, false)
+    )
+    fireEvent.click(validate)
+    await waitFor(() => assert.equal(uploads.length, 1))
+    assert.deepEqual(uploads[0], {
+      document: custom ? 'custom-source' : 'bundled-source',
+      expected_sha256: custom ? undefined : 'a'.repeat(64),
+    })
+  })
+}
+
 test('delete is available directly and rejects referenced versions without retry', async () => {
   const f = fixture()
   f.state.entries[0].revoked = true
   const v = f.view()
-  fireEvent.click(await v.findByRole('button', { name: 'Details' }))
+  fireEvent.click(await v.findByRole('button', { name: /^Details\b/ }))
   const panel = within(await v.findByRole('dialog'))
   assert.ok(
     panel.getByText(
@@ -396,7 +462,7 @@ test('a lost deletion receipt stays unknown after the version disappears from th
     throw new PluginError('unknown', 'lost deletion receipt')
   }
   const v = f.view()
-  fireEvent.click(await v.findByRole('button', { name: 'Details' }))
+  fireEvent.click(await v.findByRole('button', { name: /^Details\b/ }))
   const panel = within(await v.findByRole('dialog'))
   fireEvent.click(panel.getByRole('button', { name: 'Delete version' }))
   fireEvent.click(panel.getByRole('checkbox'))
@@ -488,7 +554,7 @@ test('lists real metadata and disables with the observed revision while invalida
   f.client.setQueryData(['model-pricing-config', 'fixture'], { saved: true })
   const v = f.view()
   await v.findByText('Kling Fixture')
-  fireEvent.click(v.getByRole('button', { name: 'Details' }))
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
   const panel = within(await v.findByRole('dialog'))
   await panel.findByRole('heading', { name: 'Model usage schemas' })
   const pricingLink = await panel.findByRole('link', {
@@ -525,12 +591,12 @@ test('closing details discards a pending disable before reopening the same versi
   const f = fixture()
   const v = f.view()
   await v.findByText('Kling Fixture')
-  fireEvent.click(v.getByRole('button', { name: 'Details' }))
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
   fireEvent.click(await v.findByRole('button', { name: 'Disable' }))
   assert.ok(v.getByRole('button', { name: 'Confirm' }))
   fireEvent.click(v.getByRole('button', { name: 'Close' }))
   await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
-  fireEvent.click(v.getByRole('button', { name: 'Details' }))
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
   await v.findByRole('button', { name: 'Disable' })
   assert.equal(
     v.queryByRole('button', { name: 'Confirm' }) === null,
@@ -552,7 +618,7 @@ test('a refreshed catalog cannot silently rebase an open confirmation', async ()
   const f = fixture(),
     v = f.view()
   await v.findByText('Kling Fixture')
-  fireEvent.click(v.getByRole('button', { name: 'Details' }))
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
   fireEvent.click(await v.findByRole('button', { name: 'Disable' }))
   f.state.revision = '2'
   // Programmatic click exercises the page refresh even while the modal is open.
@@ -576,7 +642,7 @@ test('unknown mutation rereads without replay and remains unresolved after match
   }
   const v = f.view()
   await v.findByText('Kling Fixture')
-  fireEvent.click(v.getByRole('button', { name: 'Details' }))
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
   fireEvent.click(await v.findByRole('button', { name: 'Disable' }))
   fireEvent.click(v.getByRole('button', { name: 'Confirm' }))
   await v.findByRole('button', { name: 'Enable' })
@@ -772,7 +838,7 @@ test('a rejected catalog operation stays visible inside the detail dialog', asyn
   }
   const v = f.view()
   await v.findByText('Kling Fixture')
-  fireEvent.click(v.getByRole('button', { name: 'Details' }))
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
   const panel = within(v.getByRole('dialog'))
   fireEvent.click(panel.getByRole('button', { name: 'Disable' }))
   fireEvent.click(panel.getByRole('button', { name: 'Confirm' }))
@@ -803,7 +869,7 @@ test('an unknown operation can recover a failed reread inside the dialog without
   }
   const v = f.view()
   await v.findByText('Kling Fixture')
-  fireEvent.click(v.getByRole('button', { name: 'Details' }))
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
   const panel = within(v.getByRole('dialog'))
   fireEvent.click(panel.getByRole('button', { name: 'Disable' }))
   fireEvent.click(panel.getByRole('button', { name: 'Confirm' }))
