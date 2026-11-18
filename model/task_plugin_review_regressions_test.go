@@ -555,3 +555,34 @@ func TestTaskPluginDeletionOwnsSnapshotBoundary(t *testing.T) {
 	require.Zero(t, metadataBeforeHead, "schema preflight cannot establish a pre-lock read view")
 	require.Zero(t, nonlockingBeforeHead, "the first consistent read follows the catalog head lock")
 }
+
+func TestTaskPluginStatusOnlyUpdateIgnoresUnsavedReferences(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	pkg, entry := catalogFixture(t, "stored", "1.0.0", "excluded-private-source")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.NoError(t, err)
+	task := Task{TaskID: "status-only"}
+	require.NoError(t, db.Create(&task).Error)
+	stale := TaskPrivateData{PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", Version: "1.0.0", PackageDigest: pkg.Digest()}}
+	for _, selectOnly := range []bool{false, true} {
+		t.Run(fmt.Sprint(selectOnly), func(t *testing.T) {
+			receiver := task
+			receiver.PrivateData = stale // This value is not persisted by the patch.
+			query := db.Model(&receiver)
+			if selectOnly {
+				query = query.Select("status")
+			} else {
+				query = query.Omit("private_data")
+			}
+			require.NoError(t, query.Updates(Task{Status: TaskStatusSuccess, PrivateData: stale}).Error)
+			var stored Task
+			require.NoError(t, db.First(&stored, task.ID).Error)
+			require.Equal(t, TaskStatus(TaskStatusSuccess), stored.Status)
+			require.Equal(t, TaskPrivateData{}, stored.PrivateData)
+		})
+	}
+	require.ErrorIs(t, db.Model(&task).Select("private_data").Updates(Task{PrivateData: stale}).Error, taskplugin.ErrBindingRejected, "an emitted reference is still rejected")
+}

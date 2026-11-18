@@ -194,7 +194,7 @@ test('catalog filters retain exact version selection across card and table views
   const f = fixture()
   f.state.entries.push(
     { ...entry, key: 'disabled', name: 'Disabled Fixture', enabled: false },
-    { ...entry, key: 'history', name: 'Historical Fixture', active: false },
+    { ...entry, version: '1.1.0', name: 'Historical Fixture', active: false },
     { ...entry, key: 'revoked', name: 'Revoked Fixture', revoked: true }
   )
   const v = f.view()
@@ -215,6 +215,7 @@ test('catalog filters retain exact version selection across card and table views
   fireEvent.click(v.getByRole('button', { name: 'Details' }))
   const panel = within(await v.findByRole('dialog'))
   assert.ok(panel.getByRole('heading', { name: 'Historical Fixture' }))
+  assert.ok(panel.getByText('kling · 1.1.0'))
   assert.ok(panel.getByRole('button', { name: 'Activate version' }))
   assert.deepEqual(
     f.writes,
@@ -337,9 +338,21 @@ test('deleting an installed version requires node acknowledgement and closes onl
 
 test('delete is available directly and rejects referenced versions without retry', async () => {
   const f = fixture()
+  f.state.entries[0].revoked = true
   const v = f.view()
   fireEvent.click(await v.findByRole('button', { name: 'Details' }))
   const panel = within(await v.findByRole('dialog'))
+  assert.ok(
+    panel.getByText(
+      'Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles, audit identity and historical revocation are retained. Re-importing the same file remains blocked.'
+    )
+  )
+  assert.equal(
+    panel.queryByText(
+      'Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.'
+    ),
+    null
+  )
   assert.equal(panel.queryByRole('button', { name: 'Revoke version' }), null)
   assert.equal(
     (panel.getByRole('button', { name: 'Delete version' }) as HTMLButtonElement)
@@ -422,6 +435,7 @@ test('catalog search includes models hidden behind card overflow and distinguish
   const f = fixture()
   f.state.entries[0].models = ['one', 'two', 'three', 'four', 'hidden-model']
   const v = f.view()
+  const content = within(v.container)
   await v.findByText('Kling Fixture')
   const searchStatus = v.getByRole('status', { name: 'API extension catalog' })
   assert.equal(searchStatus.textContent, '')
@@ -434,7 +448,9 @@ test('catalog search includes models hidden behind card overflow and distinguish
   assert.ok(panel.getByText('hidden-model'))
   fireEvent.click(panel.getByRole('button', { name: 'Close' }))
   await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
-  const searchInput = v.getByRole('textbox', { name: 'Search API extensions' })
+  const searchInput = await content.findByRole('textbox', {
+    name: 'Search API extensions',
+  })
   await act(async () => searchInput.focus())
   fireEvent.change(searchInput, {
     target: { value: 'does-not-exist' },
@@ -463,25 +479,27 @@ test('lists real metadata and disables with the observed revision while invalida
   const v = f.view()
   await v.findByText('Kling Fixture')
   fireEvent.click(v.getByRole('button', { name: 'Details' }))
-  await v.findByRole('heading', { name: 'Model usage schemas' })
+  const panel = within(await v.findByRole('dialog'))
+  await panel.findByRole('heading', { name: 'Model usage schemas' })
+  const pricingLink = await panel.findByRole('link', {
+    name: 'Open model and source pricing',
+  })
   assert.equal(
-    v
-      .getByRole('link', { name: 'Open model and source pricing' })
-      .getAttribute('href'),
+    pricingLink.getAttribute('href'),
     '/system-settings/billing/model-pricing'
   )
-  fireEvent.click(v.getByRole('button', { name: 'Disable' }))
-  fireEvent.click(v.getByRole('button', { name: 'Confirm' }))
+  fireEvent.click(panel.getByRole('button', { name: 'Disable' }))
+  fireEvent.click(await panel.findByRole('button', { name: 'Confirm' }))
   await waitFor(() => assert.equal(f.writes.length, 1))
-  await v.findByRole('button', { name: 'Enable' })
+  await panel.findByRole('button', { name: 'Enable' })
   assert.equal(f.writes[0].expected_revision, '1')
   assert.equal(
     f.client.getQueryState(['model-pricing-config', 'fixture'])?.isInvalidated,
     true
   )
-  assert.ok(v.getByText(/Execution and paid admission remain unavailable/))
+  assert.ok(panel.getByText(/Execution and paid admission remain unavailable/))
   fireEvent.click(
-    v.getByRole('link', { name: 'Open model and source pricing' })
+    await panel.findByRole('link', { name: 'Open model and source pricing' })
   )
   await waitFor(() =>
     assert.equal(
@@ -574,41 +592,67 @@ test('unknown mutation rereads without replay and remains unresolved after match
   )
   assert.ok(v.getByText('lost receipt'))
 })
-test('late validation is ignored after changing the pin; v2 installation requires acknowledgement', async () => {
+test('late validation is ignored after changing the pin', async () => {
   const f = fixture(),
     pending = deferred<PluginEntry>(),
     v = f.view()
   await v.findByText('Kling Fixture')
   f.api.validate = () => pending.promise
   fireEvent.click(v.getByRole('button', { name: 'Import API extension' }))
-  fireEvent.change(v.getByLabelText('Package file'), {
+  const panel = within(await v.findByRole('dialog'))
+  fireEvent.change(panel.getByLabelText('Package file'), {
     target: {
       files: [
         { name: 'fixture.json', size: 8, text: async () => 'document-A' },
       ],
     },
   })
-  fireEvent.change(v.getByLabelText('SHA-256 (optional)'), {
+  fireEvent.change(panel.getByLabelText('SHA-256 (optional)'), {
     target: { value: 'a'.repeat(64) },
   })
-  const check = v.getByRole('button', { name: 'Validate package' })
+  const check = panel.getByRole('button', { name: 'Validate package' })
   await waitFor(() =>
     assert.equal((check as HTMLButtonElement).disabled, false)
   )
   fireEvent.click(check)
-  fireEvent.change(v.getByLabelText('SHA-256 (optional)'), {
+  fireEvent.change(panel.getByLabelText('SHA-256 (optional)'), {
     target: { value: 'b'.repeat(64) },
   })
   await act(async () => pending.resolve(entry))
-  assert.equal(v.queryByRole('button', { name: 'Install and activate' }), null)
-  f.api.validate = async (upload) => ({
-    ...entry,
-    digest: upload.expected_sha256 ?? entry.digest,
+  assert.equal(
+    panel.queryByRole('button', { name: 'Install and activate' }),
+    null
+  )
+  assert.deepEqual(f.writes, [])
+})
+
+test('format-2 installation requires node acknowledgement', async () => {
+  const f = fixture()
+  const v = f.view()
+  fireEvent.click(
+    await v.findByRole('button', { name: 'Import API extension' })
+  )
+  const panel = within(await v.findByRole('dialog'))
+  fireEvent.change(panel.getByLabelText('Package file'), {
+    target: {
+      files: [
+        { name: 'fixture.json', size: 8, text: async () => 'document-A' },
+      ],
+    },
   })
+  fireEvent.change(panel.getByLabelText('SHA-256 (optional)'), {
+    target: { value: 'b'.repeat(64) },
+  })
+  const check = panel.getByRole('button', { name: 'Validate package' })
+  await waitFor(() =>
+    assert.equal((check as HTMLButtonElement).disabled, false)
+  )
   fireEvent.click(check)
-  const install = await v.findByRole('button', { name: 'Install and activate' })
+  const install = await panel.findByRole('button', {
+    name: 'Install and activate',
+  })
   assert.equal((install as HTMLButtonElement).disabled, true)
-  fireEvent.click(v.getByRole('checkbox'))
+  fireEvent.click(panel.getByRole('checkbox'))
   fireEvent.click(install)
   await waitFor(() => assert.equal(f.writes.length, 1))
   assert.equal(f.writes[0].action, 'install')

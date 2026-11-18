@@ -339,31 +339,32 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 	if err != nil {
 		return err
 	}
-	if emitted {
-		var private TaskPrivateData
-		switch data := value.(type) {
-		case TaskPrivateData:
-			private = data
-		case *TaskPrivateData:
-			if data != nil {
-				private = *data
-			}
-		case string:
-			if common.UnmarshalJsonStr(data, &private) != nil {
-				return taskplugin.ErrCatalogInvalid
-			}
-		case []byte:
-			if common.Unmarshal(data, &private) != nil {
-				return taskplugin.ErrCatalogInvalid
-			}
-		case nil:
-		default:
+	if !emitted {
+		return nil
+	}
+	var private TaskPrivateData
+	switch data := value.(type) {
+	case TaskPrivateData:
+		private = data
+	case *TaskPrivateData:
+		if data != nil {
+			private = *data
+		}
+	case string:
+		if common.UnmarshalJsonStr(data, &private) != nil {
 			return taskplugin.ErrCatalogInvalid
 		}
-		candidate := *task
-		candidate.PrivateData = private
-		task = &candidate
+	case []byte:
+		if common.Unmarshal(data, &private) != nil {
+			return taskplugin.ErrCatalogInvalid
+		}
+	case nil:
+	default:
+		return taskplugin.ErrCatalogInvalid
 	}
+	candidate := *task
+	candidate.PrivateData = private
+	task = &candidate
 	type reference struct{ key, version, digest string }
 	references := make([]reference, 0, 3)
 	if binding := task.PrivateData.PluginBinding; binding != nil {

@@ -177,7 +177,10 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
         setInstallOpen(false)
         resetValidation()
       }
-      if (command.action === 'delete') setSelected(undefined)
+      if (command.action === 'delete')
+        setSelected((current) =>
+          current === `${command.key}@${command.version}` ? undefined : current
+        )
     })
   }
   const detail = snapshot?.entries.find(
