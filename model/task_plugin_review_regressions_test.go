@@ -586,3 +586,105 @@ func TestTaskPluginStatusOnlyUpdateIgnoresUnsavedReferences(t *testing.T) {
 	}
 	require.ErrorIs(t, db.Model(&task).Select("private_data").Updates(Task{PrivateData: stale}).Error, taskplugin.ErrBindingRejected, "an emitted reference is still rejected")
 }
+
+func TestTaskPluginSerializedLegacyReferencesRespectDeletion(t *testing.T) {
+	for name, field := range map[string]string{
+		"key_version":      `"plugin_key":"stored","version":"1.0.0"`,
+		"explicit_version": `"plugin_key":"stored","version":"other","plugin_version":"1.0.0"`,
+		"key_only":         `"plugin_key":"stored"`,
+		"selected_key":     `"selected_plugin_key":"stored"`,
+		"digest_only":      `"package_digest":"%s"`,
+		"nested_array":     `"children":[{"plugin_key":"stored","version":"1.0.0"}]`,
+	} {
+		for _, binary := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/bytes=%v", name, binary), func(t *testing.T) {
+				db := deletionDB(t)
+				store := NewTaskPluginCatalogStore(db)
+				pkg, entry := catalogFixture(t, "stored", "1.0.0", "legacy-reference-source")
+				_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+				require.NoError(t, err)
+				task := Task{TaskID: "serialized-reference"}
+				require.NoError(t, db.Create(&task).Error)
+				content := field
+				if name == "digest_only" {
+					content = fmt.Sprintf(field, pkg.Digest())
+				}
+				raw := `{"historical":{` + content + `}}`
+				var value any = raw
+				if binary {
+					value = []byte(raw)
+				}
+				write := func() error { return db.Model(&task).Updates(map[string]any{"private_data": value}).Error }
+				require.NoError(t, write(), "retained legacy references remain writable")
+				_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+				require.ErrorIs(t, err, taskplugin.ErrCatalogInUse)
+				require.NoError(t, db.Model(&task).Updates(map[string]any{"private_data": `{}`}).Error)
+				_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+				require.NoError(t, err)
+				before, err := store.Load(t.Context())
+				require.NoError(t, err)
+				require.ErrorIs(t, write(), taskplugin.ErrBindingRejected, "raw unknown fields must not recreate a deleted reference")
+				var persisted string
+				require.NoError(t, db.Model(&Task{}).Select("private_data").Where("id = ?", task.ID).Scan(&persisted).Error)
+				require.Equal(t, `{}`, persisted)
+				after, err := store.Load(t.Context())
+				require.NoError(t, err)
+				require.Equal(t, before, after, "rejection leaves head, source and deletion receipts unchanged")
+				require.NoError(t, db.Model(&task).Select("status").Updates(map[string]any{"status": TaskStatusSuccess, "private_data": value}).Error)
+				require.NoError(t, db.Model(&task).Omit("private_data").Updates(map[string]any{"status": TaskStatusSuccess, "private_data": value}).Error)
+				_, err = store.CompareAndSwap(t.Context(), 2, []taskplugin.StoredPackage{entry})
+				require.NoError(t, err)
+				require.NoError(t, write(), "identical explicit reinstall permits references despite the retained receipt")
+			})
+		}
+	}
+}
+
+func TestTaskPluginSerializedReferencesAreAllValidated(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	pkg, entry := catalogFixture(t, "retained", "1.0.0", "retained-source")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	task := Task{TaskID: "mixed-reference"}
+	require.NoError(t, db.Create(&task).Error)
+	raw := fmt.Sprintf(`{"plugin_binding":{"plugin_key":"retained","version":"1.0.0","package_digest":%q},"history":[{"plugin_key":"missing"}]}`, pkg.Digest())
+	require.ErrorIs(t, db.Model(&task).Updates(map[string]any{"private_data": raw}).Error, taskplugin.ErrBindingRejected)
+	for _, malformed := range []any{"", []byte(nil), []byte("[")} {
+		require.ErrorIs(t, db.Model(&task).Updates(map[string]any{"private_data": malformed}).Error, taskplugin.ErrCatalogInvalid)
+	}
+	plain := `{"historical":{"unrelated":"value"},"values":[0,false,null]}`
+	require.NoError(t, db.Model(&task).Updates(map[string]any{"private_data": plain}).Error)
+	var persisted string
+	require.NoError(t, db.Model(&Task{}).Select("private_data").Where("id = ?", task.ID).Scan(&persisted).Error)
+	require.Equal(t, plain, persisted, "reference-free unknown data still round-trips unchanged")
+}
+
+func TestTaskPluginSerializedLegacyIdentityDimensions(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	removed, first := catalogFixture(t, "stored", "1.0.0", "first-source")
+	retained, second := catalogFixture(t, "stored", "2.0.0", "second-source")
+	first.Active, first.Enabled = false, false
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{first, second})
+	require.NoError(t, err)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.NoError(t, err)
+	task := Task{TaskID: "legacy-dimensions"}
+	require.NoError(t, db.Create(&task).Error)
+	for _, raw := range []string{
+		`{"history":{"plugin_key":"stored"}}`,
+		`{"history":{"selected_plugin_key":"stored"}}`,
+		`{"history":{"plugin_key":"stored","version":"2.0.0"}}`,
+		fmt.Sprintf(`{"history":{"package_digest":%q}}`, retained.Digest()),
+	} {
+		require.NoError(t, db.Model(&task).Updates(map[string]any{"private_data": raw}).Error)
+	}
+	for _, raw := range []string{
+		`{"history":{"plugin_key":"stored","version":"1.0.0"}}`,
+		`{"history":{"plugin_key":"stored","version":"3.0.0"}}`,
+		fmt.Sprintf(`{"history":{"package_digest":%q}}`, removed.Digest()),
+	} {
+		require.ErrorIs(t, db.Model(&task).Updates(map[string]any{"private_data": raw}).Error, taskplugin.ErrBindingRejected)
+	}
+}

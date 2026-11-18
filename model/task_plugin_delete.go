@@ -301,37 +301,47 @@ func taskPluginTypedReference(private TaskPrivateData, key, version, digest stri
 	return false
 }
 
-func taskPluginReference(value any, key, version, digest string) bool {
+type taskPluginReferenceIdentity struct{ key, version, digest string }
+
+// Keep legacy deletion scans and serialized write validation on the same
+// reference vocabulary. Returning true from visit stops the traversal.
+func visitTaskPluginReferences(value any, visit func(taskPluginReferenceIdentity) bool) bool {
 	switch v := value.(type) {
 	case map[string]any:
-		if v["package_digest"] == digest {
+		if digest, ok := v["package_digest"].(string); ok && digest != "" && visit(taskPluginReferenceIdentity{digest: digest}) {
 			return true
 		}
-		if v["selected_plugin_key"] == key {
+		if key, ok := v["selected_plugin_key"].(string); ok && key != "" && visit(taskPluginReferenceIdentity{key: key}) {
 			return true
 		}
-		if v["plugin_key"] == key {
+		if key, ok := v["plugin_key"].(string); ok && key != "" {
 			boundVersion, _ := v["version"].(string)
 			if explicit, ok := v["plugin_version"].(string); ok {
 				boundVersion = explicit
 			}
-			if boundVersion == "" || boundVersion == version {
+			if visit(taskPluginReferenceIdentity{key: key, version: boundVersion}) {
 				return true
 			}
 		}
 		for _, child := range v {
-			if taskPluginReference(child, key, version, digest) {
+			if visitTaskPluginReferences(child, visit) {
 				return true
 			}
 		}
 	case []any:
 		for _, child := range v {
-			if taskPluginReference(child, key, version, digest) {
+			if visitTaskPluginReferences(child, visit) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func taskPluginReference(value any, key, version, digest string) bool {
+	return visitTaskPluginReferences(value, func(ref taskPluginReferenceIdentity) bool {
+		return ref.digest != "" && ref.digest == digest || ref.key == key && (ref.version == "" || ref.version == version)
+	})
 }
 
 func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
@@ -343,6 +353,8 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 		return nil
 	}
 	var private TaskPrivateData
+	var serialized []byte
+	serializedInput := false
 	switch data := value.(type) {
 	case TaskPrivateData:
 		private = data
@@ -351,28 +363,33 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 			private = *data
 		}
 	case string:
-		if common.UnmarshalJsonStr(data, &private) != nil {
-			return taskplugin.ErrCatalogInvalid
-		}
+		serialized = []byte(data)
+		serializedInput = true
 	case []byte:
-		if common.Unmarshal(data, &private) != nil {
-			return taskplugin.ErrCatalogInvalid
-		}
+		serialized = data
+		serializedInput = true
 	case nil:
 	default:
 		return taskplugin.ErrCatalogInvalid
 	}
-	candidate := *task
-	candidate.PrivateData = private
-	task = &candidate
-	type reference struct{ key, version, digest string }
-	references := make([]reference, 0, 3)
-	if binding := task.PrivateData.PluginBinding; binding != nil {
+	legacy := map[taskPluginReferenceIdentity]bool{}
+	if serializedInput {
+		var raw any
+		if common.Unmarshal(serialized, &private) != nil || common.Unmarshal(serialized, &raw) != nil {
+			return taskplugin.ErrCatalogInvalid
+		}
+		visitTaskPluginReferences(raw, func(ref taskPluginReferenceIdentity) bool {
+			legacy[ref] = true
+			return false
+		})
+	}
+	references := make([]taskPluginReferenceIdentity, 0, 3)
+	if binding := private.PluginBinding; binding != nil {
 		if binding.PluginKey != "" || binding.PackageDigest != "" {
-			references = append(references, reference{binding.PluginKey, binding.Version, binding.PackageDigest})
+			references = append(references, taskPluginReferenceIdentity{binding.PluginKey, binding.Version, binding.PackageDigest})
 		}
 	}
-	if context := task.PrivateData.BillingContext; context != nil {
+	if context := private.BillingContext; context != nil {
 		if context.TaskBillingPlan != nil && context.TaskBillingPlan.ExpressionPlan != nil {
 			p := context.TaskBillingPlan.ExpressionPlan
 			// Frozen plans permit an empty selection or the same plugin identity.
@@ -381,14 +398,14 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 				return taskplugin.ErrBindingRejected
 			}
 			if p.PluginKey != "" || p.PackageDigest != "" {
-				references = append(references, reference{p.PluginKey, p.PluginVersion, p.PackageDigest})
+				references = append(references, taskPluginReferenceIdentity{p.PluginKey, p.PluginVersion, p.PackageDigest})
 			}
 		}
 		if envelope := context.PricingUsageEnvelope; envelope != nil && envelope.PackageDigest != "" {
-			references = append(references, reference{digest: envelope.PackageDigest})
+			references = append(references, taskPluginReferenceIdentity{digest: envelope.PackageDigest})
 		}
 	}
-	if len(references) == 0 || !tx.Migrator().HasTable(&TaskPluginDeletion{}) {
+	if len(references) == 0 && len(legacy) == 0 || !tx.Migrator().HasTable(&TaskPluginDeletion{}) {
 		return nil
 	}
 	if _, ok := tx.Statement.ConnPool.(gorm.TxCommitter); !ok {
@@ -409,6 +426,52 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("identity", "digest").Where("digest = ?", reference.digest)
 		if reference.key != "" {
 			query = query.Where("identity = ?", taskPluginIdentity(reference.key, reference.version))
+		}
+		var record TaskPluginVersion
+		if err := query.First(&record).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return taskplugin.ErrBindingRejected
+			}
+			return err
+		}
+		// Serialized canonical fields have already passed the stronger tuple
+		// check. Avoid extra queries for their individual legacy projections.
+		delete(legacy, taskPluginReferenceIdentity{digest: reference.digest})
+		if reference.key != "" {
+			delete(legacy, taskPluginReferenceIdentity{key: reference.key, version: reference.version})
+			delete(legacy, taskPluginReferenceIdentity{key: reference.key})
+		}
+	}
+	var retainedKeys map[string]bool
+	for reference := range legacy {
+		if reference.key != "" && reference.version == "" {
+			if retainedKeys == nil {
+				// Only legacy key-only references need manifests. Read immutable
+				// metadata without compiling JavaScript inside the caller's transaction.
+				var records []TaskPluginVersion
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Find(&records).Error; err != nil {
+					return err
+				}
+				retainedKeys = map[string]bool{}
+				for _, record := range records {
+					var document taskplugin.PackageDocument
+					sum := sha256.Sum256(record.Document)
+					if hex.EncodeToString(sum[:]) != record.Digest || common.Unmarshal(bytes.TrimPrefix(record.Document, []byte{0xef, 0xbb, 0xbf}), &document) != nil || document.Manifest.Key == "" || document.Manifest.Version == "" || taskPluginIdentity(document.Manifest.Key, document.Manifest.Version) != record.Identity {
+						return taskplugin.ErrCatalogInvalid
+					}
+					retainedKeys[document.Manifest.Key] = true
+				}
+			}
+			if !retainedKeys[reference.key] {
+				return taskplugin.ErrBindingRejected
+			}
+			continue
+		}
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("identity")
+		if reference.key != "" {
+			query = query.Where("identity = ?", taskPluginIdentity(reference.key, reference.version))
+		} else {
+			query = query.Where("digest = ?", reference.digest)
 		}
 		var record TaskPluginVersion
 		if err := query.First(&record).Error; err != nil {

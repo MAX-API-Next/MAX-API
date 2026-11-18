@@ -20,6 +20,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 package taskplugin
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -67,8 +68,11 @@ func LoadPackage(reader io.Reader, expectedSHA256 string) (*Package, error) {
 	if hex.EncodeToString(expected) != hex.EncodeToString(actual[:]) {
 		return nil, errors.New("task plugin package digest mismatch")
 	}
+	// A UTF-8 BOM is permitted only at the start of the JSON document. Hash,
+	// size and persisted identity continue to cover the original upload bytes.
+	jsonData := bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
 	var fields map[string]any
-	if common.Unmarshal(data, &fields) != nil || len(fields) != 3 {
+	if common.Unmarshal(jsonData, &fields) != nil || len(fields) != 3 {
 		return nil, errors.New("unsupported task plugin package fields")
 	}
 	for _, name := range []string{"format_version", "manifest", "source"} {
@@ -77,7 +81,7 @@ func LoadPackage(reader io.Reader, expectedSHA256 string) (*Package, error) {
 		}
 	}
 	var document PackageDocument
-	if err := common.Unmarshal(data, &document); err != nil {
+	if err := common.Unmarshal(jsonData, &document); err != nil {
 		return nil, errors.New("invalid task plugin package document")
 	}
 	if (document.FormatVersion != 1 && document.FormatVersion != 2 && document.FormatVersion != 3) || document.Source == "" || !utf8.ValidString(document.Source) {

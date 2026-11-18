@@ -6079,6 +6079,6 @@
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "Эта версия была отозвана навсегда; обратитесь к администратору для обработки исторической записи отзыва.",
     "Task plugin version has different content; import the original file or use a new version": "Содержимое этой версии отличается; импортируйте исходный файл или используйте новую версию.",
     "Submitted content SHA-256": "SHA-256 отправленного содержимого",
-    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 относится к отправленному тексту. При чтении файла как текста может удаляться UTF-8 BOM; это значение не проверяет исходные байты файла."
+    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 относится к отправленному тексту UTF-8, включая сохранённый BOM. Вычисленная контрольная сумма сама по себе не подтверждает издателя."
   }
 }

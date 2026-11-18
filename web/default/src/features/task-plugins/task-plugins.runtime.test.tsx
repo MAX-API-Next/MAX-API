@@ -236,7 +236,13 @@ test('custom package validation and installation work without an external SHA-25
   fireEvent.click(v.getByRole('button', { name: 'Import API extension' }))
   fireEvent.change(v.getByLabelText('Package file'), {
     target: {
-      files: [{ name: 'custom.json', size: 2, text: async () => '{}' }],
+      files: [
+        {
+          name: 'custom.json',
+          size: 2,
+          arrayBuffer: async () => new TextEncoder().encode('{}').buffer,
+        },
+      ],
     },
   })
   const check = v.getByRole('button', { name: 'Validate package' })
@@ -276,7 +282,11 @@ for (const [name, document, expectedDigest] of [
     fireEvent.change(v.getByLabelText('Package file'), {
       target: {
         files: [
-          { name: 'custom', size: document.length, text: async () => document },
+          {
+            name: 'custom',
+            size: document.length,
+            arrayBuffer: async () => new TextEncoder().encode(document).buffer,
+          },
         ],
       },
     })
@@ -603,7 +613,12 @@ test('late validation is ignored after changing the pin', async () => {
   fireEvent.change(panel.getByLabelText('Package file'), {
     target: {
       files: [
-        { name: 'fixture.json', size: 8, text: async () => 'document-A' },
+        {
+          name: 'fixture.json',
+          size: 8,
+          arrayBuffer: async () =>
+            new TextEncoder().encode('document-A').buffer,
+        },
       ],
     },
   })
@@ -636,7 +651,12 @@ test('format-2 installation requires node acknowledgement', async () => {
   fireEvent.change(panel.getByLabelText('Package file'), {
     target: {
       files: [
-        { name: 'fixture.json', size: 8, text: async () => 'document-A' },
+        {
+          name: 'fixture.json',
+          size: 8,
+          arrayBuffer: async () =>
+            new TextEncoder().encode('document-A').buffer,
+        },
       ],
     },
   })

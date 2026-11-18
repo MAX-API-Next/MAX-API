@@ -6071,6 +6071,6 @@
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "Phiên bản này từng bị thu hồi vĩnh viễn; hãy liên hệ quản trị viên để xử lý bản ghi thu hồi cũ.",
     "Task plugin version has different content; import the original file or use a new version": "Nội dung phiên bản này khác với lịch sử; hãy nhập tệp gốc hoặc dùng phiên bản mới.",
     "Submitted content SHA-256": "SHA-256 của nội dung gửi",
-    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 xác định văn bản đã gửi. Đọc tệp dưới dạng văn bản có thể loại bỏ BOM UTF-8; giá trị này không xác minh các byte của tệp gốc."
+    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 xác định văn bản UTF-8 đã gửi, bao gồm BOM được giữ lại. Chỉ tính giá trị băm không thể xác thực nhà phát hành."
   }
 }

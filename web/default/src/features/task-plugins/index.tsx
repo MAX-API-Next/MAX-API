@@ -15,6 +15,7 @@ import {
   type PluginEntry,
   type PluginMutation,
 } from './api'
+import { readPluginFile } from './file-reader'
 import { PluginCatalog } from './plugin-catalog'
 import {
   PluginDetailSheet,
@@ -141,7 +142,7 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
       return
     }
     try {
-      const text = await file.text()
+      const text = await readPluginFile(file)
       if (mounted.current && files.current.current(id)) setDocument(text)
     } catch {
       if (mounted.current && files.current.current(id))

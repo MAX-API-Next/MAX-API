@@ -48,3 +48,34 @@ func TestOptionalUploadPinDoesNotRelaxInternalLoadersOrPackageValidation(t *test
 		require.Error(t, err, "optional pin does not bypass manifest, compilation or size checks")
 	}
 }
+
+func TestLoadUploadPreservesUTF8BOMIdentity(t *testing.T) {
+	source := []byte(`export const meta = {apiVersion: 1, key: "bom-upload", name: "BOM", version: "1.0.0", models: ["bom-model"]}; export function buildSubmitRequest(){return {}} export function parseSubmitResponse(){return {}} export function buildQueryRequest(){return {}} export function parseTaskResult(){return {}}`)
+	legacy := testPackage(t, validManifest(), "data-only source")
+	for name, body := range map[string][]byte{"javascript": source, "json": legacy.Document()} {
+		t.Run(name, func(t *testing.T) {
+			data := append([]byte{0xef, 0xbb, 0xbf}, body...)
+			pin := fmt.Sprintf("%x", sha256.Sum256(data))
+			pkg, err := LoadUpload(bytes.NewReader(data), pin)
+			require.NoError(t, err)
+			unpinned, err := LoadUpload(bytes.NewReader(data), "")
+			require.NoError(t, err)
+			require.Equal(t, pkg.Document(), unpinned.Document())
+			if name == "javascript" {
+				require.Equal(t, pin, pkg.SourceDigest())
+				require.True(t, pkg.Executable())
+			} else {
+				require.Equal(t, data, pkg.Document())
+				require.Equal(t, pin, pkg.Digest())
+				require.Equal(t, len(data), pkg.size)
+			}
+			_, err = LoadUpload(bytes.NewReader(data), fmt.Sprintf("%x", sha256.Sum256(body)))
+			require.Error(t, err, "removing BOM before hashing must not match the original file pin")
+			reloaded, err := LoadPackage(bytes.NewReader(pkg.Document()), pkg.Digest())
+			require.NoError(t, err, "persisted BOM identities remain readable by the strictly pinned loader")
+			require.Equal(t, pkg.Document(), reloaded.Document())
+			_, err = LoadPackage(bytes.NewReader(pkg.Document()), "")
+			require.Error(t, err)
+		})
+	}
+}

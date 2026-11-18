@@ -14,6 +14,17 @@ API Extensions is the console name. Existing `/task-plugins` URLs,
 `/api/task_plugins` endpoints and stored `task_plugins` configuration keys retain
 their identifiers for compatibility.
 
+**Upgrade every task writer before relying on deletion protection.** Serialized
+task updates now validate recursive legacy map/array references as well as typed
+bindings and frozen plans under the catalog-head lock. Unknown fields without
+references remain writable; omitted fields do not participate in the check.
+
+File uploads preserve a leading UTF-8 BOM and line endings. The server accepts a
+leading BOM in JSON packages while hashing and retaining the original bytes.
+Previously installed text normalized by older clients keeps its immutable
+identity; uploading the original BOM-bearing file does not overwrite that
+identity. No migration rewrites existing packages or their digests.
+
 All management routes require fresh Root authentication:
 
 | Route | Behavior |

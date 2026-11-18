@@ -6074,6 +6074,6 @@
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "该接口扩展版本曾被永久撤销，请联系管理员处理历史撤销记录。",
     "Task plugin version has different content; import the original file or use a new version": "该接口扩展版本的内容与历史记录不同，请导入原始文件或使用新的版本号。",
     "Submitted content SHA-256": "提交内容 SHA-256",
-    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 对应实际提交的文本。以文本方式读取文件可能移除 UTF-8 BOM，因此此值不能用于校验原始文件字节。"
+    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 对应实际提交的 UTF-8 文本，包含保留的 BOM。仅计算摘要不能证明发布者身份。"
   }
 }

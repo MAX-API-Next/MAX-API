@@ -148,11 +148,13 @@ test(
       )
       const importDialog = await view.findByRole('dialog')
       const install = within(importDialog)
-      const document = packageDocument(
-        'wire-import',
-        'Wire Import Fixture',
-        'wire-import-model'
-      )
+      const document =
+        '\uFEFF' +
+        packageDocument(
+          'wire-import',
+          'Wire Import Fixture',
+          'wire-import-model'
+        )
       const pin = createHash('sha256').update(document).digest('hex')
       fireEvent.change(install.getByLabelText('Package file'), {
         target: {
@@ -160,7 +162,8 @@ test(
             {
               name: 'wire.json',
               size: Buffer.byteLength(document),
-              text: async () => document,
+              arrayBuffer: async () =>
+                new TextEncoder().encode(document).buffer,
             },
           ],
         },
