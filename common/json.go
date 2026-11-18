@@ -3,6 +3,7 @@ package common
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 )
 
@@ -12,6 +13,20 @@ func Unmarshal(data []byte, v any) error {
 
 func UnmarshalJsonStr(data string, v any) error {
 	return json.Unmarshal(StringToByteSlice(data), v)
+}
+
+// UnmarshalUseNumber preserves arbitrary JSON number tokens for structural
+// inspection. Like Unmarshal, it requires exactly one complete JSON value.
+func UnmarshalUseNumber(data []byte, v any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(v); err != nil {
+		return err
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		return errors.New("unexpected data after JSON value")
+	}
+	return nil
 }
 
 func DecodeJson(reader io.Reader, v any) error {

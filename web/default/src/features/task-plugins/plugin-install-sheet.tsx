@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/sheet'
 import type { PluginEntry, PluginMutation, PluginSnapshot } from './api'
 import { isJSONPluginUpload } from './file-reader'
+import { packageCompatibilityMessage } from './package-compatibility'
 import { TaskPluginFeedback } from './task-plugin-feedback'
 
 type Props = {
@@ -124,7 +125,7 @@ export function PluginInstallSheet(props: Props) {
               onChange={(e) => void props.loadFile(e.target.files?.[0])}
             />
             <p className='text-muted-foreground text-xs break-all'>
-              {props.fileName || 'JavaScript / JSON · 1 MiB'}
+              {props.fileName || t('JavaScript / JSON · 1 MiB')}
             </p>
           </div>
           <div className='space-y-3 rounded-xl border p-4'>
@@ -200,11 +201,7 @@ export function PluginInstallSheet(props: Props) {
                     checked={props.nodesReady}
                     onChange={(e) => props.setNodesReady(e.target.checked)}
                   />
-                  {t(
-                    props.validated.bom_prefixed
-                      ? 'All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.'
-                      : 'All catalog nodes support this package format. Older nodes may suspend their entire plugin host.'
-                  )}
+                  {t(packageCompatibilityMessage(props.validated))}
                 </label>
               )}
               {props.installRevision !== props.snapshot?.revision && (

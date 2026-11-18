@@ -69,8 +69,9 @@ type Task struct {
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
 
-	includeDataInUpdate        bool `gorm:"-"`
-	includePrivateDataInUpdate bool `gorm:"-"`
+	includeDataInUpdate               bool `gorm:"-"`
+	includePrivateDataInUpdate        bool `gorm:"-"`
+	preservePrivateDataOnStatusUpdate bool `gorm:"-"`
 }
 
 // IsMiniMaxH3Task reports whether the persisted task has an explicit,
@@ -587,10 +588,16 @@ func (t *Task) statusUpdateValues() map[string]interface{} {
 	if t.Data != nil || t.includeDataInUpdate {
 		values["data"] = t.Data
 	}
-	if t.PrivateData != (TaskPrivateData{}) || t.includePrivateDataInUpdate {
+	if !t.preservePrivateDataOnStatusUpdate && (t.PrivateData != (TaskPrivateData{}) || t.includePrivateDataInUpdate) {
 		values["private_data"] = t.PrivateData
 	}
 	return values
+}
+
+// PreservePrivateDataOnStatusUpdate is for status-only timeout transitions.
+// The persisted recovery metadata has not changed and must not be re-emitted.
+func (t *Task) PreservePrivateDataOnStatusUpdate() {
+	t.preservePrivateDataOnStatusUpdate = true
 }
 
 func (t *Task) submitResultUpdateValues() map[string]interface{} {

@@ -31,6 +31,15 @@ import (
 	"sync"
 )
 
+// CatalogChannelMappingError identifies a repairable precondition without
+// exposing the channel mapping, credentials, source or database diagnostics.
+type CatalogChannelMappingError struct{ ChannelID int }
+
+func (*CatalogChannelMappingError) Error() string {
+	return "invalid channel model mapping prevents extension deletion"
+}
+func (*CatalogChannelMappingError) Unwrap() error { return ErrCatalogInvalid }
+
 var (
 	ErrCatalogConflict       = errors.New("task plugin catalog changed; refresh before retrying")
 	ErrCatalogInvalid        = errors.New("task plugin catalog is invalid")
@@ -320,13 +329,14 @@ func installCatalogPackages(next *CatalogSnapshot, packages ...*Package) error {
 			return ErrCatalogInvalid
 		}
 		seen[p.manifest.Key] = true
+		var receiptMismatch bool
 		for _, receipt := range next.Deletions {
 			if receipt.Key == p.manifest.Key && receipt.Version == p.manifest.Version {
 				if receipt.Revoked {
 					return errors.Join(ErrCatalogRevoked, ErrBindingRejected)
 				}
 				if receipt.Digest != p.digest {
-					return errors.Join(ErrCatalogContentChanged, ErrBindingRejected)
+					receiptMismatch = true
 				}
 			}
 		}
@@ -343,12 +353,15 @@ func installCatalogPackages(next *CatalogSnapshot, packages ...*Package) error {
 				if next.Packages[i].Revoked {
 					return errors.Join(ErrCatalogRevoked, ErrCatalogInvalid)
 				}
-				if old.digest != p.digest {
+				if old.digest != p.digest && !receiptMismatch {
 					return errors.Join(ErrCatalogContentChanged, ErrCatalogInvalid)
 				}
 				index = i
 			}
 			next.Packages[i].Active = false
+		}
+		if receiptMismatch {
+			return errors.Join(ErrCatalogContentChanged, ErrBindingRejected)
 		}
 		if index < 0 {
 			next.Packages = append(next.Packages, StoredPackage{Document: p.Document(), Digest: p.Digest()})

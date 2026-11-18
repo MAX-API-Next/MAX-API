@@ -221,6 +221,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 			}
 			var won bool
 			var err error
+			task.PreservePrivateDataOnStatusUpdate()
 			if settlement != nil {
 				won, err = task.UpdateWithStatusAndSettlement(oldStatus, *settlement)
 			} else {

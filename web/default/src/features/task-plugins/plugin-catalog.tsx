@@ -19,6 +19,7 @@ import {
 import type { PluginEntry } from './api'
 
 type Props = {
+  onSearchReady: (element: HTMLInputElement | null) => void
   entries: PluginEntry[]
   loading: boolean
   available: boolean
@@ -135,7 +136,7 @@ function PluginCard(props: {
             {props.entry.models.length > 4 && (
               <button
                 type='button'
-                aria-label={`${t('Declared models')}: +${props.entry.models.length - 4}`}
+                aria-label={`${t('Declared models')}: +${props.entry.models.length - 4} ${props.entry.key}@${props.entry.version}`}
                 className='text-muted-foreground hover:text-foreground rounded-md border px-2 text-xs focus-visible:outline-2'
                 onClick={props.onDetails}
               >
@@ -166,7 +167,9 @@ function PluginCard(props: {
   )
 }
 
-export function PluginCatalog(props: Props) {
+// Isolate the callback passed to ref so the React compiler does not treat the
+// remaining render props as references.
+export function PluginCatalog({ onSearchReady, ...props }: Props) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
@@ -188,7 +191,7 @@ export function PluginCatalog(props: Props) {
   const isEmpty = !props.loading && props.available && rows.length === 0
   const emptyTitle = props.entries.length
     ? t('No matching plugins')
-    : t('No API extensions found')
+    : t('No task plugin packages found')
   const emptyHint = props.entries.length
     ? t('Try a different search or status filter.')
     : t('Install your first plugin package to get started.')
@@ -196,7 +199,7 @@ export function PluginCatalog(props: Props) {
     <div className='space-y-4'>
       <div className='flex flex-wrap items-center justify-between gap-3 border-b pb-4'>
         <div className='flex items-center gap-2 text-sm font-medium'>
-          {t('API extension catalog')}
+          {t('Plugin catalog')}
           <Badge
             variant='secondary'
             className='font-mono font-normal tabular-nums'
@@ -211,11 +214,12 @@ export function PluginCatalog(props: Props) {
               aria-hidden='true'
             />
             <Input
-              aria-label={t('Search API extensions')}
+              ref={onSearchReady}
+              aria-label={t('Search task plugins')}
               className='pl-9'
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder={t('Search API extensions')}
+              placeholder={t('Search task plugins')}
             />
           </div>
           <select
@@ -254,7 +258,7 @@ export function PluginCatalog(props: Props) {
       </div>
       <p
         role='status'
-        aria-label={t('API extension catalog')}
+        aria-label={t('Plugin catalog')}
         aria-atomic='true'
         className='sr-only'
       >

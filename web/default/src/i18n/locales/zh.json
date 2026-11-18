@@ -6062,7 +6062,6 @@
     "No API extensions found": "暂无接口扩展",
     "API extension catalog": "接口扩展列表",
     "API extension": "接口扩展",
-    "Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.": "管理已安装的接口扩展及其版本。启用扩展不代表开放任务执行或付费准入。",
     "Invalid API extension request": "接口扩展请求无效",
     "Invalid API extension response": "接口扩展响应无效",
     "Bind API extensions": "绑定接口扩展",
@@ -6075,6 +6074,8 @@
     "Task plugin version has different content; import the original file or use a new version": "该接口扩展版本的内容与历史记录不同，请导入原始文件或使用新的版本号。",
     "Submitted content SHA-256": "提交内容 SHA-256",
     "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 对应实际提交的 UTF-8 文本，包含保留的 BOM。仅计算摘要不能证明发布者身份。",
-    "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "所有目录节点均已支持 UTF-8 BOM 插件包。旧节点可能暂停整个插件宿主。"
+    "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "所有目录节点均已支持 UTF-8 BOM 插件包。旧节点可能暂停整个插件宿主。",
+    "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "所有目录节点均已支持此包格式和 UTF-8 BOM 插件包。旧节点可能暂停整个插件宿主。",
+    "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB"
   }
 }

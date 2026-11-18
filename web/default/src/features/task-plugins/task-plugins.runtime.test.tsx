@@ -20,6 +20,10 @@ import type { PluginEntry, PluginMutation, TaskPluginAPI } from './api'
 const env = createReactTestEnvironment()
 await env.setup()
 env.i18n.addResourceBundle('en', 'translation', {
+  'Search task plugins': english.translation['Search task plugins'],
+  'No task plugin packages found':
+    english.translation['No task plugin packages found'],
+  'Plugin catalog': english.translation['Plugin catalog'],
   'Task Plugins': english.translation['Task Plugins'],
   'Plugin details': english.translation['Plugin details'],
   'Install plugin package': english.translation['Install plugin package'],
@@ -270,6 +274,10 @@ for (const [name, document] of [
   ['raw JavaScript', '\uFEFFexport const meta = {};\r\n'],
   ['format-3 JSON envelope', '\uFEFF{"format_version":3}\r\n'],
   ['raw JavaScript with a later BOM', ' \uFEFF{}; export const meta = {};\r\n'],
+  [
+    'raw JavaScript with a leading BOM and block',
+    '\uFEFF{}; export const meta = {};\r\n',
+  ],
 ]) {
   test(`computed upload digest identifies the file bytes for ${name}`, async () => {
     const f = fixture()
@@ -349,6 +357,12 @@ test('deleting an installed version requires node acknowledgement and closes onl
   }
   await v.findByText('No API extensions found')
   await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
+  await waitFor(() =>
+    assert.equal(
+      document.activeElement,
+      v.getByRole('textbox', { name: 'Search API extensions' })
+    )
+  )
   assert.equal(f.writes.length, 1)
   assert.equal(f.writes[0].action, 'delete')
   assert.equal(f.writes[0].expected_revision, '1')
@@ -485,9 +499,12 @@ test('a lost deletion receipt stays unknown after the version disappears from th
     return result
   }
   fireEvent.click(panel.getByRole('button', { name: 'Refresh' }))
-  await waitFor(() => assert.equal(refreshStarted, true))
-  assert.ok(panel.getByText(/The mutation result is unknown/))
-  await act(async () => refreshed.resolve({ revision: '2', entries: [] }))
+  try {
+    await waitFor(() => assert.equal(refreshStarted, true))
+    assert.ok(panel.getByText(/The mutation result is unknown/))
+  } finally {
+    await act(async () => refreshed.resolve({ revision: '2', entries: [] }))
+  }
   await waitFor(() => {
     assert.equal(refreshCompleted, true)
     assert.equal(
@@ -498,6 +515,9 @@ test('a lost deletion receipt stays unknown after the version disappears from th
   })
   assert.equal(f.writes.length, 1)
   assert.ok(v.getByRole('dialog'))
+  assert.ok(
+    panel.getByText('The selected version is not in the current catalog')
+  )
   assert.ok(panel.getByText(/The mutation result is unknown/))
   assert.equal(
     panel.queryByText(
@@ -519,7 +539,9 @@ test('catalog search includes models hidden behind card overflow and distinguish
     target: { value: ' hidden-model ' },
   })
   assert.ok(v.getByText('Kling Fixture'))
-  fireEvent.click(v.getByRole('button', { name: 'Declared models: +1' }))
+  fireEvent.click(
+    v.getByRole('button', { name: 'Declared models: +1 kling@1.2.0' })
+  )
   const panel = within(await v.findByRole('dialog'))
   assert.ok(panel.getByText('hidden-model'))
   fireEvent.click(panel.getByRole('button', { name: 'Close' }))
@@ -707,45 +729,80 @@ test('late validation is ignored after changing the pin', async () => {
   assert.deepEqual(f.writes, [])
 })
 
-test('format-2 installation requires node acknowledgement', async () => {
+for (const bom of [false, true])
+  test(`format-2 installation requires node acknowledgement (BOM=${bom})`, async () => {
+    const f = fixture()
+    f.api.validate = async () => ({ ...entry, bom_prefixed: bom })
+    const v = f.view()
+    fireEvent.click(
+      await v.findByRole('button', { name: 'Import API extension' })
+    )
+    const panel = within(await v.findByRole('dialog'))
+    fireEvent.change(panel.getByLabelText('Package file'), {
+      target: {
+        files: [
+          {
+            name: 'fixture.json',
+            size: 8,
+            arrayBuffer: async () =>
+              new TextEncoder().encode('document-A').buffer,
+          },
+        ],
+      },
+    })
+    fireEvent.change(panel.getByLabelText('SHA-256 (optional)'), {
+      target: { value: 'b'.repeat(64) },
+    })
+    const check = panel.getByRole('button', { name: 'Validate package' })
+    await waitFor(() =>
+      assert.equal((check as HTMLButtonElement).disabled, false)
+    )
+    fireEvent.click(check)
+    const install = await panel.findByRole('button', {
+      name: 'Install and activate',
+    })
+    assert.equal((install as HTMLButtonElement).disabled, true)
+    const ready = panel.getByRole('checkbox')
+    if (bom)
+      assert.match(
+        ready.parentElement!.textContent!,
+        /package format and UTF-8 BOM/
+      )
+    fireEvent.click(ready)
+    fireEvent.click(install)
+    await waitFor(() => assert.equal(f.writes.length, 1))
+    assert.equal(f.writes[0].action, 'install')
+    assert.equal(f.writes[0].expected_revision, '1')
+    if (f.writes[0].action === 'install') {
+      assert.equal(f.writes[0].expected_sha256, 'b'.repeat(64))
+      assert.equal(f.writes[0].format2_nodes_ready, true)
+      assert.equal(f.writes[0].bom_nodes_ready, bom ? true : undefined)
+    }
+  })
+test('format-2 BOM activation names both reader requirements', async () => {
   const f = fixture()
+  f.state.entries[0].active = false
+  f.state.entries[0].bom_prefixed = true
   const v = f.view()
-  fireEvent.click(
-    await v.findByRole('button', { name: 'Import API extension' })
-  )
+  fireEvent.click(await v.findByRole('button', { name: /^Details\b/ }))
   const panel = within(await v.findByRole('dialog'))
-  fireEvent.change(panel.getByLabelText('Package file'), {
-    target: {
-      files: [
-        {
-          name: 'fixture.json',
-          size: 8,
-          arrayBuffer: async () =>
-            new TextEncoder().encode('document-A').buffer,
-        },
-      ],
-    },
-  })
-  fireEvent.change(panel.getByLabelText('SHA-256 (optional)'), {
-    target: { value: 'b'.repeat(64) },
-  })
-  const check = panel.getByRole('button', { name: 'Validate package' })
-  await waitFor(() =>
-    assert.equal((check as HTMLButtonElement).disabled, false)
+  fireEvent.click(panel.getByRole('button', { name: 'Activate version' }))
+  const confirm = panel.getByRole('button', {
+    name: 'Confirm',
+  }) as HTMLButtonElement
+  assert.equal(confirm.disabled, true)
+  fireEvent.click(
+    panel.getByRole('checkbox', {
+      name: 'All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.',
+    })
   )
-  fireEvent.click(check)
-  const install = await panel.findByRole('button', {
-    name: 'Install and activate',
-  })
-  assert.equal((install as HTMLButtonElement).disabled, true)
-  fireEvent.click(panel.getByRole('checkbox'))
-  fireEvent.click(install)
+  fireEvent.click(confirm)
   await waitFor(() => assert.equal(f.writes.length, 1))
-  assert.equal(f.writes[0].action, 'install')
-  assert.equal(f.writes[0].expected_revision, '1')
-  if (f.writes[0].action === 'install')
-    assert.equal(f.writes[0].expected_sha256, 'b'.repeat(64))
+  assert.equal(f.writes[0].action, 'activate')
+  assert.equal(f.writes[0].format2_nodes_ready, true)
+  assert.equal(f.writes[0].bom_nodes_ready, true)
 })
+
 test('late official source download cannot replace a manually changed pin', async () => {
   const f = fixture(),
     download = deferred<{ document: string; expected_sha256: string }>(),

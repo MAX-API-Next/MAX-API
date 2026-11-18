@@ -1,6 +1,6 @@
 // Copyright (C) 2023-2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 // Extracted from MAX's catalog UI; QuantumNous/new-api 70e6af64 interaction reference retained.
-import type { ComponentProps } from 'react'
+import type { ComponentProps, RefObject } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
   Package,
@@ -33,6 +33,7 @@ import type {
   PluginSnapshot,
   PluginAction,
 } from './api'
+import { packageCompatibilityMessage } from './package-compatibility'
 import { PluginStatusBadge } from './plugin-catalog'
 import { TaskPluginFeedback } from './task-plugin-feedback'
 
@@ -42,6 +43,7 @@ export type PluginConfirmation = {
   revision: string
 }
 type Props = {
+  finalFocus: RefObject<HTMLInputElement | null>
   selected: string | undefined
   setSelected: (value: string | undefined) => void
   detail: PluginEntry | undefined
@@ -73,7 +75,10 @@ export function PluginDetailSheet(props: Props) {
         }
       }}
     >
-      <SheetContent className='w-full overflow-y-auto sm:max-w-2xl'>
+      <SheetContent
+        finalFocus={props.finalFocus}
+        className='w-full overflow-y-auto sm:max-w-2xl'
+      >
         <SheetHeader className='border-b px-6 pt-6 pr-12 pb-5'>
           <SheetTitle>{t('Plugin details')}</SheetTitle>
           <SheetDescription>
@@ -229,11 +234,7 @@ export function PluginDetailSheet(props: Props) {
                             props.setNodesReady(e.target.checked)
                           }
                         />
-                        {t(
-                          detail.bom_prefixed
-                            ? 'All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.'
-                            : 'All catalog nodes support this package format. Older nodes may suspend their entire plugin host.'
-                        )}
+                        {t(packageCompatibilityMessage(detail))}
                       </label>
                     )}
                   {confirmation.revision !== props.snapshot?.revision && (

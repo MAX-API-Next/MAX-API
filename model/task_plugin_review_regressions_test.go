@@ -571,6 +571,8 @@ func TestTaskPluginStatusOnlyUpdateIgnoresUnsavedReferences(t *testing.T) {
 	stale := TaskPrivateData{PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", Version: "1.0.0", PackageDigest: pkg.Digest()}}
 	for _, selectOnly := range []bool{false, true} {
 		t.Run(fmt.Sprint(selectOnly), func(t *testing.T) {
+			task := Task{TaskID: fmt.Sprintf("status-only-%v", selectOnly)}
+			require.NoError(t, db.Create(&task).Error)
 			receiver := task
 			receiver.PrivateData = stale // This value is not persisted by the patch.
 			query := db.Model(&receiver)
@@ -693,8 +695,8 @@ func TestTaskPluginSerializedLegacyIdentityDimensions(t *testing.T) {
 }
 
 func TestTaskPluginPinnedSelectionDoesNotReferenceOtherVersions(t *testing.T) {
-	for _, serialized := range []bool{false, true} {
-		t.Run(fmt.Sprint(serialized), func(t *testing.T) {
+	for _, shape := range []string{"typed", "serialized", "mixed-case"} {
+		t.Run(shape, func(t *testing.T) {
 			db := deletionDB(t)
 			store := NewTaskPluginCatalogStore(db)
 			_, old := catalogFixture(t, "stored", "1.0.0", "old-source")
@@ -704,13 +706,16 @@ func TestTaskPluginPinnedSelectionDoesNotReferenceOtherVersions(t *testing.T) {
 			require.NoError(t, err)
 			private := TaskPrivateData{BillingContext: &TaskBillingContext{TaskBillingPlan: &types.TaskBillingPlan{ExpressionPlan: &types.TaskExpressionPlan{SelectedPluginKey: "stored", PluginKey: "stored", PluginVersion: "2.0.0", PackageDigest: pkg.Digest()}}}}
 			task := Task{TaskID: "pinned-v2"}
-			if !serialized {
+			if shape == "typed" {
 				task.PrivateData = private
 			}
 			require.NoError(t, db.Create(&task).Error)
-			if serialized {
+			if shape != "typed" {
 				data, err := common.Marshal(private)
 				require.NoError(t, err)
+				if shape == "mixed-case" {
+					data = bytes.ReplaceAll(data, []byte(`"plugin_key"`), []byte(`"PLUGIN_KEY"`))
+				}
 				require.NoError(t, db.Model(&task).Updates(map[string]any{"private_data": string(data)}).Error)
 			}
 			_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
@@ -721,9 +726,111 @@ func TestTaskPluginPinnedSelectionDoesNotReferenceOtherVersions(t *testing.T) {
 	}
 }
 
+func TestTaskPluginReferenceFreeHugeNumbersRemainWritable(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	_, entry := catalogFixture(t, "stored", "1.0.0", "huge-number-source")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	task := Task{TaskID: "reference-free-number"}
+	require.NoError(t, db.Create(&task).Error)
+	raw := `{"history":{"value":1e400,"tiny":1e-4000}}`
+	require.NoError(t, db.Model(&task).Updates(map[string]any{"private_data": raw}).Error)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.NoError(t, err)
+	for _, malformed := range []string{`{} {}`, `{"history":1e}`, `[] trailing`} {
+		require.ErrorIs(t, db.Model(&task).Updates(map[string]any{"private_data": malformed}).Error, taskplugin.ErrCatalogInvalid)
+	}
+}
+
+func TestTaskPluginHeadCannotMaskOrphanedRestore(t *testing.T) {
+	for _, source := range []string{"channel", "pricing"} {
+		t.Run(source, func(t *testing.T) {
+			db := deletionDB(t)
+			store := NewTaskPluginCatalogStore(db)
+			_, entry := catalogFixture(t, "stored", "1.0.0", "orphan-source")
+			_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+			require.NoError(t, err)
+			require.NoError(t, db.Delete(&TaskPluginCatalogHead{}, 1).Error)
+			if source == "channel" {
+				require.ErrorIs(t, db.Create(&Channel{Models: "ordinary-model"}).Error, taskplugin.ErrCatalogInvalid)
+			} else {
+				err = db.Transaction(func(tx *gorm.DB) error { _, _, err := readPricingCatalog(tx, true); return err })
+				require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+			}
+			var count int64
+			require.NoError(t, db.Model(&TaskPluginCatalogHead{}).Count(&count).Error)
+			require.Zero(t, count, "a failed initialization must not bless an orphaned generation")
+			_, err = store.Load(t.Context())
+			require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+		})
+	}
+}
+
+func TestTaskPluginPricingRejectsLostReceiptSet(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	_, entry := catalogFixture(t, "stored", "1.0.0", "receipt-source")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.NoError(t, err)
+	require.NoError(t, db.Where("1 = 1").Delete(&TaskPluginDeletion{}).Error)
+	for _, lock := range []bool{false, true} {
+		err = db.Transaction(func(tx *gorm.DB) error { _, _, err := readPricingCatalog(tx, lock); return err })
+		require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+	}
+}
+
+func TestTaskPluginReferenceDigestUsesExactBytesOnCaseInsensitiveStorage(t *testing.T) {
+	db := deletionDB(t)
+	require.NoError(t, db.Migrator().DropTable(&TaskPluginVersion{}))
+	require.NoError(t, db.Exec(`CREATE TABLE task_plugin_versions (identity text PRIMARY KEY, digest text COLLATE NOCASE NOT NULL, document text NOT NULL, active numeric NOT NULL, enabled numeric NOT NULL, revoked numeric NOT NULL)`).Error)
+	store := NewTaskPluginCatalogStore(db)
+	pkg, entry := catalogFixture(t, "stored", "1.0.0", "case-insensitive-digest")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	upper := strings.ToUpper(pkg.Digest())
+	require.NotEqual(t, pkg.Digest(), upper)
+	task := Task{TaskID: "digest-equality"}
+	require.NoError(t, db.Create(&task).Error)
+	for _, raw := range []any{
+		fmt.Sprintf(`{"history":{"package_digest":%q}}`, upper),
+		TaskPrivateData{PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", Version: "1.0.0", PackageDigest: upper}},
+	} {
+		require.ErrorIs(t, db.Model(&task).Updates(map[string]any{"private_data": raw}).Error, taskplugin.ErrBindingRejected)
+	}
+	require.NoError(t, db.Model(&task).Updates(map[string]any{"private_data": fmt.Sprintf(`{"history":{"package_digest":%q}}`, pkg.Digest())}).Error)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.ErrorIs(t, err, taskplugin.ErrCatalogInUse)
+}
+
+func TestTaskPluginInvalidLegacyMappingIsKnownPrecondition(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	_, entry := catalogFixture(t, "stored", "1.0.0", "unrelated-source")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	channel := Channel{Models: "ordinary-model"}
+	require.NoError(t, db.Create(&channel).Error)
+	require.NoError(t, db.Model(&channel).UpdateColumn("model_mapping", `{"private-legacy-alias":7}`).Error)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	var mapping *taskplugin.CatalogChannelMappingError
+	require.ErrorAs(t, err, &mapping)
+	require.Equal(t, channel.Id, mapping.ChannelID)
+	require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+	require.NotContains(t, err.Error(), "private-legacy-alias")
+	snapshot, err := store.Load(t.Context())
+	require.NoError(t, err)
+	require.EqualValues(t, 1, snapshot.Revision)
+	require.Len(t, snapshot.Packages, 1)
+}
+
 func TestTaskPluginSQLiteSchemaProbeKeepsWriteIntent(t *testing.T) {
 	db := deletionDB(t)
-	require.NoError(t, db.Exec("PRAGMA journal_mode=WAL").Error)
+	var journalMode string
+	require.NoError(t, db.Raw("PRAGMA journal_mode=WAL").Scan(&journalMode).Error)
+	require.Equal(t, "wal", strings.ToLower(journalMode))
 	var location struct{ File string }
 	require.NoError(t, db.Raw("PRAGMA database_list").Scan(&location).Error)
 	other, err := gorm.Open(sqlite.Open(location.File+"?_pragma=busy_timeout(20)"), &gorm.Config{})

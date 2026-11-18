@@ -137,7 +137,7 @@ export function SidebarModulesSection({
       task_plugins: {
         title: t('Task Plugins'),
         description: t(
-          'Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.'
+          'Manage installed packages and versions. Enabling a package does not enable task execution or paid admission.'
         ),
       },
       redemption: {

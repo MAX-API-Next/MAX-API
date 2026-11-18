@@ -6059,7 +6059,6 @@
     "No API extensions found": "API 拡張がありません",
     "API extension catalog": "API 拡張カタログ",
     "API extension": "API 拡張",
-    "Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.": "インストール済みの API 拡張とバージョンを管理します。拡張を有効にしても、タスク実行や有料リクエストの受付は有効になりません。",
     "Invalid API extension request": "無効な API 拡張リクエスト",
     "Invalid API extension response": "無効な API 拡張レスポンス",
     "Bind API extensions": "API 拡張を関連付ける",
@@ -6072,6 +6071,8 @@
     "Task plugin version has different content; import the original file or use a new version": "このバージョンの内容が履歴と異なります。元のファイルをインポートするか、新しいバージョンを使用してください。",
     "Submitted content SHA-256": "送信内容の SHA-256",
     "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 は、保持された BOM を含む送信済み UTF-8 テキストを識別します。計算したダイジェストだけでは発行者を認証できません。",
-    "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "すべてのカタログノードが UTF-8 BOM 付きパッケージに対応しています。古いノードではプラグインホスト全体が停止する場合があります。"
+    "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "すべてのカタログノードが UTF-8 BOM 付きパッケージに対応しています。古いノードではプラグインホスト全体が停止する場合があります。",
+    "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "すべてのカタログノードがこのパッケージ形式と UTF-8 BOM 付きパッケージに対応しています。古いノードではプラグインホスト全体が停止する場合があります。",
+    "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB"
   }
 }

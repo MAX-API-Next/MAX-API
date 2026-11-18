@@ -36,6 +36,13 @@ source and version row without promoting another version. Distribution files
 embedded in the program remain available in the bundled picker. A source-free
 deletion receipt retains the identity and digest: identical bytes can be
 explicitly reinstalled, but changed bytes under the same identity are rejected.
+
+Before acknowledging deletion readiness, upgrade every catalog consumer,
+channel writer **and task writer**, including workers that persist serialized
+historical task references. Read the [management upgrade guide](../pkg/taskplugin/management.md)
+before confirming readiness. Legacy receipts without a model index are readable
+but excluded from model-name protection; reconcile their names from trusted
+backups before relying on complete channel model protection.
 The management UI and API no longer offer permanent revocation. Historical
 revocation records from older releases remain enforced and are reported during
 validation, before an installation attempt.

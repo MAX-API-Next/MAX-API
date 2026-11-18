@@ -6059,7 +6059,6 @@
     "No API extensions found": "Chưa có tiện ích mở rộng API",
     "API extension catalog": "Danh mục tiện ích mở rộng API",
     "API extension": "Tiện ích mở rộng API",
-    "Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.": "Quản lý các tiện ích mở rộng API đã cài và phiên bản của chúng. Bật tiện ích không đồng nghĩa với bật thực thi tác vụ hoặc tiếp nhận yêu cầu trả phí.",
     "Invalid API extension request": "Yêu cầu tiện ích mở rộng API không hợp lệ",
     "Invalid API extension response": "Phản hồi tiện ích mở rộng API không hợp lệ",
     "Bind API extensions": "Liên kết tiện ích mở rộng API",
@@ -6072,6 +6071,8 @@
     "Task plugin version has different content; import the original file or use a new version": "Nội dung phiên bản này khác với lịch sử; hãy nhập tệp gốc hoặc dùng phiên bản mới.",
     "Submitted content SHA-256": "SHA-256 của nội dung gửi",
     "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 xác định văn bản UTF-8 đã gửi, bao gồm BOM được giữ lại. Chỉ tính giá trị băm không thể xác thực nhà phát hành.",
-    "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "Tất cả nút danh mục đều hỗ trợ gói UTF-8 có BOM. Các nút cũ có thể tạm dừng toàn bộ máy chủ plugin."
+    "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "Tất cả nút danh mục đều hỗ trợ gói UTF-8 có BOM. Các nút cũ có thể tạm dừng toàn bộ máy chủ plugin.",
+    "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "Tất cả nút danh mục đều hỗ trợ định dạng gói này và gói UTF-8 có BOM. Các nút cũ có thể tạm dừng toàn bộ máy chủ plugin.",
+    "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB"
   }
 }

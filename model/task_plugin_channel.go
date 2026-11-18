@@ -67,7 +67,7 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 	for _, receipt := range receipts {
 		if receipt.Models == "" {
 			continue
-		} // Legacy receipts predate the model index.
+		} // Legacy receipts predate model-name protection; see management upgrade guide.
 		var names []string
 		if len(receipt.Models) > maxTaskPluginModelIndexBytes || common.UnmarshalJsonStr(string(receipt.Models), &names) != nil {
 			return taskplugin.ErrCatalogInvalid

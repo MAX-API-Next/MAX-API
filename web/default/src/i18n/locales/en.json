@@ -6062,7 +6062,6 @@
     "No API extensions found": "No API extensions found",
     "API extension catalog": "API extension catalog",
     "API extension": "API extension",
-    "Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.": "Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.",
     "Invalid API extension request": "Invalid API extension request",
     "Invalid API extension response": "Invalid API extension response",
     "Bind API extensions": "Bind API extensions",
@@ -6075,6 +6074,8 @@
     "Task plugin version has different content; import the original file or use a new version": "API extension version has different content; import the original file or use a new version",
     "Submitted content SHA-256": "Submitted content SHA-256",
     "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 identifies the submitted UTF-8 text, including its preserved BOM. A computed digest alone does not authenticate the publisher.",
-    "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host."
+    "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.",
+    "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.",
+    "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB"
   }
 }

@@ -60,7 +60,8 @@ func LoadUpload(reader io.Reader, pin string) (*Package, error) {
 		sum := sha256.Sum256(data)
 		pin = hex.EncodeToString(sum[:])
 	}
-	if bytes.HasPrefix(bytes.TrimSpace(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})), []byte("{")) {
+	jsonData := bytes.TrimSpace(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}))
+	if bytes.HasPrefix(jsonData, []byte("{")) && common.ValidJSON(jsonData) {
 		return LoadPackage(bytes.NewReader(data), pin)
 	}
 	return LoadJavaScript(bytes.NewReader(data), pin)

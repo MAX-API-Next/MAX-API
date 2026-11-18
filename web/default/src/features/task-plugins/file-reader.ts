@@ -11,8 +11,12 @@ export async function readPluginFile(
 
 export function isJSONPluginUpload(document: string): boolean {
   // Go's bytes.TrimSpace uses Unicode White_Space, which excludes U+FEFF.
-  return document
-    .replace(/^\uFEFF/, '')
-    .replace(/^\p{White_Space}*/u, '')
-    .startsWith('{')
+  const json = document.replace(/^\uFEFF/, '').replace(/^\p{White_Space}*/u, '')
+  if (!json.startsWith('{')) return false
+  try {
+    JSON.parse(json)
+    return true
+  } catch {
+    return false
+  }
 }

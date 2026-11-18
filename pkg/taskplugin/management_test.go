@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	"github.com/stretchr/testify/require"
@@ -189,6 +190,32 @@ func TestManagementExpiredPreflightDoesNotUnpublishHost(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Same(t, published, catalog.host.state.Load(), "an expired administrative read also leaves the healthy publication intact")
 	require.Equal(t, calls, store.loadCalls)
+	require.ErrorIs(t, catalog.MutateExpected(ctx, 1, ManagementMutation{Action: "delete", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version}), context.Canceled)
+	require.Same(t, published, catalog.host.state.Load())
+	require.Equal(t, calls, store.loadCalls)
+}
+
+func TestManagementConfirmedDeletionSuspendsBeforePendingRefresh(t *testing.T) {
+	store := &confirmedDeletionStore{}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	pkg := testPackage(t, validManifest(), "source")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	defer close(release)
+	store.afterCommit = func() { store.onLoad = func(int) { close(entered); <-release } }
+	go func() {
+		done <- catalog.MutateExpected(t.Context(), 1, ManagementMutation{Action: "delete", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("follow-up refresh did not begin")
+	}
+	require.Nil(t, catalog.host.state.Load(), "the committed old generation must be unavailable while refresh is pending")
+	// Release without closing twice, and wait for the goroutine before cleanup.
+	release <- struct{}{}
+	require.NoError(t, <-done)
 }
 
 type confirmedDeletionStore struct {
@@ -234,4 +261,30 @@ func TestManagementConfirmedDeletionSurvivesRefreshFailure(t *testing.T) {
 			require.NotNil(t, catalog.host.state.Load(), "fresh authoritative read recovers the Host")
 		})
 	}
+}
+
+func TestManagementKnownMappingPreconditionPreservesHost(t *testing.T) {
+	store := &conflictingDeletionStore{deleteError: &CatalogChannelMappingError{ChannelID: 23}}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	pkg := testPackage(t, validManifest(), "source")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	published := catalog.host.state.Load()
+	err = catalog.MutateExpected(t.Context(), 1, ManagementMutation{Action: "delete", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version})
+	var mapping *CatalogChannelMappingError
+	require.ErrorAs(t, err, &mapping)
+	require.Equal(t, 23, mapping.ChannelID)
+	require.NotNil(t, catalog.host.state.Load())
+	require.Equal(t, published.generation, catalog.host.state.Load().generation)
+	require.Equal(t, pkg.Digest(), catalog.host.state.Load().active[pkg.Manifest().Key].Digest())
+}
+
+func TestManagementRetainedRevocationPrecedesReceiptContentConflict(t *testing.T) {
+	pkg := testPackage(t, validManifest(), "source")
+	changed := testPackage(t, validManifest(), "changed")
+	m := pkg.Manifest()
+	store := &memoryCatalogStore{snapshot: CatalogSnapshot{Revision: 2, Packages: []StoredPackage{{Document: pkg.Document(), Digest: pkg.Digest(), Active: true, Revoked: true}}, Deletions: []PackageDeletion{{Key: m.Key, Version: m.Version, Digest: pkg.Digest()}}}}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	require.ErrorIs(t, catalog.ValidateInstall(t.Context(), changed), ErrCatalogRevoked)
 }

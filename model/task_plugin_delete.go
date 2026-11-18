@@ -178,6 +178,10 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		return nil
 	})
 	if err != nil {
+		var mapping *taskplugin.CatalogChannelMappingError
+		if errors.As(err, &mapping) {
+			return 0, mapping
+		}
 		for _, known := range []error{taskplugin.ErrCatalogInUse, taskplugin.ErrCatalogConflict, taskplugin.ErrCatalogInvalid, taskplugin.ErrBindingRejected} {
 			if errors.Is(err, known) {
 				return 0, known
@@ -206,7 +210,7 @@ func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 			continue
 		}
 		var value any
-		if err := common.Unmarshal(raw, &value); err != nil {
+		if err := common.UnmarshalUseNumber(raw, &value); err != nil {
 			return taskplugin.ErrCatalogUnavailable
 		}
 		if taskPluginReference(value, m.Key, m.Version, pkg.Digest()) {
@@ -235,10 +239,11 @@ func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 	// rather than a dedicated channel plugin-version column. Disabled channels
 	// also retain these configurations, so do not filter them out.
 	var channels []struct {
+		ID           int
 		Models       string
 		ModelMapping *string
 	}
-	if err := tx.Model(&Channel{}).Select("models", "model_mapping").Find(&channels).Error; err != nil {
+	if err := tx.Model(&Channel{}).Select("id", "models", "model_mapping").Find(&channels).Error; err != nil {
 		return err
 	}
 	models := map[string]bool{}
@@ -254,7 +259,7 @@ func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 		if channel.ModelMapping != nil && strings.TrimSpace(*channel.ModelMapping) != "" {
 			var mapping map[string]string
 			if common.UnmarshalJsonStr(*channel.ModelMapping, &mapping) != nil {
-				return taskplugin.ErrCatalogUnavailable
+				return &taskplugin.CatalogChannelMappingError{ChannelID: channel.ID}
 			}
 			for _, model := range mapping {
 				if models[model] {
@@ -350,15 +355,15 @@ type taskPluginReferenceIdentity struct{ key, version, digest string }
 func visitTaskPluginReferences(value any, visit func(taskPluginReferenceIdentity) bool) bool {
 	switch v := value.(type) {
 	case map[string]any:
-		key, _ := v["plugin_key"].(string)
-		boundVersion, _ := v["version"].(string)
-		if explicit, ok := v["plugin_version"].(string); ok {
+		key, _ := taskPluginReferenceString(v, "plugin_key")
+		boundVersion, _ := taskPluginReferenceString(v, "version")
+		if explicit, ok := taskPluginReferenceString(v, "plugin_version"); ok {
 			boundVersion = explicit
 		}
-		if digest, ok := v["package_digest"].(string); ok && digest != "" && visit(taskPluginReferenceIdentity{digest: digest}) {
+		if digest, ok := taskPluginReferenceString(v, "package_digest"); ok && digest != "" && visit(taskPluginReferenceIdentity{digest: digest}) {
 			return true
 		}
-		if selected, ok := v["selected_plugin_key"].(string); ok && selected != "" {
+		if selected, ok := taskPluginReferenceString(v, "selected_plugin_key"); ok && selected != "" {
 			ref := taskPluginReferenceIdentity{key: selected}
 			if selected == key {
 				ref.version = boundVersion
@@ -385,6 +390,25 @@ func visitTaskPluginReferences(value any, visit func(taskPluginReferenceIdentity
 		}
 	}
 	return false
+}
+
+func taskPluginReferenceString(value map[string]any, name string) (string, bool) {
+	if exact, ok := value[name].(string); ok {
+		return exact, true
+	}
+	var result string
+	found := false
+	for key, raw := range value {
+		if !strings.EqualFold(key, name) {
+			continue
+		}
+		text, ok := raw.(string)
+		if !ok || found && text != result {
+			return "", false // Ambiguous aliases cannot establish a version pin.
+		}
+		result, found = text, true
+	}
+	return result, found
 }
 
 func taskPluginReference(value any, key, version, digest string) bool {
@@ -424,7 +448,7 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 	legacy := map[taskPluginReferenceIdentity]bool{}
 	if serializedInput {
 		var raw any
-		if common.Unmarshal(serialized, &private) != nil || common.Unmarshal(serialized, &raw) != nil {
+		if common.Unmarshal(serialized, &private) != nil || common.UnmarshalUseNumber(serialized, &raw) != nil {
 			return taskplugin.ErrCatalogInvalid
 		}
 		visitTaskPluginReferences(raw, func(ref taskPluginReferenceIdentity) bool {
@@ -489,6 +513,9 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 			}
 			return err
 		}
+		if record.Digest != reference.digest {
+			return taskplugin.ErrBindingRejected
+		}
 		// Serialized canonical fields have already passed the stronger tuple
 		// check. Avoid extra queries for their individual legacy projections.
 		delete(legacy, taskPluginReferenceIdentity{digest: reference.digest})
@@ -521,7 +548,7 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 			}
 			continue
 		}
-		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("identity")
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("identity", "digest")
 		if reference.key != "" {
 			query = query.Where("identity = ?", taskPluginIdentity(reference.key, reference.version))
 		} else {
@@ -533,6 +560,9 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 				return taskplugin.ErrBindingRejected
 			}
 			return err
+		}
+		if reference.digest != "" && record.Digest != reference.digest {
+			return taskplugin.ErrBindingRejected
 		}
 	}
 	return nil

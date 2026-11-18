@@ -1,7 +1,7 @@
 // Copyright (C) 2023-2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 // Selective workflow reference: QuantumNous/new-api 70e6af64 plugin list,
 // upload and detail sheet. No upstream JS execution/editor/marketplace code.
-import { useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, RefreshCw, Info } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -70,6 +70,10 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
   const validation = useRef(new PluginRequestOrder())
   const files = useRef(new PluginRequestOrder())
   const mounted = useRef(true)
+  const catalogSearch = useRef<HTMLInputElement>(null)
+  const onSearchReady = useCallback((element: HTMLInputElement | null) => {
+    catalogSearch.current = element
+  }, [])
   const resetValidation = () => {
     validation.current.next()
     setValidated(undefined)
@@ -248,13 +252,14 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
             <p className='text-muted-foreground bg-muted/30 flex items-start gap-2.5 rounded-lg border px-4 py-3 text-xs leading-relaxed'>
               <Info className='mt-0.5 size-4 shrink-0' aria-hidden='true' />
               {t(
-                'Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.'
+                'Manage installed packages and versions. Enabling a package does not enable task execution or paid admission.'
               )}
             </p>
             {!selected && !installOpen && (
               <TaskPluginFeedback {...feedbackProps} />
             )}
             <PluginCatalog
+              onSearchReady={onSearchReady}
               entries={snapshot?.entries ?? []}
               available={!!snapshot}
               loading={loading}
@@ -268,6 +273,7 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
       </SectionPageLayout>
 
       <PluginDetailSheet
+        finalFocus={catalogSearch}
         selected={selected}
         setSelected={setSelected}
         detail={detail}

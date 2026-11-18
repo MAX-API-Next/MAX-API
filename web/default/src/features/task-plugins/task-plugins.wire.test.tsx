@@ -26,6 +26,10 @@ if (configuredEndpoint && !endpoint)
 const env = createReactTestEnvironment()
 await env.setup()
 env.i18n.addResourceBundle('en', 'translation', {
+  'Search task plugins': english.translation['Search task plugins'],
+  'No task plugin packages found':
+    english.translation['No task plugin packages found'],
+  'Plugin catalog': english.translation['Plugin catalog'],
   'Task Plugins': english.translation['Task Plugins'],
   'Plugin details': english.translation['Plugin details'],
   'Install plugin package': english.translation['Install plugin package'],
@@ -59,7 +63,11 @@ after(async () => {
     Object.defineProperty(globalThis, 'scrollTo', originalScrollTo)
   else Reflect.deleteProperty(globalThis, 'scrollTo')
   env.teardown()
-  if (endpoint) await fetch(endpoint + '/plugin-test-stop', { method: 'POST' })
+  if (endpoint)
+    await fetch(endpoint + '/plugin-test-stop', {
+      method: 'POST',
+      signal: AbortSignal.timeout(3000),
+    })
 })
 
 async function withRootFixture(
@@ -78,7 +86,9 @@ async function runRootFixture(
   run: (mount: () => ReturnType<typeof render>) => Promise<void>
 ) {
   assert.match(endpoint!, /^http:\/\/127\.0\.0\.1:[0-9]+$/)
-  const login = await fetch(endpoint + '/plugin-test-login/root')
+  const login = await fetch(endpoint + '/plugin-test-login/root', {
+    signal: AbortSignal.timeout(3000),
+  })
   const cookie = login.headers.get('set-cookie')?.split(';')[0]
   assert.ok(cookie, 'isolated server must issue its own synthetic session')
   const original = api.defaults.baseURL,
@@ -152,9 +162,11 @@ test(
       const view = mount()
       const content = within(view.container)
       await content.findByRole('button', { name: 'Import API extension' })
-      fireEvent.click(
-        content.getByRole('button', { name: 'Import API extension' })
-      )
+      const importButton = content.getByRole('button', {
+        name: 'Import API extension',
+      }) as HTMLButtonElement
+      await waitFor(() => assert.equal(importButton.disabled, false))
+      fireEvent.click(importButton)
       const importDialog = await view.findByRole('dialog')
       const install = within(importDialog)
       const document =

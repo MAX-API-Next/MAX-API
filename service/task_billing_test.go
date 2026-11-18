@@ -1,7 +1,9 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
@@ -299,6 +302,65 @@ func TestSweepTimedOutTaskWaitsForSubmissionSettlement(t *testing.T) {
 	require.NoError(t, model.DB.Where("operation_key = ?", fmt.Sprintf("task:%d:refund", task.ID)).First(&refund).Error)
 	assert.Equal(t, model.BillingSettlementStatusApplied, refund.Status)
 	assert.EqualValues(t, -30, refund.AppliedFundingDelta)
+}
+
+func TestSweepTimedOutHistoricalPluginBindingPreservesRefund(t *testing.T) {
+	isolated, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := isolated.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, isolated.AutoMigrate(&model.Task{}, &model.User{}, &model.Token{}, &model.Log{}, &model.BillingLogReceipt{}, &model.Channel{}, &model.TopUp{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.BillingSettlement{}, &model.BillingPreConsumeSelection{}, &model.CacheInvalidationTask{}, &model.Midjourney{}, &model.MidjourneyBillingClaim{}, &model.Option{}, &model.TaskPluginCatalogHead{}, &model.TaskPluginVersion{}, &model.TaskPluginDeletion{}))
+	previousDB, previousLog := model.DB, model.LOG_DB
+	model.DB, model.LOG_DB = isolated, isolated
+	t.Cleanup(func() { model.DB, model.LOG_DB = previousDB, previousLog; _ = sqlDB.Close() })
+	truncate(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	const userID, tokenID = 717, 718
+	seedUser(t, userID, 80)
+	seedToken(t, tokenID, userID, "synthetic-timeout-token", 80)
+	originalTimeout := constant.TaskTimeoutMinutes
+	constant.TaskTimeoutMinutes = 1
+	t.Cleanup(func() { constant.TaskTimeoutMinutes = originalTimeout })
+	document, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "historical-source", Manifest: taskplugin.Manifest{APIVersion: 1, Key: "stored", Name: "Stored", Version: "1.0.0", Models: []string{"historical-model"}}})
+	require.NoError(t, err)
+	pkg, err := taskplugin.LoadPackage(bytes.NewReader(document), fmt.Sprintf("%x", sha256.Sum256(document)))
+	require.NoError(t, err)
+	catalog, err := taskplugin.OpenCatalog(t.Context(), model.NewTaskPluginCatalogStore(model.DB))
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	task := &model.Task{TaskID: "historical-timeout-refund", Status: model.TaskStatusSubmitted, UserId: userID, Quota: 20, SubmitTime: time.Now().Add(-2 * time.Minute).Unix(), PrivateData: model.TaskPrivateData{UpstreamTaskID: "old-provider-id", BillingSource: model.BillingSettlementSourceWallet, BillingRequestId: "historical-timeout", TokenId: tokenID}}
+	require.NoError(t, model.DB.Create(task).Error)
+	task.PrivateData.PluginBinding = &types.TaskPluginBinding{PluginKey: "stored"}
+	raw, err := common.Marshal(task.PrivateData)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(task).UpdateColumn("private_data", raw).Error, "seed an existing legacy row, not a new binding admission")
+	var historical model.Task
+	require.NoError(t, model.DB.First(&historical, task.ID).Error)
+	require.Equal(t, "stored", historical.PrivateData.PluginBinding.PluginKey)
+	sweepTimedOutTasks(context.Background())
+	var result model.Task
+	require.NoError(t, model.DB.First(&result, task.ID).Error)
+	require.Equal(t, model.TaskStatus(model.TaskStatusFailure), result.Status)
+	require.Zero(t, result.Quota)
+	require.EqualValues(t, 100, getUserQuota(t, userID))
+	require.EqualValues(t, 100, getTokenRemainQuota(t, tokenID))
+	var actual string
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Select("private_data").Scan(&actual).Error)
+	require.Equal(t, string(raw), actual, "timeout must leave historical metadata bytes intact")
+	sweepTimedOutTasks(context.Background())
+	require.EqualValues(t, 100, getUserQuota(t, userID))
+	require.EqualValues(t, 100, getTokenRemainQuota(t, tokenID))
+	var refund model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", fmt.Sprintf("task:%d:refund", task.ID)).First(&refund).Error)
+	require.Equal(t, model.BillingSettlementStatusApplied, refund.Status)
+	require.EqualValues(t, -20, refund.AppliedFundingDelta)
+	replay := BuildTaskRefundSettlementInput(task, fmt.Sprintf("任务超时（%d分钟）", constant.TaskTimeoutMinutes))
+	require.NotNil(t, replay)
+	_, already, err := model.ApplyBillingSettlementOnce(*replay)
+	require.NoError(t, err)
+	require.True(t, already)
+	require.EqualValues(t, 100, getUserQuota(t, userID))
 }
 
 func TestSweepTimedOutTasksScansPastPendingSettlementPage(t *testing.T) {

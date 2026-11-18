@@ -54,11 +54,13 @@ func TestOptionalUploadPinDoesNotRelaxInternalLoadersOrPackageValidation(t *test
 }
 
 func TestLoadUploadWhitespaceBOMBoundary(t *testing.T) {
-	data := []byte(" \ufeff{};\r\n" + validUploadSource)
-	pkg, err := LoadUpload(bytes.NewReader(data), fmt.Sprintf("%x", sha256.Sum256(data)))
-	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(data)), pkg.SourceDigest())
-	require.NotEqual(t, pkg.SourceDigest(), pkg.Digest())
+	for _, prefix := range []string{"\ufeff{};\r\n", " \ufeff{};\r\n", "{};\r\n"} {
+		data := []byte(prefix + validUploadSource)
+		pkg, err := LoadUpload(bytes.NewReader(data), fmt.Sprintf("%x", sha256.Sum256(data)))
+		require.NoError(t, err)
+		require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(data)), pkg.SourceDigest())
+		require.NotEqual(t, pkg.SourceDigest(), pkg.Digest())
+	}
 }
 
 func TestLoadUploadPreservesUTF8BOMIdentity(t *testing.T) {

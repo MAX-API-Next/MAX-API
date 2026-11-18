@@ -6059,7 +6059,6 @@
     "No API extensions found": "Aucune extension d’API trouvée",
     "API extension catalog": "Catalogue des extensions d’API",
     "API extension": "Extension d’API",
-    "Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.": "Gérez les extensions d’API installées et leurs versions. L’activation d’une extension n’active ni l’exécution de tâches ni l’admission payante.",
     "Invalid API extension request": "Requête d’extension d’API invalide",
     "Invalid API extension response": "Réponse d’extension d’API invalide",
     "Bind API extensions": "Associer des extensions d’API",
@@ -6072,6 +6071,8 @@
     "Task plugin version has different content; import the original file or use a new version": "Le contenu de cette version diffère ; importez le fichier original ou utilisez une nouvelle version.",
     "Submitted content SHA-256": "SHA-256 du contenu envoyé",
     "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "Le SHA-256 identifie le texte UTF-8 envoyé, y compris son BOM conservé. Un condensat calculé ne suffit pas à authentifier son éditeur.",
-    "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "Tous les nœuds du catalogue prennent en charge les paquets UTF-8 avec BOM. Les anciens nœuds peuvent suspendre leur hôte de plugins entier."
+    "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "Tous les nœuds du catalogue prennent en charge les paquets UTF-8 avec BOM. Les anciens nœuds peuvent suspendre leur hôte de plugins entier.",
+    "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "Tous les nœuds du catalogue prennent en charge ce format de paquet et les paquets UTF-8 avec BOM. Les anciens nœuds peuvent suspendre leur hôte de plugins entier.",
+    "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 Mio"
   }
 }

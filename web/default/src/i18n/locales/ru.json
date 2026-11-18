@@ -6067,7 +6067,6 @@
     "No API extensions found": "Расширения API не найдены",
     "API extension catalog": "Каталог расширений API",
     "API extension": "Расширение API",
-    "Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.": "Управляйте установленными расширениями API и их версиями. Включение расширения не разрешает выполнение задач или платные запросы.",
     "Invalid API extension request": "Некорректный запрос расширения API",
     "Invalid API extension response": "Некорректный ответ расширения API",
     "Bind API extensions": "Привязка расширений API",
@@ -6080,6 +6079,8 @@
     "Task plugin version has different content; import the original file or use a new version": "Содержимое этой версии отличается; импортируйте исходный файл или используйте новую версию.",
     "Submitted content SHA-256": "SHA-256 отправленного содержимого",
     "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 относится к отправленному тексту UTF-8, включая сохранённый BOM. Вычисленная контрольная сумма сама по себе не подтверждает издателя.",
-    "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "Все узлы каталога поддерживают пакеты UTF-8 с BOM. Старые узлы могут приостановить весь хост плагинов."
+    "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "Все узлы каталога поддерживают пакеты UTF-8 с BOM. Старые узлы могут приостановить весь хост плагинов.",
+    "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "Все узлы каталога поддерживают этот формат пакета и пакеты UTF-8 с BOM. Старые узлы могут приостановить весь хост плагинов.",
+    "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB"
   }
 }

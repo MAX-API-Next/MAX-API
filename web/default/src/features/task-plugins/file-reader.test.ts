@@ -38,6 +38,7 @@ test('upload classification matches a single initial BOM and Unicode whitespace'
   for (const document of [
     ' \uFEFF{}',
     '\uFEFF\uFEFF{}',
+    '\uFEFF{}; export const meta = {};',
     'export const meta = {};',
   ])
     assert.equal(isJSONPluginUpload(document), false)

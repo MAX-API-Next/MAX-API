@@ -95,6 +95,12 @@ the guard. The guard rejects late references to deleted models, permits an
 explicit identical reinstallation, and leaves unrelated channel patches alone.
 Old experimental receipts without this index remain readable, but names of
 already deleted models cannot be reconstructed from a digest alone.
+These legacy receipts are explicitly excluded from model-name protection until
+their model indexes are reconciled from trusted backups; do not claim complete
+channel coverage for an unreconciled legacy catalog. The current channel guard
+scans indexed receipts under the head lock, so deletion history size affects
+channel-write latency. A durable per-model lookup/backfill remains separate
+scalability work; the current implementation does not provide indexed lookup.
 
 The console and management API no longer expose `revoke`; legacy requests are
 rejected without committing. Existing revocation records remain readable for

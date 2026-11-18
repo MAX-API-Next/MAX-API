@@ -170,8 +170,25 @@ func lockTaskPluginCatalogHead(tx *gorm.DB) error {
 		return taskplugin.ErrCatalogUnavailable
 	}
 	head := TaskPluginCatalogHead{ID: 1, Revision: 1, MutationID: common.GetUUID()}
-	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&head).Error; err != nil {
-		return err
+	created := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&head)
+	if created.Error != nil {
+		return created.Error
+	}
+	if created.RowsAffected == 1 {
+		// Bootstrap only a genuinely empty catalog. A restored orphan must
+		// remain invalid instead of receiving a new revision from an unrelated write.
+		for _, table := range []any{&TaskPluginVersion{}, &TaskPluginDeletion{}} {
+			if !tx.Migrator().HasTable(table) {
+				continue
+			}
+			var count int64
+			if err := tx.Model(table).Count(&count).Error; err != nil {
+				return err
+			}
+			if count != 0 {
+				return taskplugin.ErrCatalogInvalid
+			}
+		}
 	}
 	return tx.Model(&TaskPluginCatalogHead{}).Where("id = ?", 1).
 		UpdateColumn("mutation_id", gorm.Expr("mutation_id")).Error
