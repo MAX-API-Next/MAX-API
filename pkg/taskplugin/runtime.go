@@ -68,8 +68,11 @@ func compileJavaScriptContext(ctx context.Context, source string, options Runtim
 	if options.Now == nil {
 		options.Now = time.Now
 	}
-	module, err := moejs.Compile("task-plugin.js", source)
+	module, err := moejs.CompileWith("task-plugin.js", source, moejs.CompileOptions{Context: ctx})
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, ErrPluginCompile
 	}
 	p := &Program{module: module, options: options, slots: make(chan struct{}, 4)}

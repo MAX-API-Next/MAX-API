@@ -23,18 +23,25 @@ export function TaskPluginFeedback(props: TaskPluginFeedbackProps) {
     props.error instanceof PluginError ? props.error.repair : undefined
   const fallback =
     typeof props.error === 'string' ? props.error : props.error.message
-  const errorMessage =
-    repair?.code === 'invalid_channel_mapping'
-      ? t(
-          'Channel {{id}} has an invalid model mapping; repair it before deleting the API extension',
-          { id: repair.channel_id, defaultValue: fallback }
-        )
-      : repair?.code === 'invalid_task_data'
-        ? t(
-            'Task record {{id}} has invalid private data; repair it before deleting the API extension',
-            { id: repair.task_id, defaultValue: fallback }
-          )
-        : t(fallback)
+  let errorMessage: string
+  if (repair?.code === 'invalid_channel_mapping') {
+    errorMessage = t(
+      'Channel {{id}} has an invalid model mapping; repair it before deleting the API extension',
+      { id: repair.channel_id, defaultValue: fallback }
+    )
+  } else if (repair?.code === 'invalid_task_data') {
+    errorMessage = t(
+      'Task record {{id}} has invalid private data; repair it before deleting the API extension',
+      { id: repair.task_id, defaultValue: fallback }
+    )
+  } else if (repair?.code === 'invalid_plugin_pricing') {
+    errorMessage = t(
+      'Plugin pricing option {{key}} is invalid; repair it before deleting the API extension',
+      { key: repair.option_key, defaultValue: fallback }
+    )
+  } else {
+    errorMessage = t(fallback)
+  }
   return (
     <>
       {props.error && (

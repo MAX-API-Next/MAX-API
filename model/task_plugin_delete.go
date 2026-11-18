@@ -14,6 +14,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -193,6 +194,10 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		if errors.As(err, &taskData) {
 			return 0, taskData
 		}
+		var pricingData *taskplugin.CatalogPricingDataError
+		if errors.As(err, &pricingData) {
+			return 0, pricingData
+		}
 		for _, known := range []error{taskplugin.ErrCatalogInUse, taskplugin.ErrCatalogConflict, taskplugin.ErrCatalogInvalid, taskplugin.ErrBindingRejected} {
 			if errors.Is(err, known) {
 				return 0, known
@@ -290,12 +295,12 @@ func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 		}
 		var variants map[string]string
 		if common.UnmarshalJsonStr(option.Value, &variants) != nil {
-			return taskplugin.ErrCatalogUnavailable
+			return &taskplugin.CatalogPricingDataError{OptionKey: billing_setting.PluginBillingExprOption}
 		}
 		for composite := range variants {
 			key, _, ok := splitPluginPriceKey(composite)
 			if !ok {
-				return taskplugin.ErrCatalogUnavailable
+				return &taskplugin.CatalogPricingDataError{OptionKey: billing_setting.PluginBillingExprOption}
 			}
 			if key == m.Key {
 				return taskplugin.ErrCatalogInUse
@@ -373,6 +378,16 @@ type taskPluginReferenceIdentity struct{ key, version, digest string }
 // Keep legacy deletion scans and serialized write validation on the same
 // reference vocabulary. Returning true from visit stops the traversal.
 func visitTaskPluginReferences(value any, visit func(taskPluginReferenceIdentity) bool) bool {
+	return visitTaskPluginReferencePath(value, nil, visit)
+}
+
+func visitTaskPluginReferencePath(value any, path []string, visit func(taskPluginReferenceIdentity) bool) bool {
+	// These canonical maps hold arbitrary billing facts, not package identity.
+	// Unknown historical objects and actual binding/plan/envelope paths remain
+	// recursive reference containers in both persistence and deletion scans.
+	if len(path) == 3 && path[0] == "billing_context" && path[1] == "task_billing" && (path[2] == "fields" || path[2] == "matched") {
+		return false
+	}
 	switch v := value.(type) {
 	case map[string]any:
 		key, _ := taskPluginReferenceString(v, "plugin_key")
@@ -397,14 +412,14 @@ func visitTaskPluginReferences(value any, visit func(taskPluginReferenceIdentity
 				return true
 			}
 		}
-		for _, child := range v {
-			if visitTaskPluginReferences(child, visit) {
+		for key, child := range v {
+			if visitTaskPluginReferencePath(child, append(path, strings.ToLower(key)), visit) {
 				return true
 			}
 		}
 	case []any:
 		for _, child := range v {
-			if visitTaskPluginReferences(child, visit) {
+			if visitTaskPluginReferencePath(child, path, visit) {
 				return true
 			}
 		}
@@ -620,6 +635,18 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 func taskPluginDeletionTableAvailable(tx *gorm.DB) (bool, error) {
 	if tx.Migrator().HasTable(&TaskPluginDeletion{}) {
 		return true, nil
+	}
+	if tx.Dialector.Name() == "mysql" {
+		var probe int
+		err := tx.Session(&gorm.Session{NewDB: true}).Model(&TaskPluginDeletion{}).Select("1").Where("1 = 0").Scan(&probe).Error
+		if err == nil {
+			return true, nil
+		}
+		var driverError *mysqldriver.MySQLError
+		if errors.As(err, &driverError) && driverError.Number == 1146 {
+			return false, nil // Only an explicit missing-table result permits legacy bypass.
+		}
+		return false, errors.Join(taskplugin.ErrCatalogUnavailable, err)
 	}
 	if tx.Dialector.Name() != "postgres" {
 		return false, nil

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -171,6 +172,17 @@ func TestManagementDeletionConflictSuspendsStaleHost(t *testing.T) {
 	}
 }
 
+type acquisitionSignalContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (ctx *acquisitionSignalContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.entered) })
+	return ctx.Context.Done()
+}
+
 func TestManagementExpiredPreflightDoesNotUnpublishHost(t *testing.T) {
 	store := &memoryCatalogStore{}
 	catalog, err := OpenCatalog(t.Context(), store)
@@ -178,11 +190,19 @@ func TestManagementExpiredPreflightDoesNotUnpublishHost(t *testing.T) {
 	pkg := testPackage(t, validManifest(), "source")
 	require.NoError(t, catalog.Install(t.Context(), pkg))
 	published, calls := catalog.host.state.Load(), store.loadCalls
-	ctx, cancel := context.WithCancel(t.Context())
+	base, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx := &acquisitionSignalContext{Context: base, entered: make(chan struct{})}
 	catalog.mu.Lock()
-	started, done := make(chan struct{}), make(chan error, 1)
-	go func() { close(started); done <- catalog.ValidateInstall(ctx, pkg) }()
-	<-started
+	done := make(chan error, 1)
+	go func() { done <- catalog.ValidateInstall(ctx, pkg) }()
+	select {
+	case <-ctx.entered:
+	case <-time.After(time.Second):
+		catalog.mu.Unlock()
+		<-done
+		t.Fatal("preflight never reached context-aware acquisition")
+	}
 	cancel()
 	select {
 	case err := <-done:
@@ -202,6 +222,59 @@ func TestManagementExpiredPreflightDoesNotUnpublishHost(t *testing.T) {
 	require.ErrorIs(t, catalog.MutateExpected(ctx, 1, ManagementMutation{Action: "delete", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version}), context.Canceled)
 	require.Same(t, published, catalog.host.state.Load())
 	require.Equal(t, calls, store.loadCalls)
+}
+
+func TestCatalogOperationsCancelWhileWaitingWithoutStorage(t *testing.T) {
+	for _, operation := range []string{"delete", "refresh", "list", "read", "install"} {
+		t.Run(operation, func(t *testing.T) {
+			store := &memoryCatalogStore{}
+			catalog, err := OpenCatalog(t.Context(), store)
+			require.NoError(t, err)
+			pkg := testPackage(t, validManifest(), "source")
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			published, calls := catalog.host.state.Load(), store.loadCalls
+			base, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			ctx := &acquisitionSignalContext{Context: base, entered: make(chan struct{})}
+			catalog.mu.Lock()
+			done := make(chan error, 1)
+			go func() {
+				var err error
+				switch operation {
+				case "delete":
+					err = catalog.MutateExpected(ctx, 1, ManagementMutation{Action: "delete", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version})
+				case "refresh":
+					err = catalog.Refresh(ctx)
+				case "list":
+					_, _, err = catalog.List(ctx)
+				case "read":
+					_, _, err = catalog.ManagementSnapshot(ctx)
+				case "install":
+					err = catalog.Install(ctx, pkg)
+				}
+				done <- err
+			}()
+			select {
+			case <-ctx.entered:
+			case <-time.After(time.Second):
+				catalog.mu.Unlock()
+				<-done
+				t.Fatal("operation never reached context-aware acquisition")
+			}
+			cancel()
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(time.Second):
+				catalog.mu.Unlock()
+				<-done
+				t.Fatal("canceled operation waited for the held mutex")
+			}
+			require.Same(t, published, catalog.host.state.Load())
+			require.Equal(t, calls, store.loadCalls)
+			catalog.mu.Unlock()
+		})
+	}
 }
 
 func TestManagementConfirmedDeletionSuspendsBeforePendingRefresh(t *testing.T) {

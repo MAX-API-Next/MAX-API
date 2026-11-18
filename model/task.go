@@ -226,11 +226,26 @@ func GenerateTaskID() string {
 }
 
 func (p *TaskPrivateData) Scan(val interface{}) error {
-	bytesValue, _ := val.([]byte)
-	if len(bytesValue) == 0 {
+	var raw []byte
+	switch value := val.(type) {
+	case nil:
+	case []byte:
+		raw = value
+	case string:
+		raw = []byte(value)
+	default:
+		return fmt.Errorf("unsupported task private data storage type %T", val)
+	}
+	var next TaskPrivateData
+	if len(raw) == 0 {
+		*p = next
 		return nil
 	}
-	return common.Unmarshal(bytesValue, p)
+	if err := common.Unmarshal(raw, &next); err != nil {
+		return err
+	}
+	*p = next
+	return nil
 }
 
 func (p TaskPrivateData) Value() (driver.Value, error) {
@@ -670,7 +685,9 @@ func (t *Task) UpdateWithStatusAndPendingTerminalEvidence(fromStatus TaskStatus,
 	if t.Data != nil || t.includeDataInUpdate {
 		updates["data"] = t.Data
 	}
-	result := DB.Model(&Task{}).
+	// Preserve hook identity without copying attempted assignments into the
+	// caller before the guarded update succeeds.
+	result := DB.Model(&Task{ID: t.ID}).
 		Where("id = ? AND status = ? AND updated_at = ?", t.ID, fromStatus, expectedUpdatedAt).
 		Updates(updates)
 	if result.Error != nil {
@@ -762,7 +779,7 @@ func (t *Task) UpdateWithStatusAndSettlementIntent(fromStatus TaskStatus, expect
 		if t.Data != nil || t.includeDataInUpdate {
 			updates["data"] = t.Data
 		}
-		result := tx.Model(&Task{}).
+		result := tx.Model(&Task{ID: t.ID}).
 			Where("id = ? AND status = ? AND updated_at = ?", t.ID, fromStatus, expectedUpdatedAt).
 			Updates(updates)
 		if result.Error != nil {
@@ -823,7 +840,7 @@ func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expect
 		if t.Data != nil || t.includeDataInUpdate {
 			updates["data"] = t.Data
 		}
-		result := tx.Model(&Task{}).
+		result := tx.Model(&Task{ID: t.ID}).
 			Where("id = ? AND status = ? AND updated_at = ?", t.ID, fromStatus, expectedUpdatedAt).
 			Updates(updates)
 		if result.Error != nil {
@@ -859,7 +876,7 @@ func (t *Task) UpdateWithSettlementIntent(input *BillingSettlementInput) error {
 				return err
 			}
 		}
-		result := tx.Model(&Task{}).
+		result := tx.Model(&Task{ID: t.ID}).
 			Where("id = ? AND status NOT IN ?", t.ID, []string{TaskStatusFailure, TaskStatusSuccess}).
 			Updates(t.submitResultUpdateValues())
 		if result.Error != nil {

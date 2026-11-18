@@ -47,6 +47,14 @@ type CatalogTaskDataError struct{ TaskID int64 }
 func (*CatalogTaskDataError) Error() string { return "invalid task data prevents extension deletion" }
 func (*CatalogTaskDataError) Unwrap() error { return ErrCatalogInvalid }
 
+// CatalogPricingDataError identifies a public option key, never its contents.
+type CatalogPricingDataError struct{ OptionKey string }
+
+func (*CatalogPricingDataError) Error() string {
+	return "invalid plugin pricing prevents extension deletion"
+}
+func (*CatalogPricingDataError) Unwrap() error { return ErrCatalogInvalid }
+
 type catalogMutex struct{ *semaphore.Weighted }
 
 func (mu catalogMutex) Lock()   { _ = mu.Acquire(context.Background(), 1) }
@@ -124,16 +132,31 @@ func OpenCatalog(ctx context.Context, store CatalogStore) (*Catalog, error) {
 // Host supports binding/restoration, but rejects direct Install/Retain/Revoke calls.
 func (catalog *Catalog) Host() *Host { return catalog.host }
 
+func (catalog *Catalog) acquire(ctx context.Context) error {
+	if err := managementContextError(ctx); err != nil {
+		return err
+	}
+	if err := catalog.mu.Acquire(ctx, 1); err != nil {
+		return errors.Join(ErrCatalogUnavailable, err)
+	}
+	if err := managementContextError(ctx); err != nil {
+		catalog.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
 func (catalog *Catalog) Refresh(ctx context.Context) error {
-	catalog.mu.Lock()
+	if err := catalog.acquire(ctx); err != nil {
+		return err
+	}
 	defer catalog.mu.Unlock()
 	return catalog.refreshLocked(ctx)
 }
 
 func (catalog *Catalog) refreshLocked(ctx context.Context) error {
-	if ctx == nil || ctx.Err() != nil {
-		catalog.host.state.Store(nil)
-		return ErrCatalogUnavailable
+	if err := managementContextError(ctx); err != nil {
+		return err
 	}
 	var snapshot CatalogSnapshot
 	var err error
@@ -320,7 +343,9 @@ func (catalog *Catalog) update(ctx context.Context, change func(*CatalogSnapshot
 }
 
 func (catalog *Catalog) updateExpected(ctx context.Context, expected *int64, change func(*CatalogSnapshot) error) error {
-	catalog.mu.Lock()
+	if err := catalog.acquire(ctx); err != nil {
+		return err
+	}
 	defer catalog.mu.Unlock()
 	if err := catalog.refreshLocked(ctx); err != nil {
 		return err
@@ -483,14 +508,19 @@ func revokeCatalogVersion(next *CatalogSnapshot, key, version string) error {
 
 // List refreshes durable state and returns metadata without source bytes.
 func (catalog *Catalog) List(ctx context.Context) ([]PackageInfo, int64, error) {
-	catalog.mu.Lock()
+	if err := catalog.acquire(ctx); err != nil {
+		return nil, 0, err
+	}
 	defer catalog.mu.Unlock()
 	if err := catalog.refreshLocked(ctx); err != nil {
 		return nil, 0, err
 	}
 	result := make([]PackageInfo, 0, len(catalog.snapshot.Packages))
 	for _, entry := range catalog.snapshot.Packages {
-		p, _ := LoadPackage(bytes.NewReader(entry.Document), entry.Digest)
+		p, err := LoadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest)
+		if err != nil {
+			return nil, 0, err
+		}
 		result = append(result, PackageInfo{Key: p.manifest.Key, Version: p.manifest.Version, Digest: entry.Digest, Active: entry.Active, Enabled: entry.Enabled, Revoked: entry.Revoked})
 	}
 	sort.Slice(result, func(i, j int) bool {

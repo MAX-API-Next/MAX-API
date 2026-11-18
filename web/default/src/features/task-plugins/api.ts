@@ -84,6 +84,7 @@ export class PluginError extends Error {
     public readonly repair?:
       | { code: 'invalid_channel_mapping'; channel_id: number }
       | { code: 'invalid_task_data'; task_id: string }
+      | { code: 'invalid_plugin_pricing'; option_key: string }
   ) {
     super(message)
   }
@@ -121,6 +122,10 @@ function requestError(
         code: z.literal('invalid_task_data'),
         task_id: z.string().regex(/^[1-9][0-9]*$/),
       }),
+      z.object({
+        code: z.literal('invalid_plugin_pricing'),
+        option_key: z.string().min(1).max(128),
+      }),
     ])
     .safeParse(payload)
   return new PluginError(
@@ -143,6 +148,7 @@ async function request<T>(
         code: z.unknown().optional(),
         channel_id: z.unknown().optional(),
         task_id: z.unknown().optional(),
+        option_key: z.unknown().optional(),
       })
       .parse((await run()).data)
     if (!raw.success)

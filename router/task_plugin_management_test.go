@@ -18,6 +18,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	"github.com/MAX-API-Next/MAX-API/service"
+	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
@@ -195,6 +196,24 @@ func TestTaskPluginManagementDeletionRequiresRootAcknowledgementAndNoReferences(
 	command["expected_revision"] = "0"
 	require.Equal(t, 409, request(command, true).Code)
 	command["expected_revision"] = "1"
+	adminLogin := httptest.NewRecorder()
+	engine.ServeHTTP(adminLogin, httptest.NewRequest("GET", "/plugin-test-login/admin", nil))
+	adminBody, err := common.Marshal(command)
+	require.NoError(t, err)
+	adminRequest := httptest.NewRequest("POST", "/api/task_plugins/mutate", bytes.NewReader(adminBody))
+	adminRequest.Header.Set("Content-Type", "application/json")
+	adminRequest.Header.Set("New-Api-User", "59123101")
+	for _, cookie := range adminLogin.Result().Cookies() {
+		adminRequest.AddCookie(cookie)
+	}
+	adminResponse := httptest.NewRecorder()
+	engine.ServeHTTP(adminResponse, adminRequest)
+	require.Equal(t, http.StatusOK, adminResponse.Code, adminResponse.Body.String())
+	require.JSONEq(t, `{"success":false,"message":"auth.insufficient_privilege"}`, adminResponse.Body.String())
+	unchanged, err := model.NewTaskPluginCatalogStore(db).Load(t.Context())
+	require.NoError(t, err)
+	require.EqualValues(t, 1, unchanged.Revision)
+	require.Len(t, unchanged.Packages, 1)
 	channel := model.Channel{Models: "fixture-model"}
 	require.NoError(t, db.Create(&channel).Error)
 	response := request(command, true)
@@ -221,6 +240,15 @@ func TestTaskPluginManagementDeletionRequiresRootAcknowledgementAndNoReferences(
 	require.NotContains(t, response.Body.String(), "private-task-secret")
 	require.NotContains(t, response.Body.String(), "private-provider-id")
 	require.NoError(t, db.Delete(malformed).Error)
+	invalidPrice := &model.Option{Key: billing_setting.PluginBillingExprOption, Value: `{"bad-key":"private-price-expression"}`}
+	require.NoError(t, db.Create(invalidPrice).Error)
+	response = request(command, true)
+	require.Equal(t, 422, response.Code, response.Body.String())
+	require.Contains(t, response.Body.String(), `"code":"invalid_plugin_pricing"`)
+	require.Contains(t, response.Body.String(), `"option_key":"billing_setting.plugin_billing_expr"`)
+	require.NotContains(t, response.Body.String(), "bad-key")
+	require.NotContains(t, response.Body.String(), "private-price-expression")
+	require.NoError(t, db.Where(map[string]any{"key": invalidPrice.Key}).Delete(&model.Option{}).Error)
 	response = request(command, true)
 	require.Equal(t, 200, response.Code, response.Body.String())
 	require.Contains(t, response.Body.String(), `"revision":"2"`)

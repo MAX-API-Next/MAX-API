@@ -23,6 +23,11 @@ its existing compilation, manifest, size and immutable-version checks. A supplie
 hash is always checked; a mismatch is rejected. Computed digests identify bytes
 and do not authenticate a publisher.
 
+For a UTF-8 BOM-prefixed MAX JSON package, upgrade every catalog reader before
+installation or activation, including format 1, and acknowledge `bom_nodes_ready`.
+Validation alone does not establish that older nodes accept those retained bytes.
+See the [BOM compatibility guidance](../pkg/taskplugin/management.md#utf-8-bom-packages).
+
 For a separately downloaded official `plugin.js`, the publisher's repository-root
 `index.json` lists each version's `sha256`. Upload the exact published bytes:
 Git's Windows line-ending conversion changes the hash. Extract the Git blob or
@@ -40,7 +45,7 @@ receipt continues to reject identical bytes. Changed bytes under the same
 identity are always rejected.
 
 Before acknowledging deletion readiness, upgrade every catalog consumer,
-channel writer **and task writer**, including workers that persist serialized
+channel writer, task writer **and pricing writer**, including workers that persist serialized
 historical task references. Read the [management upgrade guide](../pkg/taskplugin/management.md)
 before confirming readiness. Legacy receipts without a model index are readable
 but excluded from model-name protection; reconcile their names from trusted

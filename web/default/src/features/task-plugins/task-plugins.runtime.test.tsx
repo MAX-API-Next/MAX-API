@@ -1,5 +1,6 @@
 // Copyright (C) 2023-2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 import { useMemo } from 'react'
+import { AxiosError } from 'axios'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   createMemoryHistory,
@@ -282,6 +283,10 @@ test('closing details after a refresh restores the same opening button', async (
 for (const repair of [
   { code: 'invalid_channel_mapping', channel_id: 23 },
   { code: 'invalid_task_data', task_id: '9007199254740993' },
+  {
+    code: 'invalid_plugin_pricing',
+    option_key: 'billing_setting.plugin_billing_expr',
+  },
 ] as const) {
   test(`repair feedback translates on language changes (${repair.code})`, async () => {
     const originalAdapter = api.defaults.adapter
@@ -295,13 +300,22 @@ for (const repair of [
     )
     const f = fixture()
     f.api.mutate = taskPluginAPI.mutate
-    api.defaults.adapter = async (config) => ({
-      config,
-      status: 200,
-      statusText: 'fixture',
-      headers: {},
-      data: { success: false, message: 'English fallback', ...repair },
-    })
+    api.defaults.adapter = async (config) => {
+      const response = {
+        config,
+        status: 422,
+        statusText: 'fixture',
+        headers: {},
+        data: { success: false, message: 'English fallback', ...repair },
+      }
+      throw new AxiosError(
+        'controlled-repair',
+        undefined,
+        config,
+        undefined,
+        response
+      )
+    }
     try {
       const v = f.view()
       fireEvent.click(
@@ -321,13 +335,21 @@ for (const repair of [
       await act(async () => {
         await env.i18n.changeLanguage('fr')
       })
-      const key =
-        repair.code === 'invalid_channel_mapping'
-          ? 'Channel {{id}} has an invalid model mapping; repair it before deleting the API extension'
-          : 'Task record {{id}} has invalid private data; repair it before deleting the API extension'
-      const id =
-        repair.code === 'invalid_channel_mapping' ? '23' : repair.task_id
-      await v.findByText(french.translation[key].replace('{{id}}', id))
+      let translated: string
+      if (repair.code === 'invalid_channel_mapping') {
+        translated = french.translation[
+          'Channel {{id}} has an invalid model mapping; repair it before deleting the API extension'
+        ].replace('{{id}}', '23')
+      } else if (repair.code === 'invalid_task_data') {
+        translated = french.translation[
+          'Task record {{id}} has invalid private data; repair it before deleting the API extension'
+        ].replace('{{id}}', repair.task_id)
+      } else {
+        translated = french.translation[
+          'Plugin pricing option {{key}} is invalid; repair it before deleting the API extension'
+        ].replace('{{key}}', repair.option_key)
+      }
+      await v.findByText(translated)
     } finally {
       api.defaults.adapter = originalAdapter
       await act(async () => {
@@ -336,6 +358,109 @@ for (const repair of [
     }
   })
 }
+
+test('a confirmed deletion removes the closed opener before refresh and keeps focus usable', async () => {
+  const f = fixture()
+  const other = {
+    ...entry,
+    key: 'other',
+    name: 'Other Fixture',
+    models: ['other-model'],
+    digest: 'b'.repeat(64),
+  }
+  f.state.entries.push(other)
+  const v = f.view()
+  const opener = await v.findByRole('button', { name: 'Details kling@1.2.0' })
+  const receipt = deferred<void>()
+  const refresh = deferred<Awaited<ReturnType<TaskPluginAPI['read']>>>()
+  f.api.read = () => refresh.promise
+  f.api.mutate = async (command) => {
+    f.writes.push(command)
+    await receipt.promise
+    f.state.entries = [other]
+    f.state.revision = '2'
+    return {
+      committed: true,
+      revision: '2',
+      execution_ready: false,
+      admission_ready: false,
+    }
+  }
+  try {
+    fireEvent.click(opener)
+    const panel = within(await v.findByRole('dialog'))
+    fireEvent.click(panel.getByRole('button', { name: 'Delete version' }))
+    fireEvent.click(panel.getByRole('checkbox'))
+    fireEvent.click(panel.getByRole('button', { name: 'Confirm' }))
+    await waitFor(() => assert.equal(f.writes.length, 1))
+    fireEvent.keyDown(document, { key: 'Escape', code: 'Escape', keyCode: 27 })
+    await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
+    await waitFor(() => assert.equal(document.activeElement, opener))
+    receipt.resolve(undefined)
+    await v.findByText('Loading...')
+    await waitFor(() =>
+      assert.equal(
+        v.queryByRole('button', { name: 'Details kling@1.2.0' }),
+        null
+      )
+    )
+    const search = v.getByRole('textbox', {
+      name: 'Search API extensions',
+    }) as HTMLInputElement
+    assert.equal(search.disabled, false)
+    await waitFor(() => assert.equal(document.activeElement, search))
+    assert.equal(
+      (
+        v.getByRole('button', {
+          name: 'Details other@1.2.0',
+        }) as HTMLButtonElement
+      ).disabled,
+      false
+    )
+  } finally {
+    receipt.resolve(undefined)
+    refresh.resolve({ revision: '2', entries: [other] })
+  }
+})
+
+test('a failed bundle replacement clears the previous local filename', async () => {
+  const f = fixture()
+  f.api.bundled = async () => [
+    { key: 'kling', version: '1.2.0', sha256: 'a'.repeat(64) },
+  ]
+  f.api.bundle = async () => {
+    throw new PluginError('read', 'Official plugin source could not be read')
+  }
+  const v = f.view()
+  await v.findByText('Kling Fixture')
+  fireEvent.click(v.getByRole('button', { name: 'Import API extension' }))
+  const panel = within(await v.findByRole('dialog'))
+  fireEvent.change(panel.getByLabelText('Package file'), {
+    target: {
+      files: [
+        {
+          name: 'previous.js',
+          size: 2,
+          arrayBuffer: async () => new TextEncoder().encode('{}').buffer,
+        },
+      ],
+    },
+  })
+  await panel.findByText('previous.js')
+  fireEvent.change(await panel.findByLabelText('Bundled plugins'), {
+    target: { value: 'kling@1.2.0' },
+  })
+  await panel.findByText('Official plugin source could not be read')
+  assert.equal(panel.queryByText('previous.js'), null)
+  assert.equal(
+    (
+      panel.getByRole('button', {
+        name: 'Validate package',
+      }) as HTMLButtonElement
+    ).disabled,
+    true
+  )
+})
 
 test('custom package validation and installation work without an external SHA-256', async () => {
   const f = fixture()

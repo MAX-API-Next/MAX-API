@@ -9,15 +9,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type cancelOnSecondCheck struct {
+type cancelDuringReceiptScan struct {
 	context.Context
 	cancel context.CancelFunc
 	checks int
 }
 
-func (ctx *cancelOnSecondCheck) Err() error {
+func (ctx *cancelDuringReceiptScan) Err() error {
 	ctx.checks++
-	if ctx.checks == 2 {
+	if ctx.checks == 3 {
 		ctx.cancel()
 	}
 	return ctx.Context.Err()
@@ -26,8 +26,8 @@ func (ctx *cancelOnSecondCheck) Err() error {
 func TestCatalogReceiptValidationHonorsCancellation(t *testing.T) {
 	base, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	ctx := &cancelOnSecondCheck{Context: base, cancel: cancel}
-	next := CatalogSnapshot{Revision: 1, Deletions: []PackageDeletion{{Key: "old", Version: "1.0.0", Digest: strings.Repeat("a", 64)}}}
+	ctx := &cancelDuringReceiptScan{Context: base, cancel: cancel}
+	next := CatalogSnapshot{Revision: 1, Deletions: []PackageDeletion{{Key: "old", Version: "1.0.0", Digest: strings.Repeat("a", 64)}, {Key: "another", Version: "1.0.0", Digest: strings.Repeat("b", 64)}}}
 	require.NoError(t, ValidateCatalogTransition(CatalogSnapshot{}, next))
 	require.ErrorIs(t, ValidateCatalogTransitionContext(ctx, CatalogSnapshot{}, next), context.Canceled)
 }

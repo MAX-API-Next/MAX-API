@@ -128,16 +128,26 @@ async function runRootFixture(
   try {
     await run(mount)
   } finally {
-    await act(async () => {
-      await client.cancelQueries()
-      cleanup()
-      client.clear()
-      await new Promise<void>((resolve) => setTimeout(resolve, 0))
-    })
-    api.defaults.baseURL = original
-    if (originalCookie === undefined) delete api.defaults.headers.common.Cookie
-    else api.defaults.headers.common.Cookie = originalCookie
-    useAuthStore.getState().auth.setUser(previous)
+    try {
+      await waitFor(() => assert.equal(client.isMutating(), 0), {
+        timeout: 3000,
+      })
+    } finally {
+      try {
+        await act(async () => {
+          await client.cancelQueries()
+          cleanup()
+          client.clear()
+          await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        })
+      } finally {
+        api.defaults.baseURL = original
+        if (originalCookie === undefined)
+          delete api.defaults.headers.common.Cookie
+        else api.defaults.headers.common.Cookie = originalCookie
+        useAuthStore.getState().auth.setUser(previous)
+      }
+    }
   }
 }
 

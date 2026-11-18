@@ -19,7 +19,9 @@ type ManagementEntry struct {
 }
 
 func (catalog *Catalog) ManagementSnapshot(ctx context.Context) ([]ManagementEntry, int64, error) {
-	catalog.mu.Lock()
+	if err := catalog.acquire(ctx); err != nil {
+		return nil, 0, err
+	}
 	defer catalog.mu.Unlock()
 	if err := managementContextError(ctx); err != nil {
 		return nil, 0, err
@@ -54,11 +56,8 @@ type ManagementMutation struct {
 // ValidateInstall checks the current catalog without committing an installation.
 // The eventual write still requires the caller's observed revision and CAS.
 func (catalog *Catalog) ValidateInstall(ctx context.Context, pkg *Package) error {
-	if err := managementContextError(ctx); err != nil {
+	if err := catalog.acquire(ctx); err != nil {
 		return err
-	}
-	if err := catalog.mu.Acquire(ctx, 1); err != nil {
-		return errors.Join(ErrCatalogUnavailable, err)
 	}
 	defer catalog.mu.Unlock()
 	if err := managementContextError(ctx); err != nil {
@@ -123,7 +122,9 @@ func (catalog *Catalog) MutateExpected(ctx context.Context, expected int64, muta
 }
 
 func (catalog *Catalog) deleteExpected(ctx context.Context, expected int64, key, version string) error {
-	catalog.mu.Lock()
+	if err := catalog.acquire(ctx); err != nil {
+		return err
+	}
 	defer catalog.mu.Unlock()
 	if err := managementContextError(ctx); err != nil {
 		return err

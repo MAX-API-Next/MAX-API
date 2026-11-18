@@ -125,6 +125,9 @@ func LoadPackageContext(ctx context.Context, reader io.Reader, expectedSHA256 st
 			return nil, ErrPluginCompile
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return &Package{manifest: cloneManifest(document.Manifest), source: document.Source, digest: hex.EncodeToString(actual[:]), size: len(data), document: data, formatVersion: document.FormatVersion, program: program}, nil
 }
 

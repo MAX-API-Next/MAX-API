@@ -19,6 +19,14 @@ task updates now validate recursive legacy map/array references as well as typed
 bindings and frozen plans under the catalog-head lock. Unknown fields without
 references remain writable; omitted fields do not participate in the check.
 
+Package loading, compilation/metadata checks and catalog operations share the
+administrative operation's 10-second context, starting before candidate loading.
+The existing JavaScript per-call execution limits remain secondary bounds.
+Catalog mutex waits use that context too; an operation canceled while waiting
+does not read storage or unpublish an otherwise healthy Host.
+
+## UTF-8 BOM packages
+
 File uploads preserve a leading UTF-8 BOM and line endings. The server accepts a
 leading BOM in JSON packages while hashing and retaining the original bytes.
 Installation and activation require `bom_nodes_ready: true` for these packages,
@@ -28,6 +36,8 @@ acknowledgement separately from the upload's optional publisher hash.
 Previously installed text normalized by older clients keeps its immutable
 identity; uploading the original BOM-bearing file does not overwrite that
 identity. No migration rewrites existing packages or their digests.
+
+## Backup and restore
 
 Back up and restore the catalog head, all retained packages and all deletion
 receipts as one consistent set. The last-deletion marker detects loss of the
@@ -41,6 +51,8 @@ Stop every catalog reader and writer before restoring an older backup. Restore
 the consistent set, create fresh Catalog instances, and verify their load before
 resuming traffic. A live instance remembers its highest observed revision and
 will reject a rollback; repeated Refresh calls cannot reset that history.
+
+## Root management API
 
 All management routes require fresh Root authentication:
 
@@ -96,12 +108,29 @@ that earlier revision correctly conflicts rather than replacing the bootstrap.
 Deletion also checks malformed historical data before it can prove that no
 references remain. An unrelated channel with an invalid model mapping blocks
 deletion with HTTP 422, `code: "invalid_channel_mapping"` and `channel_id`.
-An unreadable historical task blocks it with HTTP 422,
+Invalid historical task JSON, or an object that cannot be decoded into typed
+task private data, blocks it with HTTP 422,
 `code: "invalid_task_data"` and the decimal-string database row `task_id`.
+Historical root arrays are checked recursively for references; an array with
+no matching reference is not rejected solely because the typed decoder cannot
+read it. New serialized writes still reject root arrays.
+Malformed plugin pricing returns HTTP 422, `code: "invalid_plugin_pricing"`
+and the public `option_key`; no stored expression or option value is returned.
 Repair the identified record before retrying; these precondition errors do not
 remove the package or suspend an otherwise healthy local Host, and never expose
-the record's private payload. PostgreSQL writers must have access to the deletion
-table: a table hidden by role privileges is an error, not an absent optional catalog.
+the record's private payload. MySQL and PostgreSQL writers must have access to
+the deletion table: a table hidden by role privileges is an error, not an absent
+optional catalog. MySQL confirms an apparently absent table with a direct empty
+SELECT; only error 1146 permits the legacy missing-table path. Other errors,
+including 1142 (access denied), block the write.
+
+The current PostgreSQL writer paths use `SELECT ... FOR UPDATE` on catalog-head,
+retained-version and deletion-receipt rows. In addition to SELECT, PostgreSQL
+requires UPDATE privilege on at least one column of each table being locked,
+even when the receipt table is empty. A SELECT-only catalog reader role is not a
+writer role. Provision the required lock/write privileges before serving writes;
+the head bootstrap/update paths also require their INSERT/UPDATE privileges.
+See the [PostgreSQL SELECT privilege requirements](https://www.postgresql.org/docs/current/sql-select.html).
 
 Channel creates and model/mapping updates acquire the same catalog-head lock as
 deletion, including batch, tag, Save and map-based writes. Deletion receipts now
@@ -110,6 +139,12 @@ TEXT on SQLite/PostgreSQL); migrate
 this column on the master and upgrade every channel writer before relying on
 the guard. The guard rejects late references to deleted models, permits an
 explicit identical reinstallation, and leaves unrelated channel patches alone.
+Task binding, frozen-plan and pricing-envelope identities remain reference
+containers. The known `billing_context.task_billing.fields` and `matched` maps
+contain arbitrary billing facts, so their values are not interpreted as package
+identities; other historical reference objects remain recursively checked.
+Serialized TEXT and binary task private-data updates decode into the same fresh
+typed metadata, preserving the original binding and funding identity on reload.
 Old experimental receipts without this index remain readable, but names of
 already deleted models cannot be reconstructed from a digest alone.
 These legacy receipts are explicitly excluded from model-name protection until

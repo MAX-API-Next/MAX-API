@@ -115,6 +115,20 @@ export function useTaskPluginCatalog(transport: TaskPluginAPI) {
         'Plugin catalog updated. Execution and paid admission remain unavailable.'
       )
       onAccepted?.()
+      if (command.action === 'delete') {
+        const { key, version } = command
+        // A validated committed receipt certifies this removal. Keep the old
+        // revision until refresh; other mutations remain blocked while busy.
+        setSnapshot(
+          (current) =>
+            current && {
+              ...current,
+              entries: current.entries.filter(
+                (entry) => entry.key !== key || entry.version !== version
+              ),
+            }
+        )
+      }
     } catch (e) {
       if (!mounted.current) return
       if (!(e instanceof PluginError) || e.kind === 'unknown') {

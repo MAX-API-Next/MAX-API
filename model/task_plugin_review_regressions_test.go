@@ -14,8 +14,10 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
+	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/glebarez/sqlite"
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -909,23 +911,167 @@ func TestTaskPluginPricingReadDetectsConcurrentBootstrap(t *testing.T) {
 	require.ErrorIs(t, err, ErrModelPricingConflict)
 }
 
-func TestTaskPluginTypedAndSerializedNestedReferencesMatch(t *testing.T) {
+func TestTaskPluginBillingFactMapsAreNotReferences(t *testing.T) {
 	db := deletionDB(t)
 	store := NewTaskPluginCatalogStore(db)
 	_, entry := catalogFixture(t, "stored", "1.0.0", "nested-facts")
 	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
 	require.NoError(t, err)
-	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
-	require.NoError(t, err)
-	private := TaskPrivateData{BillingContext: &TaskBillingContext{TaskBilling: &types.TaskBillingResult{Fields: map[string]string{"plugin_key": "stored", "version": "1.0.0"}}}}
+	facts := map[string]string{"plugin_key": "stored", "version": "1.0.0", "package_digest": "provider-tag"}
+	private := TaskPrivateData{BillingContext: &TaskBillingContext{TaskBilling: &types.TaskBillingResult{Fields: facts, Matched: facts}}}
 	raw, err := common.Marshal(private)
 	require.NoError(t, err)
 	for name, value := range map[string]any{"typed": private, "serialized": raw} {
 		t.Run(name, func(t *testing.T) {
 			row := &Task{TaskID: name}
 			require.NoError(t, db.Create(row).Error)
-			err := db.Model(row).Updates(map[string]any{"private_data": value}).Error
-			require.ErrorIs(t, err, taskplugin.ErrBindingRejected)
+			require.NoError(t, db.Model(row).Updates(map[string]any{"private_data": value}).Error)
+		})
+	}
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.NoError(t, err, "known billing fact maps must not block deletion either")
+}
+
+func TestTaskPluginPrivateDataStringAndBytesSurviveFreshReload(t *testing.T) {
+	db := deletionDB(t)
+	_, entry := catalogFixture(t, "stored", "1.0.0", "storage-roundtrip")
+	_, err := NewTaskPluginCatalogStore(db).CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	zero := int64(0)
+	private := TaskPrivateData{PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", Version: "1.0.0", PackageDigest: entry.Digest}, BillingSource: BillingSettlementSourceWallet, BillingRequestId: "original-request", TokenId: 73, BillingContext: &TaskBillingContext{TaskUsage: &types.TaskUsage{OutputDurationMs: &zero}}}
+	raw, err := common.Marshal(private)
+	require.NoError(t, err)
+	for name, value := range map[string]any{"text": string(raw), "blob": raw} {
+		t.Run(name, func(t *testing.T) {
+			row := &Task{TaskID: "roundtrip-" + name}
+			require.NoError(t, db.Create(row).Error)
+			require.NoError(t, db.Model(row).Updates(map[string]any{"private_data": value}).Error)
+			var stored any
+			require.NoError(t, db.Model(row).Select("private_data").Row().Scan(&stored))
+			if name == "text" {
+				require.IsType(t, "", stored)
+			} else {
+				require.IsType(t, []byte{}, stored)
+			}
+			var fresh Task
+			require.NoError(t, db.First(&fresh, row.ID).Error)
+			require.Equal(t, private, fresh.PrivateData)
+		})
+	}
+}
+
+func TestTaskPluginPrivateDataScanDoesNotMergeStaleIdentity(t *testing.T) {
+	before := TaskPrivateData{TokenId: 73, BillingRequestId: "original-request", PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", UserID: 71}}
+	current := before
+	require.Error(t, current.Scan(`{"token_id":99,"plugin_binding":{"user_id":"invalid"}}`))
+	require.Equal(t, before, current, "failed decoding cannot partially replace the funding identity")
+	require.NoError(t, current.Scan(nil))
+	require.Equal(t, TaskPrivateData{}, current)
+	require.NoError(t, current.Scan([]byte{}))
+	require.Equal(t, TaskPrivateData{}, current)
+	require.Error(t, current.Scan(42))
+	require.Equal(t, TaskPrivateData{}, current)
+}
+
+func TestTaskPluginHistoricalBindingInPlannedEvidenceUpdates(t *testing.T) {
+	for _, kind := range []string{"evidence", "planned", "manual", "submit"} {
+		t.Run(kind, func(t *testing.T) {
+			db := deletionDB(t)
+			require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+			previous := DB
+			DB = db
+			t.Cleanup(func() { DB = previous })
+			_, entry := catalogFixture(t, "stored", "1.0.0", "planned-history")
+			_, err := NewTaskPluginCatalogStore(db).CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+			require.NoError(t, err)
+			row := &Task{TaskID: "planned-" + kind, UserId: 71, Status: TaskStatusInProgress, Quota: 20, UpdatedAt: 1, PrivateData: TaskPrivateData{PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", UserID: 71}}}
+			require.NoError(t, db.Session(&gorm.Session{SkipHooks: true}).Create(row).Error)
+			var candidate Task
+			require.NoError(t, db.First(&candidate, row.ID).Error)
+			candidate.PrivateData.PendingTerminalStatus = TaskStatusSuccess
+			input := BillingSettlementInput{OperationKey: BillingTaskFinalizeOperationKey(row.ID), Source: BillingSettlementSourceWallet, UserID: 71, TaskID: row.ID, TaskQuota: 20, TaskQuotaTarget: 30, FundingDelta: 10}
+			var won bool
+			switch kind {
+			case "evidence":
+				won, err = candidate.UpdateWithStatusAndPendingTerminalEvidence(TaskStatusInProgress, 1)
+			case "planned":
+				won, err = candidate.UpdateWithStatusAndSettlementIntent(TaskStatusInProgress, 1, input)
+			case "manual":
+				input.FundingDelta, input.TaskQuotaTarget = 0, 20
+				won, err = candidate.UpdateWithStatusAndManualSettlement(TaskStatusInProgress, 1, input, "needs reconciliation")
+			case "submit":
+				candidate.PrivateData.UpstreamTaskID = "accepted-provider-id"
+				err = candidate.UpdateWithSettlementIntent(&input)
+				won = err == nil
+			}
+			require.NoError(t, err)
+			require.True(t, won)
+			var saved Task
+			require.NoError(t, db.First(&saved, row.ID).Error)
+			require.EqualValues(t, TaskStatusInProgress, saved.Status)
+			require.Equal(t, 20, saved.Quota, "intent creation must not claim applied funding")
+			require.Equal(t, row.PrivateData.PluginBinding, saved.PrivateData.PluginBinding)
+			require.EqualValues(t, TaskStatusSuccess, saved.PrivateData.PendingTerminalStatus)
+		})
+	}
+}
+
+type hiddenDeletionMySQLDialect struct{ gorm.Dialector }
+
+func (hiddenDeletionMySQLDialect) Name() string { return "mysql" }
+func (dialect hiddenDeletionMySQLDialect) Migrator(db *gorm.DB) gorm.Migrator {
+	return hiddenDeletionMigrator{dialect.Dialector.Migrator(db)}
+}
+
+func TestTaskPluginMySQLHiddenDeletionTableFailsClosed(t *testing.T) {
+	db := deletionDB(t)
+	_, entry := catalogFixture(t, "stored", "1.0.0", "mysql-hidden")
+	_, err := NewTaskPluginCatalogStore(db).CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	original := db.Dialector
+	db.Dialector = hiddenDeletionMySQLDialect{original}
+	t.Cleanup(func() { db.Dialector = original })
+	probes := 0
+	require.NoError(t, db.Callback().Row().Before("gorm:row").Register("simulate_mysql_denied", func(tx *gorm.DB) {
+		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginDeletion") {
+			probes++
+			tx.AddError(&mysqldriver.MySQLError{Number: 1142, Message: "synthetic denied"})
+		}
+	}))
+	require.ErrorIs(t, db.Create(&Channel{Models: "catalog-model"}).Error, taskplugin.ErrCatalogUnavailable)
+	require.ErrorIs(t, db.Create(&Task{TaskID: "mysql-hidden", PrivateData: TaskPrivateData{PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", Version: "1.0.0", PackageDigest: entry.Digest}}}).Error, taskplugin.ErrCatalogUnavailable)
+	require.Equal(t, 2, probes, "controlled error-code probe, not a real MySQL role test")
+}
+
+func TestTaskPluginMySQLDeletionProbeDistinguishesMissingFromFailure(t *testing.T) {
+	for _, code := range []uint16{0, 1142, 1146, 2006} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			db := deletionDB(t)
+			original := db.Dialector
+			db.Dialector = hiddenDeletionMySQLDialect{original}
+			t.Cleanup(func() { db.Dialector = original })
+			called := false
+			require.NoError(t, db.Callback().Row().Before("gorm:row").Register("simulate_mysql_probe", func(tx *gorm.DB) {
+				if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginDeletion") {
+					called = true
+					if code != 0 {
+						tx.AddError(fmt.Errorf("probe: %w", &mysqldriver.MySQLError{Number: code, Message: "synthetic"}))
+					}
+				}
+			}))
+			present, err := taskPluginDeletionTableAvailable(db)
+			require.True(t, called)
+			switch code {
+			case 0:
+				require.NoError(t, err)
+				require.True(t, present)
+			case 1146:
+				require.NoError(t, err)
+				require.False(t, present)
+			default:
+				require.ErrorIs(t, err, taskplugin.ErrCatalogUnavailable)
+				require.False(t, present)
+			}
 		})
 	}
 }
@@ -984,6 +1130,33 @@ func TestTaskPluginMalformedHistoricalTaskIsRepairablePrecondition(t *testing.T)
 	require.NotContains(t, err.Error(), "private-secret")
 	_, hostErr := catalog.Host().Resolve(binding, actor)
 	require.NoError(t, hostErr, "a repairable task precondition must retain the healthy Host")
+}
+
+func TestTaskPluginMalformedPricingIsRepairablePrecondition(t *testing.T) {
+	for _, invalid := range []string{`{"bad-key":"private-price-expression"}`, `{"bad-key":7}`} {
+		t.Run(invalid, func(t *testing.T) {
+			db := deletionDB(t)
+			store := NewTaskPluginCatalogStore(db)
+			pkg, _ := catalogFixture(t, "stored", "1.0.0", "source")
+			catalog, err := taskplugin.OpenCatalog(t.Context(), store)
+			require.NoError(t, err)
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			actor := taskplugin.Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "repair-pricing"}
+			binding, err := catalog.Host().Bind(actor, "GET", "/stored/one", "catalog-model", taskusage.MiniMaxH3Contract())
+			require.NoError(t, err)
+			require.NoError(t, db.Create(&Option{Key: billing_setting.PluginBillingExprOption, Value: invalid}).Error)
+			err = catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"})
+			require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+			require.NotErrorIs(t, err, taskplugin.ErrCatalogUnavailable)
+			_, err = catalog.Host().Resolve(binding, actor)
+			require.NoError(t, err)
+			snapshot, err := store.Load(t.Context())
+			require.NoError(t, err)
+			require.EqualValues(t, 1, snapshot.Revision)
+			require.Len(t, snapshot.Packages, 1)
+			require.Empty(t, snapshot.Deletions)
+		})
+	}
 }
 
 type hiddenDeletionDialect struct{ gorm.Dialector }

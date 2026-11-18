@@ -3,15 +3,41 @@ package taskplugin
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/MAX-API-Next/MAX-API/common"
 
 	"github.com/stretchr/testify/require"
 )
 
 const validUploadSource = `export const meta = {apiVersion: 1, key: "custom-upload", name: "Custom", version: "1.0.0", models: ["custom-model"]}; export function buildSubmitRequest(){return {}} export function parseSubmitResponse(){return {}} export function buildQueryRequest(){return {}} export function parseTaskResult(){return {}}`
+
+func TestLoadUploadContextBoundsRawAndEnvelopeMetadata(t *testing.T) {
+	source := "for(;;){};" + validUploadSource
+	document, err := common.Marshal(PackageDocument{FormatVersion: 3, Manifest: validManifest(), Source: source})
+	require.NoError(t, err)
+	for name, data := range map[string][]byte{"raw": []byte(source), "envelope": document} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+			defer cancel()
+			started := time.Now()
+			_, err := LoadUploadContext(ctx, bytes.NewReader(data), "")
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.Less(t, time.Since(started), 2*time.Second)
+		})
+	}
+	original, err := LoadUpload(bytes.NewReader([]byte(validUploadSource)), "")
+	require.NoError(t, err)
+	bounded, err := LoadUploadContext(t.Context(), bytes.NewReader([]byte(validUploadSource)), "")
+	require.NoError(t, err)
+	require.Equal(t, original.Document(), bounded.Document())
+	require.Equal(t, original.Digest(), bounded.Digest())
+}
 
 func TestLoadUploadAllowsOmittedPinButPreservesComputedIdentity(t *testing.T) {
 	source := []byte(validUploadSource)

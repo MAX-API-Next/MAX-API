@@ -45,6 +45,7 @@ func taskPluginAdminError(c *gin.Context, err error) {
 	status, message := http.StatusBadRequest, "Invalid task plugin request"
 	var mapping *taskplugin.CatalogChannelMappingError
 	var taskData *taskplugin.CatalogTaskDataError
+	var pricingData *taskplugin.CatalogPricingDataError
 	response := gin.H{"success": false}
 	switch {
 	case errors.As(err, &mapping):
@@ -53,6 +54,9 @@ func taskPluginAdminError(c *gin.Context, err error) {
 	case errors.As(err, &taskData):
 		status, message = http.StatusUnprocessableEntity, fmt.Sprintf("Task record %d has invalid private data; repair it before deleting the API extension", taskData.TaskID)
 		response["code"], response["task_id"] = "invalid_task_data", strconv.FormatInt(taskData.TaskID, 10)
+	case errors.As(err, &pricingData):
+		status, message = http.StatusUnprocessableEntity, fmt.Sprintf("Plugin pricing option %s is invalid; repair it before deleting the API extension", pricingData.OptionKey)
+		response["code"], response["option_key"] = "invalid_plugin_pricing", pricingData.OptionKey
 	case errors.Is(err, taskplugin.ErrCatalogConflict):
 		status, message = http.StatusConflict, "Task plugin catalog changed; refresh before retrying"
 	case errors.Is(err, taskplugin.ErrCatalogInUse):
@@ -140,8 +144,8 @@ func taskPluginAdminRevision(fields map[string]json.RawMessage) (int64, error) {
 	}
 	return n, nil
 }
-func taskPluginAdminPackage(fields map[string]json.RawMessage) (*taskplugin.Package, error) {
-	return taskplugin.LoadUpload(bytes.NewReader([]byte(taskPluginAdminString(fields, "document"))), taskPluginAdminString(fields, "expected_sha256"))
+func taskPluginAdminPackage(ctx context.Context, fields map[string]json.RawMessage) (*taskplugin.Package, error) {
+	return taskplugin.LoadUploadContext(ctx, bytes.NewReader([]byte(taskPluginAdminString(fields, "document"))), taskPluginAdminString(fields, "expected_sha256"))
 }
 
 func GetTaskPluginManagement(c *gin.Context) {
@@ -167,7 +171,9 @@ func ValidateTaskPluginPackage(c *gin.Context) {
 		taskPluginAdminError(c, err)
 		return
 	}
-	pkg, err := taskPluginAdminPackage(fields)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 10*time.Second)
+	defer cancel()
+	pkg, err := taskPluginAdminPackage(ctx, fields)
 	if err != nil {
 		taskPluginAdminError(c, err)
 		return
@@ -177,8 +183,6 @@ func ValidateTaskPluginPackage(c *gin.Context) {
 		taskPluginAdminError(c, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 10*time.Second)
-	defer cancel()
 	if err := catalog.ValidateInstall(ctx, pkg); err != nil {
 		taskPluginAdminError(c, err)
 		return
@@ -197,6 +201,8 @@ func MutateTaskPluginManagement(c *gin.Context) {
 		taskPluginAdminError(c, err)
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 10*time.Second)
+	defer cancel()
 	mutation := taskplugin.ManagementMutation{Action: taskPluginAdminString(fields, "action"), Key: taskPluginAdminString(fields, "key"), Version: taskPluginAdminString(fields, "version")}
 	if mutation.Action == "delete" {
 		var ready bool
@@ -207,7 +213,7 @@ func MutateTaskPluginManagement(c *gin.Context) {
 		}
 	}
 	if mutation.Action == "install" {
-		mutation.Package, err = taskPluginAdminPackage(fields)
+		mutation.Package, err = taskPluginAdminPackage(ctx, fields)
 		if err != nil {
 			taskPluginAdminError(c, err)
 			return
@@ -222,8 +228,6 @@ func MutateTaskPluginManagement(c *gin.Context) {
 		taskPluginAdminError(c, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 10*time.Second)
-	defer cancel()
 	if mutation.Action == "activate" || mutation.Action == "install" {
 		format := 0
 		bomPrefixed := false

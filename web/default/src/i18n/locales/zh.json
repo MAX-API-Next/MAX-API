@@ -6078,6 +6078,7 @@
     "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "所有目录节点均已支持此包格式和 UTF-8 BOM 插件包。旧节点可能暂停整个插件宿主。",
     "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB",
     "Channel {{id}} has an invalid model mapping; repair it before deleting the API extension": "渠道 {{id}} 的模型映射无效，请修复后再删除接口扩展。",
-    "Task record {{id}} has invalid private data; repair it before deleting the API extension": "任务记录 {{id}} 的私有数据无效；请修复后再删除接口扩展"
+    "Task record {{id}} has invalid private data; repair it before deleting the API extension": "任务记录 {{id}} 的私有数据无效；请修复后再删除接口扩展",
+    "Plugin pricing option {{key}} is invalid; repair it before deleting the API extension": "接口扩展计费选项 {{key}} 无效；请修复后再删除接口扩展"
   }
 }

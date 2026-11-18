@@ -6075,6 +6075,7 @@
     "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "Tất cả nút danh mục đều hỗ trợ định dạng gói này và gói UTF-8 có BOM. Các nút cũ có thể tạm dừng toàn bộ máy chủ plugin.",
     "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB",
     "Channel {{id}} has an invalid model mapping; repair it before deleting the API extension": "Ánh xạ mô hình của kênh {{id}} không hợp lệ; hãy sửa trước khi xóa tiện ích mở rộng API.",
-    "Task record {{id}} has invalid private data; repair it before deleting the API extension": "Dữ liệu riêng tư của bản ghi tác vụ {{id}} không hợp lệ; hãy sửa trước khi xóa phần mở rộng API."
+    "Task record {{id}} has invalid private data; repair it before deleting the API extension": "Dữ liệu riêng tư của bản ghi tác vụ {{id}} không hợp lệ; hãy sửa trước khi xóa phần mở rộng API.",
+    "Plugin pricing option {{key}} is invalid; repair it before deleting the API extension": "Tùy chọn tính phí phần mở rộng API {{key}} không hợp lệ; hãy sửa trước khi xóa phần mở rộng API."
   }
 }

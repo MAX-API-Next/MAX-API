@@ -180,6 +180,20 @@ func TestTaskPluginDeletionSerializesWithNewTaskBinding(t *testing.T) {
 	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
 	require.NoError(t, err)
 	locked, release, deleting := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var databases []struct{ Name, File string }
+	require.NoError(t, db.Raw("PRAGMA database_list").Scan(&databases).Error)
+	require.NotEmpty(t, databases)
+	require.NotEmpty(t, databases[0].File)
+	probe, err := gorm.Open(sqlite.Open(databases[0].File+"?_pragma=busy_timeout(50)"), &gorm.Config{Logger: db.Logger})
+	require.NoError(t, err)
+	probeSQL, err := probe.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = probeSQL.Close() })
+	const probeKey = "task_plugin_reference_lock_probe"
+	require.NoError(t, probe.Create(&Option{Key: probeKey, Value: "outside"}).Error)
+	var outside Option
+	require.NoError(t, db.Where(map[string]any{"key": probeKey}).First(&outside).Error)
+	require.Equal(t, "outside", outside.Value)
 	defer func() {
 		select {
 		case <-release:
@@ -219,6 +233,10 @@ func TestTaskPluginDeletionSerializesWithNewTaskBinding(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("deletion writer lock was not reached")
 	}
+	probeErr := probe.Model(&Option{}).Where(map[string]any{"key": probeKey}).UpdateColumn("value", "blocked").Error
+	var sqliteCode interface{ Code() int }
+	require.ErrorAs(t, probeErr, &sqliteCode)
+	require.Equal(t, 5, sqliteCode.Code()&255, "the paused task must already hold SQLite's write lock")
 	close(release)
 	require.NoError(t, <-created)
 	require.ErrorIs(t, <-removed, taskplugin.ErrCatalogInUse, "the reference scan must reject after the concurrent binding commits")

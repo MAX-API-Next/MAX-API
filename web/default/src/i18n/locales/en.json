@@ -6078,6 +6078,7 @@
     "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.",
     "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB",
     "Channel {{id}} has an invalid model mapping; repair it before deleting the API extension": "Channel {{id}} has an invalid model mapping; repair it before deleting the API extension",
-    "Task record {{id}} has invalid private data; repair it before deleting the API extension": "Task record {{id}} has invalid private data; repair it before deleting the API extension"
+    "Task record {{id}} has invalid private data; repair it before deleting the API extension": "Task record {{id}} has invalid private data; repair it before deleting the API extension",
+    "Plugin pricing option {{key}} is invalid; repair it before deleting the API extension": "Plugin pricing option {{key}} is invalid; repair it before deleting the API extension"
   }
 }

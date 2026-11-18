@@ -113,6 +113,7 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
     const id = files.current.next()
     setBundleLoading(true)
     setDocument('')
+    setFileName('')
     setBundledHash(undefined)
     setExpectedHash('')
     setError('')
@@ -195,6 +196,12 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
         resetValidation()
       }
       if (command.action === 'delete') {
+        if (
+          deletingOpener &&
+          deletingOpener.contains(deletingOpener.ownerDocument.activeElement)
+        ) {
+          catalogSearch.current?.focus()
+        }
         if (detailOpener.current === deletingOpener) detailOpener.current = null
         setSelected((current) =>
           current === `${command.key}@${command.version}` ? undefined : current

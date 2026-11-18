@@ -320,6 +320,13 @@ func isolateTaskPluginBillingDatabase(t *testing.T) {
 }
 
 func TestSweepTimedOutHistoricalPluginBindingPreservesRefund(t *testing.T) {
+	for _, asText := range []bool{false, true} {
+		t.Run(fmt.Sprintf("text_%t", asText), func(t *testing.T) { testSweepTimedOutHistoricalPluginBindingPreservesRefund(t, asText) })
+	}
+}
+
+func testSweepTimedOutHistoricalPluginBindingPreservesRefund(t *testing.T, asText bool) {
+	t.Helper()
 	isolateTaskPluginBillingDatabase(t)
 	truncate(t)
 	resetTimedOutTaskSweepCursorForTest(t)
@@ -341,9 +348,14 @@ func TestSweepTimedOutHistoricalPluginBindingPreservesRefund(t *testing.T) {
 	task.PrivateData.PluginBinding = &types.TaskPluginBinding{PluginKey: "stored"}
 	raw, err := common.Marshal(task.PrivateData)
 	require.NoError(t, err)
-	require.NoError(t, model.DB.Model(task).UpdateColumn("private_data", raw).Error, "seed an existing legacy row, not a new binding admission")
+	var storedPrivate any = raw
+	if asText {
+		storedPrivate = string(raw)
+	}
+	require.NoError(t, model.DB.Model(task).UpdateColumn("private_data", storedPrivate).Error, "seed an existing legacy row, not a new binding admission")
 	var historical model.Task
 	require.NoError(t, model.DB.First(&historical, task.ID).Error)
+	require.NotNil(t, historical.PrivateData.PluginBinding)
 	require.Equal(t, "stored", historical.PrivateData.PluginBinding.PluginKey)
 	sweepTimedOutTasks(context.Background())
 	var result model.Task
@@ -381,6 +393,13 @@ func (*historicalCompletionAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskIn
 }
 
 func TestPollingHistoricalPluginBindingCompletesAndSettlesOnce(t *testing.T) {
+	for _, asText := range []bool{false, true} {
+		t.Run(fmt.Sprintf("text_%t", asText), func(t *testing.T) { testPollingHistoricalPluginBindingCompletesAndSettlesOnce(t, asText) })
+	}
+}
+
+func testPollingHistoricalPluginBindingCompletesAndSettlesOnce(t *testing.T, asText bool) {
+	t.Helper()
 	isolateTaskPluginBillingDatabase(t)
 	const userID, tokenID, channelID = 727, 728, 729
 	seedUser(t, userID, 80)
@@ -399,7 +418,11 @@ func TestPollingHistoricalPluginBindingCompletesAndSettlesOnce(t *testing.T) {
 	task.PrivateData.PluginBinding = &types.TaskPluginBinding{PluginKey: "stored", UserID: userID}
 	raw, err := common.Marshal(task.PrivateData)
 	require.NoError(t, err)
-	require.NoError(t, model.DB.Model(task).UpdateColumn("private_data", raw).Error)
+	var storedPrivate any = raw
+	if asText {
+		storedPrivate = string(raw)
+	}
+	require.NoError(t, model.DB.Model(task).UpdateColumn("private_data", storedPrivate).Error)
 	var loaded model.Task
 	require.NoError(t, model.DB.First(&loaded, task.ID).Error)
 	require.NotNil(t, loaded.PrivateData.PluginBinding)
@@ -407,7 +430,9 @@ func TestPollingHistoricalPluginBindingCompletesAndSettlesOnce(t *testing.T) {
 	channel := &model.Channel{Id: channelID, Type: constant.ChannelTypeKling}
 	for attempt := 0; attempt < 2; attempt++ {
 		require.NoError(t, updateVideoSingleTask(t.Context(), adaptor, channel, loaded.TaskID, map[string]*model.Task{loaded.TaskID: &loaded}))
-		require.NoError(t, model.DB.First(&loaded, task.ID).Error, "reload as a restarted poller would")
+		var restarted model.Task
+		require.NoError(t, model.DB.First(&restarted, task.ID).Error, "reload into a fresh value as a restarted poller would")
+		loaded = restarted
 		require.EqualValues(t, model.TaskStatusSuccess, loaded.Status)
 		require.Equal(t, "https://example.invalid/completed", loaded.PrivateData.ResultURL)
 		require.Equal(t, task.PrivateData.PluginBinding, loaded.PrivateData.PluginBinding)
