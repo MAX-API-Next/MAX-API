@@ -1,7 +1,5 @@
 // Copyright (C) 2023-2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 import { AxiosError, type InternalAxiosRequestConfig } from 'axios'
-import french from '@/i18n/locales/fr.json'
-import i18next from 'i18next'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { api } from '@/lib/api'
@@ -34,42 +32,32 @@ afterEach(() => {
   api.defaults.adapter = original
 })
 
-test('known mapping repair errors interpolate a stable translated key', async () => {
-  const previous = i18next.language
-  if (!i18next.isInitialized)
-    await i18next.init({ lng: 'en', resources: {}, fallbackLng: 'en' })
-  i18next.addResourceBundle('fr', 'translation', french.translation, true, true)
-  await i18next.changeLanguage('fr')
-  try {
-    respond(
-      {
-        success: false,
-        code: 'invalid_channel_mapping',
-        channel_id: 23,
-        message: 'English fallback',
-      },
-      422
-    )
-    const expected = french.translation[
-      'Channel {{id}} has an invalid model mapping; repair it before deleting the API extension'
-    ].replace('{{id}}', '23')
-    await assert.rejects(
-      () =>
-        taskPluginAPI.mutate({
-          action: 'delete',
-          key: 'kling',
-          version: '1.2.0',
-          expected_revision: '4',
-          deletion_nodes_ready: true,
-        }),
-      (e) =>
-        e instanceof PluginError &&
-        e.kind === 'rejected' &&
-        e.message === expected
-    )
-  } finally {
-    await i18next.changeLanguage(previous || 'en')
-  }
+test('known mapping repair errors preserve identifiers for reactive feedback', async () => {
+  respond(
+    {
+      success: false,
+      code: 'invalid_channel_mapping',
+      channel_id: 23,
+      message: 'English fallback',
+    },
+    422
+  )
+  await assert.rejects(
+    () =>
+      taskPluginAPI.mutate({
+        action: 'delete',
+        key: 'kling',
+        version: '1.2.0',
+        expected_revision: '4',
+        deletion_nodes_ready: true,
+      }),
+    (e) =>
+      e instanceof PluginError &&
+      e.kind === 'rejected' &&
+      e.message === 'English fallback' &&
+      e.repair?.code === 'invalid_channel_mapping' &&
+      e.repair.channel_id === 23
+  )
 })
 function respond(data: unknown, status = 200) {
   const calls: InternalAxiosRequestConfig[] = []

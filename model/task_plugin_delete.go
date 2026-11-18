@@ -20,7 +20,11 @@ import (
 
 func loadTaskPluginDeletions(tx *gorm.DB) ([]taskplugin.PackageDeletion, error) {
 	// Old isolated catalogs remain readable. Deletion itself requires migration.
-	if !tx.Migrator().HasTable(&TaskPluginDeletion{}) {
+	present, err := taskPluginDeletionTableAvailable(tx)
+	if err != nil {
+		return nil, err
+	}
+	if !present {
 		return nil, nil
 	}
 	var records []TaskPluginDeletion
@@ -178,9 +182,16 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		return nil
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			return 0, errors.Join(taskplugin.ErrCatalogUnavailable, ctx.Err())
+		}
 		var mapping *taskplugin.CatalogChannelMappingError
 		if errors.As(err, &mapping) {
 			return 0, mapping
+		}
+		var taskData *taskplugin.CatalogTaskDataError
+		if errors.As(err, &taskData) {
+			return 0, taskData
 		}
 		for _, known := range []error{taskplugin.ErrCatalogInUse, taskplugin.ErrCatalogConflict, taskplugin.ErrCatalogInvalid, taskplugin.ErrBindingRejected} {
 			if errors.Is(err, known) {
@@ -196,14 +207,15 @@ func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 	m := pkg.Manifest()
 	// Inspect all historical statuses. A terminal task still owns its binding,
 	// frozen pricing and recovery evidence. Never log or return private JSON.
-	rows, err := tx.Model(&Task{}).Select("private_data").Where("private_data IS NOT NULL").Rows()
+	rows, err := tx.Model(&Task{}).Select("id", "private_data").Where("private_data IS NOT NULL").Rows()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
+		var taskID int64
 		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
+		if err := rows.Scan(&taskID, &raw); err != nil {
 			return err
 		}
 		if len(bytes.TrimSpace(raw)) == 0 {
@@ -211,7 +223,7 @@ func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 		}
 		var value any
 		if err := common.UnmarshalUseNumber(raw, &value); err != nil {
-			return taskplugin.ErrCatalogUnavailable
+			return &taskplugin.CatalogTaskDataError{TaskID: taskID}
 		}
 		if taskPluginReference(value, m.Key, m.Version, pkg.Digest()) {
 			return taskplugin.ErrCatalogInUse
@@ -221,7 +233,7 @@ func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 			// the recursive check above for legacy maps/arrays and unknown fields.
 			var private TaskPrivateData
 			if err := common.Unmarshal(raw, &private); err != nil {
-				return taskplugin.ErrCatalogUnavailable
+				return &taskplugin.CatalogTaskDataError{TaskID: taskID}
 			}
 			if taskPluginTypedReference(private, m.Key, m.Version, pkg.Digest()) {
 				return taskplugin.ErrCatalogInUse
@@ -336,12 +348,20 @@ func rejectTaskPluginDefaultRemoval(tx *gorm.DB, pkg *taskplugin.Package, remain
 				return taskplugin.ErrCatalogUnavailable
 			}
 		}
-		if validateDefaultTaskPricing(expression, draft, before.contexts(model), keys) != nil {
+		beforeContexts, err := before.contextsContext(tx.Statement.Context, model)
+		if err != nil {
+			return err
+		}
+		if validateDefaultTaskPricing(expression, draft, beforeContexts, keys) != nil {
 			continue // Existing diagnosed drift is not introduced by this deletion.
 		}
 		after := *before
 		after.plugins = remaining
-		if validateDefaultTaskPricing(expression, draft, after.contexts(model), keys) != nil {
+		afterContexts, err := after.contextsContext(tx.Statement.Context, model)
+		if err != nil {
+			return err
+		}
+		if validateDefaultTaskPricing(expression, draft, afterContexts, keys) != nil {
 			return taskplugin.ErrCatalogInUse
 		}
 	}
@@ -447,18 +467,28 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 	}
 	legacy := map[taskPluginReferenceIdentity]bool{}
 	if serializedInput {
-		var raw any
-		if common.Unmarshal(serialized, &private) != nil || common.UnmarshalUseNumber(serialized, &raw) != nil {
+		if common.Unmarshal(serialized, &private) != nil {
 			return taskplugin.ErrCatalogInvalid
 		}
-		visitTaskPluginReferences(raw, func(ref taskPluginReferenceIdentity) bool {
-			legacy[ref] = true
-			return false
-		})
+	} else {
+		serialized, err = common.Marshal(private)
+		if err != nil {
+			return taskplugin.ErrCatalogInvalid
+		}
 	}
+	var raw any
+	if common.UnmarshalUseNumber(serialized, &raw) != nil {
+		return taskplugin.ErrCatalogInvalid
+	}
+	visitTaskPluginReferences(raw, func(ref taskPluginReferenceIdentity) bool {
+		legacy[ref] = true
+		return false
+	})
 	references := make([]taskPluginReferenceIdentity, 0, 3)
+	bindingIndex := -1
 	if binding := private.PluginBinding; binding != nil {
 		if binding.PluginKey != "" || binding.PackageDigest != "" {
+			bindingIndex = len(references)
 			references = append(references, taskPluginReferenceIdentity{binding.PluginKey, binding.Version, binding.PackageDigest})
 		}
 	}
@@ -484,7 +514,11 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 	if err := taskPluginSQLiteWriteIntent(tx, &Task{}); err != nil {
 		return err
 	}
-	if !tx.Migrator().HasTable(&TaskPluginDeletion{}) {
+	present, err := taskPluginDeletionTableAvailable(tx)
+	if err != nil {
+		return err
+	}
+	if !present {
 		return nil
 	}
 	if _, ok := tx.Statement.ConnPool.(gorm.TxCommitter); !ok {
@@ -501,7 +535,20 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 	}
 	// A locking/current read matters under MySQL REPEATABLE READ: a funding
 	// transaction may have established its consistent snapshot before deletion.
-	for _, reference := range references {
+	for index, reference := range references {
+		if index == bindingIndex && reference.key != "" && reference.version == "" && reference.digest == "" && task.ID > 0 {
+			var persisted struct{ PrivateData TaskPrivateData }
+			// The head is held before the row's current/locking read. Equality is
+			// checked against durable data, never against a caller's old snapshot.
+			err := tx.Session(&gorm.Session{NewDB: true}).Model(&Task{}).Clauses(clause.Locking{Strength: "UPDATE"}).Select("private_data").Where("id = ?", task.ID).Take(&persisted).Error
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			if err == nil && persisted.PrivateData.PluginBinding != nil && *persisted.PrivateData.PluginBinding == *private.PluginBinding {
+				legacy[reference] = true // Still require an installed retained key below.
+				continue
+			}
+		}
 		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("identity", "digest").Where("digest = ?", reference.digest)
 		if reference.key != "" {
 			query = query.Where("identity = ?", taskPluginIdentity(reference.key, reference.version))
@@ -566,6 +613,30 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 		}
 	}
 	return nil
+}
+
+// PostgreSQL information_schema can hide existing tables from an unprivileged
+// writer. Only a genuinely absent optional table permits legacy bypass.
+func taskPluginDeletionTableAvailable(tx *gorm.DB) (bool, error) {
+	if tx.Migrator().HasTable(&TaskPluginDeletion{}) {
+		return true, nil
+	}
+	if tx.Dialector.Name() != "postgres" {
+		return false, nil
+	}
+	statement := &gorm.Statement{DB: tx}
+	if err := statement.Parse(&TaskPluginDeletion{}); err != nil {
+		return false, err
+	}
+	var exists bool
+	name := statement.Quote(clause.Table{Name: statement.Schema.Table})
+	if err := tx.Session(&gorm.Session{NewDB: true}).Raw("SELECT to_regclass(?) IS NOT NULL", name).Scan(&exists).Error; err != nil {
+		return false, err
+	}
+	if exists {
+		return false, taskplugin.ErrCatalogUnavailable
+	}
+	return false, nil
 }
 
 // Immutable rows have already passed the executable loader on installation.

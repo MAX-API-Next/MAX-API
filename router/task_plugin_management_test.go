@@ -211,6 +211,16 @@ func TestTaskPluginManagementDeletionRequiresRootAcknowledgementAndNoReferences(
 	require.Contains(t, response.Body.String(), fmt.Sprintf(`"channel_id":%d`, legacy.Id))
 	require.NotContains(t, response.Body.String(), "private-legacy-name")
 	require.NoError(t, db.Delete(&legacy).Error)
+	malformed := &model.Task{TaskID: "private-provider-id"}
+	require.NoError(t, db.Create(malformed).Error)
+	require.NoError(t, db.Model(malformed).UpdateColumn("private_data", []byte(`{"upstream_task_id":42,"key":"private-task-secret"}`)).Error)
+	response = request(command, true)
+	require.Equal(t, 422, response.Code, response.Body.String())
+	require.Contains(t, response.Body.String(), `"code":"invalid_task_data"`)
+	require.Contains(t, response.Body.String(), fmt.Sprintf(`"task_id":"%d"`, malformed.ID))
+	require.NotContains(t, response.Body.String(), "private-task-secret")
+	require.NotContains(t, response.Body.String(), "private-provider-id")
+	require.NoError(t, db.Delete(malformed).Error)
 	response = request(command, true)
 	require.Equal(t, 200, response.Code, response.Body.String())
 	require.Contains(t, response.Body.String(), `"revision":"2"`)
@@ -223,6 +233,55 @@ func TestTaskPluginManagementDeletionRequiresRootAcknowledgementAndNoReferences(
 	require.NoError(t, db.Where("content = ?", "task_plugin.delete").Find(&logs).Error)
 	require.Len(t, logs, 1)
 	require.NotContains(t, logs[0].Other, "private-delete-api-source")
+}
+
+func TestTaskPluginManagementRejectsMalformedDocumentUnicode(t *testing.T) {
+	engine, db, root := taskPluginManagementEngine(t)
+	login := httptest.NewRecorder()
+	engine.ServeHTTP(login, httptest.NewRequest("GET", "/plugin-test-login/root", nil))
+	doc, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "source", Manifest: taskplugin.Manifest{APIVersion: 1, Key: "unicode", Name: "unicode-name", Version: "1.0.0", Models: []string{"unicode-model"}}})
+	require.NoError(t, err)
+	request := func(path string, body []byte) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", path, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("New-Api-User", fmt.Sprint(root.Id))
+		for _, cookie := range login.Result().Cookies() {
+			req.AddCookie(cookie)
+		}
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, req)
+		return response
+	}
+	for _, path := range []string{"/api/task_plugins/validate", "/api/task_plugins/mutate"} {
+		wire, err := common.Marshal(map[string]any{"document": string(doc)})
+		require.NoError(t, err)
+		if strings.HasSuffix(path, "/mutate") {
+			wire, err = common.Marshal(map[string]any{"document": string(doc), "action": "install", "expected_revision": "0"})
+			require.NoError(t, err)
+		}
+		for name, invalid := range map[string][]byte{"invalid_utf8": {0xff}, "lone_high": []byte(`\ud800`), "lone_low": []byte(`\udc00`), "wrong_pair": []byte(`\ud800\u0041`)} {
+			t.Run(path+"/"+name, func(t *testing.T) {
+				body := bytes.Replace(wire, []byte("unicode-name"), invalid, 1)
+				response := request(path, body)
+				require.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
+			})
+		}
+	}
+	for _, replacement := range []string{`\uD83D\uDE00`, "\uFFFD"} {
+		wire, err := common.Marshal(map[string]any{"document": string(doc)})
+		require.NoError(t, err)
+		response := request("/api/task_plugins/validate", bytes.Replace(wire, []byte("unicode-name"), []byte(replacement), 1))
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	}
+	bom := append([]byte{0xef, 0xbb, 0xbf}, doc...)
+	wire, err := common.Marshal(map[string]any{"document": string(bom)})
+	require.NoError(t, err)
+	response := request("/api/task_plugins/validate", wire)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.Contains(t, response.Body.String(), fmt.Sprintf(`"digest":"%x"`, sha256.Sum256(bom)))
+	var count int64
+	require.NoError(t, db.Model(&model.TaskPluginVersion{}).Count(&count).Error)
+	require.Zero(t, count, "rejected requests and validation cannot install anything")
 }
 
 func TestTaskPluginValidationRejectsDeletedRevocationBeforeInstallation(t *testing.T) {

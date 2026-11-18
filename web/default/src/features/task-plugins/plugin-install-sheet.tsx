@@ -1,6 +1,6 @@
 // Copyright (C) 2023-2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 // Extracted from MAX's catalog UI; QuantumNous/new-api 70e6af64 interaction reference retained.
-import type { ComponentProps } from 'react'
+import { useRef, type ComponentProps } from 'react'
 import { Package, UploadCloud, ShieldCheck, CheckCircle2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
@@ -45,6 +45,7 @@ type Props = {
 }
 export function PluginInstallSheet(props: Props) {
   const { t } = useTranslation()
+  const fileInput = useRef<HTMLInputElement>(null)
   const needsNodesReady =
     !!props.validated &&
     (props.validated.format_version >= 2 || !!props.validated.bom_prefixed)
@@ -94,7 +95,10 @@ export function PluginInstallSheet(props: Props) {
                   const entry = props.bundles.find(
                     (p) => `${p.key}@${p.version}` === e.target.value
                   )
-                  if (entry) void props.loadBundled(entry.key, entry.version)
+                  if (entry) {
+                    if (fileInput.current) fileInput.current.value = ''
+                    void props.loadBundled(entry.key, entry.version)
+                  }
                 }}
               >
                 <option value=''>{t('Select a bundled plugin version')}</option>
@@ -119,6 +123,7 @@ export function PluginInstallSheet(props: Props) {
             </Label>
             <Input
               id='plugin-file'
+              ref={fileInput}
               type='file'
               accept='.js,.json,text/javascript,application/javascript,application/json'
               disabled={props.busy}

@@ -6074,6 +6074,7 @@
     "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "すべてのカタログノードが UTF-8 BOM 付きパッケージに対応しています。古いノードではプラグインホスト全体が停止する場合があります。",
     "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "すべてのカタログノードがこのパッケージ形式と UTF-8 BOM 付きパッケージに対応しています。古いノードではプラグインホスト全体が停止する場合があります。",
     "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB",
-    "Channel {{id}} has an invalid model mapping; repair it before deleting the API extension": "チャネル {{id}} のモデルマッピングが無効です。修正してから API 拡張を削除してください。"
+    "Channel {{id}} has an invalid model mapping; repair it before deleting the API extension": "チャネル {{id}} のモデルマッピングが無効です。修正してから API 拡張を削除してください。",
+    "Task record {{id}} has invalid private data; repair it before deleting the API extension": "タスクレコード {{id}} の非公開データが無効です。修復してから API 拡張を削除してください。"
   }
 }

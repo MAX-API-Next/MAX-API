@@ -3,6 +3,7 @@ package model
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -128,9 +129,6 @@ func readPricingCatalog(tx *gorm.DB, lock bool) ([]taskplugin.StoredPackage, boo
 	if loadErr != nil {
 		return nil, false, loadErr
 	}
-	if errors.Is(err, gorm.ErrRecordNotFound) && len(rows) > 0 {
-		return nil, false, taskplugin.ErrCatalogInvalid
-	}
 	if err == nil && (head.Revision <= 0 || head.MutationID == "") {
 		return nil, false, taskplugin.ErrCatalogInvalid
 	}
@@ -156,7 +154,7 @@ func readPricingCatalog(tx *gorm.DB, lock bool) ([]taskplugin.StoredPackage, boo
 			return nil, false, ErrModelPricingConflict
 		}
 	}
-	if errors.Is(err, gorm.ErrRecordNotFound) && len(deletions) > 0 {
+	if errors.Is(err, gorm.ErrRecordNotFound) && (len(rows) > 0 || len(deletions) > 0) {
 		return nil, false, taskplugin.ErrCatalogInvalid
 	}
 	if err := validateTaskPluginDeletionHead(head, deletions); err != nil {
@@ -177,6 +175,14 @@ func (a *pricingAuthority) signature() string {
 	}{a.channels, a.plugins, a.catalogReady, a.selfUse})
 }
 func (a *pricingAuthority) contexts(model string) []ModelPricingContext {
+	result, _ := a.contextsContext(context.Background(), model)
+	return result
+}
+
+func (a *pricingAuthority) contextsContext(ctx context.Context, model string) ([]ModelPricingContext, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	result := []ModelPricingContext{}
 	for _, channel := range a.channels {
 		advertised := slices.Contains(strings.Split(channel.Models, ","), model)
@@ -238,7 +244,10 @@ func (a *pricingAuthority) contexts(model string) []ModelPricingContext {
 		pkg := a.validatedPackages[entry.Digest]
 		if pkg == nil {
 			var err error
-			pkg, err = taskplugin.LoadPackage(bytes.NewReader(entry.Document), entry.Digest)
+			pkg, err = taskplugin.LoadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			if err != nil {
 				continue
 			} // snapshot validation above already rejects corruption
@@ -273,7 +282,7 @@ func (a *pricingAuthority) contexts(model string) []ModelPricingContext {
 		result = append(result, context)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
-	return result
+	return result, ctx.Err()
 }
 func findPricingContext(contexts []ModelPricingContext, id string) (ModelPricingContext, bool) {
 	for _, context := range contexts {

@@ -24,7 +24,11 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 	if err := taskPluginSQLiteWriteIntent(tx, &Channel{}); err != nil {
 		return err
 	}
-	if !tx.Migrator().HasTable(&TaskPluginDeletion{}) {
+	present, err := taskPluginDeletionTableAvailable(tx)
+	if err != nil {
+		return err
+	}
+	if !present {
 		return nil
 	}
 	references := map[string]bool{}

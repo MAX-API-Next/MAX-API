@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
@@ -43,11 +44,15 @@ func GetBundledTaskPluginSource(c *gin.Context) {
 func taskPluginAdminError(c *gin.Context, err error) {
 	status, message := http.StatusBadRequest, "Invalid task plugin request"
 	var mapping *taskplugin.CatalogChannelMappingError
+	var taskData *taskplugin.CatalogTaskDataError
 	response := gin.H{"success": false}
 	switch {
 	case errors.As(err, &mapping):
 		status, message = http.StatusUnprocessableEntity, fmt.Sprintf("Channel %d has an invalid model mapping; repair it before deleting the API extension", mapping.ChannelID)
 		response["code"], response["channel_id"] = "invalid_channel_mapping", mapping.ChannelID
+	case errors.As(err, &taskData):
+		status, message = http.StatusUnprocessableEntity, fmt.Sprintf("Task record %d has invalid private data; repair it before deleting the API extension", taskData.TaskID)
+		response["code"], response["task_id"] = "invalid_task_data", strconv.FormatInt(taskData.TaskID, 10)
 	case errors.Is(err, taskplugin.ErrCatalogConflict):
 		status, message = http.StatusConflict, "Task plugin catalog changed; refresh before retrying"
 	case errors.Is(err, taskplugin.ErrCatalogInUse):
@@ -69,7 +74,7 @@ func taskPluginAdminError(c *gin.Context, err error) {
 
 func taskPluginAdminFields(c *gin.Context, allowed map[string]string) (map[string]json.RawMessage, error) {
 	data, err := io.ReadAll(io.LimitReader(c.Request.Body, taskPluginAdminBodyLimit+1))
-	if err != nil || len(data) > taskPluginAdminBodyLimit {
+	if err != nil || len(data) > taskPluginAdminBodyLimit || !utf8.Valid(data) {
 		return nil, taskplugin.ErrCatalogInvalid
 	}
 	var fields map[string]json.RawMessage
@@ -80,8 +85,47 @@ func taskPluginAdminFields(c *gin.Context, allowed map[string]string) (map[strin
 		if kind, ok := allowed[key]; !ok || common.GetJsonType(raw) != kind {
 			return nil, taskplugin.ErrCatalogInvalid
 		}
+		if key == "document" && !taskPluginDocumentUnicodeValid(raw) {
+			return nil, taskplugin.ErrCatalogInvalid
+		}
 	}
 	return fields, nil
+}
+
+// The JSON decoder replaces lone surrogate escapes. Reject them before an
+// optional pin can identify replacement text instead of the submitted package.
+// JSON syntax is checked by taskPluginAdminFields before this scan.
+func taskPluginDocumentUnicodeValid(raw []byte) bool {
+	for i := 1; i < len(raw)-1; i++ {
+		if raw[i] != '\\' {
+			continue
+		}
+		i++
+		if raw[i] != 'u' {
+			continue
+		}
+		if i+4 >= len(raw) {
+			return false
+		}
+		unit, err := strconv.ParseUint(string(raw[i+1:i+5]), 16, 16)
+		if err != nil {
+			return false
+		}
+		i += 4
+		if unit >= 0xD800 && unit <= 0xDBFF {
+			if i+6 >= len(raw) || raw[i+1] != '\\' || raw[i+2] != 'u' {
+				return false
+			}
+			low, err := strconv.ParseUint(string(raw[i+3:i+7]), 16, 16)
+			if err != nil || low < 0xDC00 || low > 0xDFFF {
+				return false
+			}
+			i += 6
+		} else if unit >= 0xDC00 && unit <= 0xDFFF {
+			return false
+		}
+	}
+	return true
 }
 func taskPluginAdminString(fields map[string]json.RawMessage, key string) string {
 	var s string

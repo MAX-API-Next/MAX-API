@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -304,7 +306,8 @@ func TestSweepTimedOutTaskWaitsForSubmissionSettlement(t *testing.T) {
 	assert.EqualValues(t, -30, refund.AppliedFundingDelta)
 }
 
-func TestSweepTimedOutHistoricalPluginBindingPreservesRefund(t *testing.T) {
+func isolateTaskPluginBillingDatabase(t *testing.T) {
+	t.Helper()
 	isolated, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	sqlDB, err := isolated.DB()
@@ -314,6 +317,10 @@ func TestSweepTimedOutHistoricalPluginBindingPreservesRefund(t *testing.T) {
 	previousDB, previousLog := model.DB, model.LOG_DB
 	model.DB, model.LOG_DB = isolated, isolated
 	t.Cleanup(func() { model.DB, model.LOG_DB = previousDB, previousLog; _ = sqlDB.Close() })
+}
+
+func TestSweepTimedOutHistoricalPluginBindingPreservesRefund(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
 	truncate(t)
 	resetTimedOutTaskSweepCursorForTest(t)
 	const userID, tokenID = 717, 718
@@ -361,6 +368,58 @@ func TestSweepTimedOutHistoricalPluginBindingPreservesRefund(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, already)
 	require.EqualValues(t, 100, getUserQuota(t, userID))
+}
+
+type historicalCompletionAdaptor struct{ mockAdaptor }
+
+func (*historicalCompletionAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+}
+
+func (*historicalCompletionAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return &relaycommon.TaskInfo{Status: model.TaskStatusSuccess, Url: "https://example.invalid/completed"}, nil
+}
+
+func TestPollingHistoricalPluginBindingCompletesAndSettlesOnce(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
+	const userID, tokenID, channelID = 727, 728, 729
+	seedUser(t, userID, 80)
+	seedToken(t, tokenID, userID, "synthetic-completion-token", 80)
+	seedChannel(t, channelID)
+	document, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "historical-source", Manifest: taskplugin.Manifest{APIVersion: 1, Key: "stored", Name: "Stored", Version: "1.0.0", Models: []string{"historical-model"}}})
+	require.NoError(t, err)
+	pkg, err := taskplugin.LoadPackage(bytes.NewReader(document), fmt.Sprintf("%x", sha256.Sum256(document)))
+	require.NoError(t, err)
+	catalog, err := taskplugin.OpenCatalog(t.Context(), model.NewTaskPluginCatalogStore(model.DB))
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	task := makeTask(userID, channelID, 20, tokenID, model.BillingSettlementSourceWallet, 0)
+	task.TaskID = "historical-completion"
+	require.NoError(t, model.DB.Create(task).Error)
+	task.PrivateData.PluginBinding = &types.TaskPluginBinding{PluginKey: "stored", UserID: userID}
+	raw, err := common.Marshal(task.PrivateData)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(task).UpdateColumn("private_data", raw).Error)
+	var loaded model.Task
+	require.NoError(t, model.DB.First(&loaded, task.ID).Error)
+	require.NotNil(t, loaded.PrivateData.PluginBinding)
+	adaptor := &historicalCompletionAdaptor{mockAdaptor{adjustReturn: 30}}
+	channel := &model.Channel{Id: channelID, Type: constant.ChannelTypeKling}
+	for attempt := 0; attempt < 2; attempt++ {
+		require.NoError(t, updateVideoSingleTask(t.Context(), adaptor, channel, loaded.TaskID, map[string]*model.Task{loaded.TaskID: &loaded}))
+		require.NoError(t, model.DB.First(&loaded, task.ID).Error, "reload as a restarted poller would")
+		require.EqualValues(t, model.TaskStatusSuccess, loaded.Status)
+		require.Equal(t, "https://example.invalid/completed", loaded.PrivateData.ResultURL)
+		require.Equal(t, task.PrivateData.PluginBinding, loaded.PrivateData.PluginBinding)
+		require.Equal(t, 30, loaded.Quota)
+		require.EqualValues(t, 70, getUserQuota(t, userID), "final30 minus reserved20 consumes10 exactly once")
+		require.Equal(t, 70, getTokenRemainQuota(t, tokenID))
+	}
+	var settlements []model.BillingSettlement
+	require.NoError(t, model.DB.Where("task_id = ?", task.ID).Find(&settlements).Error)
+	require.Len(t, settlements, 1)
+	require.Equal(t, model.BillingSettlementStatusApplied, settlements[0].Status)
+	require.EqualValues(t, 10, settlements[0].AppliedFundingDelta)
 }
 
 func TestSweepTimedOutTasksScansPastPendingSettlementPage(t *testing.T) {

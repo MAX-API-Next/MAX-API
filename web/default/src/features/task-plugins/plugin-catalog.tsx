@@ -282,8 +282,7 @@ export function PluginCatalog({ onSearchReady, ...props }: Props) {
           <p className='text-muted-foreground mt-2 text-sm'>{emptyHint}</p>
         </div>
       )}
-      {!props.loading &&
-        rows.length > 0 &&
+      {rows.length > 0 &&
         (view === 'cards' ? (
           <div className='grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3'>
             {rows.map((entry) => (

@@ -134,7 +134,7 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
       if (mounted.current && files.current.current(id))
         setError(
           e instanceof PluginError
-            ? e.message
+            ? e
             : 'Official plugin source could not be read'
         )
     } finally {
@@ -178,9 +178,7 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
       if (mounted.current && validation.current.current(id)) setValidated(entry)
     } catch (e) {
       if (mounted.current && validation.current.current(id))
-        setError(
-          e instanceof PluginError ? e.message : 'Task plugin request failed'
-        )
+        setError(e instanceof PluginError ? e : 'Task plugin request failed')
     } finally {
       if (mounted.current && validation.current.current(id))
         setValidating(false)

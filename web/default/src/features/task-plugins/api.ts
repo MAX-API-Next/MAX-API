@@ -3,7 +3,6 @@
 // Independently adapted to MAX's pinned package transport and catalog CAS.
 import { z } from 'zod'
 import { isAxiosError } from 'axios'
-import { t } from 'i18next'
 import { api } from '@/lib/api'
 
 const revision = z
@@ -81,7 +80,10 @@ export type PluginMutation = {
 export class PluginError extends Error {
   constructor(
     public readonly kind: 'conflict' | 'rejected' | 'unknown' | 'read',
-    message: string
+    message: string,
+    public readonly repair?:
+      | { code: 'invalid_channel_mapping'; channel_id: number }
+      | { code: 'invalid_task_data'; task_id: string }
   ) {
     super(message)
   }
@@ -104,21 +106,28 @@ function classifyRequestError(
 
 const options = { skipBusinessError: true, skipErrorHandler: true }
 const endpoint = '/api/task_plugins'
-function requestErrorMessage(payload: unknown, fallback: string): string {
-  const mapping = z
-    .object({
-      code: z.literal('invalid_channel_mapping'),
-      channel_id: z.number().int().positive(),
-    })
+function requestError(
+  kind: PluginError['kind'],
+  payload: unknown,
+  fallback: string
+): PluginError {
+  const repair = z
+    .discriminatedUnion('code', [
+      z.object({
+        code: z.literal('invalid_channel_mapping'),
+        channel_id: z.number().int().positive(),
+      }),
+      z.object({
+        code: z.literal('invalid_task_data'),
+        task_id: z.string().regex(/^[1-9][0-9]*$/),
+      }),
+    ])
     .safeParse(payload)
-  if (mapping.success)
-    return (
-      t(
-        'Channel {{id}} has an invalid model mapping; repair it before deleting the API extension',
-        { id: mapping.data.channel_id, defaultValue: fallback }
-      ) || fallback
-    )
-  return fallback
+  return new PluginError(
+    kind,
+    fallback,
+    repair.success ? repair.data : undefined
+  )
 }
 async function request<T>(
   run: () => Promise<{ data: unknown }>,
@@ -133,12 +142,14 @@ async function request<T>(
         data: z.unknown().optional(),
         code: z.unknown().optional(),
         channel_id: z.unknown().optional(),
+        task_id: z.unknown().optional(),
       })
       .parse((await run()).data)
     if (!raw.success)
-      throw new PluginError(
+      throw requestError(
         'rejected',
-        requestErrorMessage(raw, raw.message || 'Invalid task plugin request')
+        raw,
+        raw.message || 'Invalid task plugin request'
       )
     return schema.parse(raw.data)
   } catch (error) {
@@ -147,12 +158,10 @@ async function request<T>(
       const status = error.response?.status
       const message: unknown = error.response?.data?.message
       const kind = classifyRequestError(status, write)
-      throw new PluginError(
+      throw requestError(
         kind,
-        requestErrorMessage(
-          error.response?.data,
-          typeof message === 'string' ? message : 'Task plugin request failed'
-        )
+        error.response?.data,
+        typeof message === 'string' ? message : 'Task plugin request failed'
       )
     }
     throw new PluginError(

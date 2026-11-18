@@ -37,7 +37,7 @@ export function useTaskPluginCatalog(transport: TaskPluginAPI) {
   const [snapshot, setSnapshot] = useState<PluginSnapshot>()
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<string | PluginError>('')
   const [readError, setReadError] = useState('')
   const [notice, setNotice] = useState('')
   const [unknown, setUnknown] = useState(false)
@@ -122,9 +122,7 @@ export function useTaskPluginCatalog(transport: TaskPluginAPI) {
         setUnknown(true)
         setReadAfterUnknown(false)
       }
-      setError(
-        e instanceof PluginError ? e.message : 'Task plugin request failed'
-      )
+      setError(e instanceof PluginError ? e : 'Task plugin request failed')
     } finally {
       if (mounted.current) {
         invalidateModelPricing(queryClient)

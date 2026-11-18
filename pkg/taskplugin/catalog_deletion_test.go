@@ -2,10 +2,42 @@
 package taskplugin
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+type cancelOnSecondCheck struct {
+	context.Context
+	cancel context.CancelFunc
+	checks int
+}
+
+func (ctx *cancelOnSecondCheck) Err() error {
+	ctx.checks++
+	if ctx.checks == 2 {
+		ctx.cancel()
+	}
+	return ctx.Context.Err()
+}
+
+func TestCatalogReceiptValidationHonorsCancellation(t *testing.T) {
+	base, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx := &cancelOnSecondCheck{Context: base, cancel: cancel}
+	next := CatalogSnapshot{Revision: 1, Deletions: []PackageDeletion{{Key: "old", Version: "1.0.0", Digest: strings.Repeat("a", 64)}}}
+	require.NoError(t, ValidateCatalogTransition(CatalogSnapshot{}, next))
+	require.ErrorIs(t, ValidateCatalogTransitionContext(ctx, CatalogSnapshot{}, next), context.Canceled)
+}
+
+func TestCatalogReceiptDigestMustBeCanonical(t *testing.T) {
+	next := CatalogSnapshot{Revision: 1, Deletions: []PackageDeletion{{Key: "old", Version: "1.0.0", Digest: strings.Repeat("A", 64)}}}
+	require.ErrorIs(t, ValidateCatalogTransition(CatalogSnapshot{}, next), ErrCatalogInvalid)
+	next.Deletions[0].Digest = strings.ToLower(next.Deletions[0].Digest)
+	require.NoError(t, ValidateCatalogTransition(CatalogSnapshot{}, next))
+}
 
 func TestCatalogRemovalNeedsMatchingDurableReceipt(t *testing.T) {
 	pkg := testPackage(t, validManifest(), "source")

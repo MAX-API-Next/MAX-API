@@ -93,6 +93,16 @@ that earlier revision correctly conflicts rather than replacing the bootstrap.
   `deletion_nodes_ready: true` after upgrading all nodes. Source-free audit
   receipts and embedded distribution files remain available.
 
+Deletion also checks malformed historical data before it can prove that no
+references remain. An unrelated channel with an invalid model mapping blocks
+deletion with HTTP 422, `code: "invalid_channel_mapping"` and `channel_id`.
+An unreadable historical task blocks it with HTTP 422,
+`code: "invalid_task_data"` and the decimal-string database row `task_id`.
+Repair the identified record before retrying; these precondition errors do not
+remove the package or suspend an otherwise healthy local Host, and never expose
+the record's private payload. PostgreSQL writers must have access to the deletion
+table: a table hidden by role privileges is an error, not an absent optional catalog.
+
 Channel creates and model/mapping updates acquire the same catalog-head lock as
 deletion, including batch, tag, Save and map-based writes. Deletion receipts now
 include a source-free JSON index of declared models (`models`: LONGTEXT on MySQL,

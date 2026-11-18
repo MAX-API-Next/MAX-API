@@ -6082,6 +6082,7 @@
     "All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "Все узлы каталога поддерживают пакеты UTF-8 с BOM. Старые узлы могут приостановить весь хост плагинов.",
     "All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.": "Все узлы каталога поддерживают этот формат пакета и пакеты UTF-8 с BOM. Старые узлы могут приостановить весь хост плагинов.",
     "JavaScript / JSON · 1 MiB": "JavaScript / JSON · 1 MiB",
-    "Channel {{id}} has an invalid model mapping; repair it before deleting the API extension": "Сопоставление моделей канала {{id}} недопустимо; исправьте его перед удалением расширения API."
+    "Channel {{id}} has an invalid model mapping; repair it before deleting the API extension": "Сопоставление моделей канала {{id}} недопустимо; исправьте его перед удалением расширения API.",
+    "Task record {{id}} has invalid private data; repair it before deleting the API extension": "Приватные данные записи задачи {{id}} некорректны; исправьте их перед удалением расширения API."
   }
 }

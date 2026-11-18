@@ -28,7 +28,8 @@ import (
 	"math"
 	"sort"
 	"strings"
-	"sync"
+
+	"golang.org/x/sync/semaphore"
 )
 
 // CatalogChannelMappingError identifies a repairable precondition without
@@ -39,6 +40,17 @@ func (*CatalogChannelMappingError) Error() string {
 	return "invalid channel model mapping prevents extension deletion"
 }
 func (*CatalogChannelMappingError) Unwrap() error { return ErrCatalogInvalid }
+
+// CatalogTaskDataError names only the database row that needs repair.
+type CatalogTaskDataError struct{ TaskID int64 }
+
+func (*CatalogTaskDataError) Error() string { return "invalid task data prevents extension deletion" }
+func (*CatalogTaskDataError) Unwrap() error { return ErrCatalogInvalid }
+
+type catalogMutex struct{ *semaphore.Weighted }
+
+func (mu catalogMutex) Lock()   { _ = mu.Acquire(context.Background(), 1) }
+func (mu catalogMutex) Unlock() { mu.Release(1) }
 
 var (
 	ErrCatalogConflict       = errors.New("task plugin catalog changed; refresh before retrying")
@@ -91,7 +103,7 @@ type PackageInfo struct {
 // affects admission only; revoke also invalidates already-issued sessions.
 // Refresh must be called explicitly for changes committed by another node.
 type Catalog struct {
-	mu       sync.Mutex
+	mu       catalogMutex
 	store    CatalogStore
 	host     *Host
 	snapshot CatalogSnapshot
@@ -102,7 +114,7 @@ func OpenCatalog(ctx context.Context, store CatalogStore) (*Catalog, error) {
 	if store == nil || ctx == nil {
 		return nil, ErrCatalogUnavailable
 	}
-	catalog := &Catalog{store: store, host: &Host{managed: true}}
+	catalog := &Catalog{mu: catalogMutex{semaphore.NewWeighted(1)}, store: store, host: &Host{managed: true}}
 	if err := catalog.Refresh(ctx); err != nil {
 		return nil, err
 	}
@@ -230,9 +242,12 @@ func buildCatalogStateContext(ctx context.Context, snapshot, previous CatalogSna
 	state.routes = registry.Snapshot()
 	deleted := make(map[string]PackageDeletion, len(snapshot.Deletions))
 	for _, receipt := range snapshot.Deletions {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		id := packageIdentity(receipt.Key, receipt.Version)
 		pin, err := hex.DecodeString(receipt.Digest)
-		if receipt.Key == "" || receipt.Version == "" || err != nil || len(pin) != 32 {
+		if receipt.Key == "" || receipt.Version == "" || err != nil || len(pin) != 32 || hex.EncodeToString(pin) != receipt.Digest {
 			return nil, ErrCatalogInvalid
 		}
 		if _, exists := deleted[id]; exists {
@@ -267,13 +282,16 @@ func buildCatalogStateContext(ctx context.Context, snapshot, previous CatalogSna
 			}
 		}
 		for _, receipt := range previous.Deletions {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			current, exists := deleted[packageIdentity(receipt.Key, receipt.Version)]
 			if !exists || current.Digest != receipt.Digest || receipt.Revoked && !current.Revoked {
 				return nil, ErrCatalogInvalid
 			}
 		}
 	}
-	return state, nil
+	return state, ctx.Err()
 }
 
 func catalogFingerprint(snapshot CatalogSnapshot) string {
@@ -341,10 +359,6 @@ func (catalog *Catalog) Install(ctx context.Context, packages ...*Package) error
 		return ErrCatalogInvalid
 	}
 	return catalog.update(ctx, func(next *CatalogSnapshot) error { return installCatalogPackagesContext(ctx, next, packages...) })
-}
-
-func installCatalogPackages(next *CatalogSnapshot, packages ...*Package) error {
-	return installCatalogPackagesContext(context.Background(), next, packages...)
 }
 
 func installCatalogPackagesContext(ctx context.Context, next *CatalogSnapshot, packages ...*Package) error {

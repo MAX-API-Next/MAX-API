@@ -10,6 +10,7 @@ import {
   RouterContextProvider,
 } from '@tanstack/react-router'
 import english from '@/i18n/locales/en.json'
+import french from '@/i18n/locales/fr.json'
 import { createReactTestEnvironment } from '@/test/react'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
@@ -49,7 +50,7 @@ Object.defineProperty(globalThis, 'scrollTo', {
 const { render, cleanup, fireEvent, waitFor, act, within } =
   await import('@testing-library/react')
 const { TaskPlugins } = await import('./index')
-const { PluginError } = await import('./api')
+const { PluginError, taskPluginAPI } = await import('./api')
 const { useSidebarData } = await import('@/hooks/use-sidebar-data')
 const { useAuthStore } = await import('@/stores/auth-store')
 const { Route } = await import('@/routes/_authenticated/task-plugins')
@@ -243,6 +244,98 @@ test('closing unchanged details restores the opening button', async () => {
   await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
   await waitFor(() => assert.equal(document.activeElement, opener))
 })
+
+test('closing details after a refresh restores the same opening button', async () => {
+  const f = fixture(),
+    v = f.view()
+  const opener = await v.findByRole('button', { name: 'Details kling@1.2.0' })
+  fireEvent.click(opener)
+  const panel = within(await v.findByRole('dialog'))
+  const originalRead = f.api.read
+  const pending = deferred<Awaited<ReturnType<TaskPluginAPI['read']>>>()
+  f.api.read = () => pending.promise
+  try {
+    fireEvent.click(panel.getByRole('button', { name: 'Disable' }))
+    fireEvent.click(panel.getByRole('button', { name: 'Confirm' }))
+    await waitFor(() => assert.equal(f.writes.length, 1))
+    await waitFor(() => assert.ok(v.getByText('Loading...')))
+    assert.equal(
+      opener.isConnected,
+      true,
+      'the last catalog snapshot remains mounted during refresh'
+    )
+  } finally {
+    pending.resolve(await originalRead())
+  }
+  await waitFor(() =>
+    assert.equal(
+      (panel.getByRole('button', { name: 'Enable' }) as HTMLButtonElement)
+        .disabled,
+      false
+    )
+  )
+  fireEvent.keyDown(document, { key: 'Escape', code: 'Escape', keyCode: 27 })
+  await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
+  await waitFor(() => assert.equal(document.activeElement, opener))
+})
+
+for (const repair of [
+  { code: 'invalid_channel_mapping', channel_id: 23 },
+  { code: 'invalid_task_data', task_id: '9007199254740993' },
+] as const) {
+  test(`repair feedback translates on language changes (${repair.code})`, async () => {
+    const originalAdapter = api.defaults.adapter
+    const previousLanguage = env.i18n.language
+    env.i18n.addResourceBundle(
+      'fr',
+      'translation',
+      french.translation,
+      true,
+      true
+    )
+    const f = fixture()
+    f.api.mutate = taskPluginAPI.mutate
+    api.defaults.adapter = async (config) => ({
+      config,
+      status: 200,
+      statusText: 'fixture',
+      headers: {},
+      data: { success: false, message: 'English fallback', ...repair },
+    })
+    try {
+      const v = f.view()
+      fireEvent.click(
+        await v.findByRole('button', { name: 'Details kling@1.2.0' })
+      )
+      const panel = within(await v.findByRole('dialog'))
+      fireEvent.click(panel.getByRole('button', { name: 'Delete version' }))
+      fireEvent.click(panel.getByRole('checkbox'))
+      fireEvent.click(panel.getByRole('button', { name: 'Confirm' }))
+      await panel.findByText('English fallback')
+      fireEvent.keyDown(document, {
+        key: 'Escape',
+        code: 'Escape',
+        keyCode: 27,
+      })
+      await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
+      await act(async () => {
+        await env.i18n.changeLanguage('fr')
+      })
+      const key =
+        repair.code === 'invalid_channel_mapping'
+          ? 'Channel {{id}} has an invalid model mapping; repair it before deleting the API extension'
+          : 'Task record {{id}} has invalid private data; repair it before deleting the API extension'
+      const id =
+        repair.code === 'invalid_channel_mapping' ? '23' : repair.task_id
+      await v.findByText(french.translation[key].replace('{{id}}', id))
+    } finally {
+      api.defaults.adapter = originalAdapter
+      await act(async () => {
+        await env.i18n.changeLanguage(previousLanguage || 'en')
+      })
+    }
+  })
+}
 
 test('custom package validation and installation work without an external SHA-256', async () => {
   const f = fixture()
@@ -442,6 +535,23 @@ for (const custom of [false, true]) {
       document: custom ? 'custom-source' : 'bundled-source',
       expected_sha256: custom ? undefined : 'a'.repeat(64),
     })
+    const install = await panel.findByRole('button', {
+      name: 'Install and activate',
+    })
+    fireEvent.click(panel.getByRole('checkbox'))
+    fireEvent.click(install)
+    await waitFor(() => assert.equal(f.writes.length, 1))
+    assert.equal(f.writes[0].action, 'install')
+    if (f.writes[0].action === 'install') {
+      assert.equal(
+        f.writes[0].document,
+        custom ? 'custom-source' : 'bundled-source'
+      )
+      assert.equal(
+        f.writes[0].expected_sha256,
+        custom ? undefined : 'a'.repeat(64)
+      )
+    }
   })
 }
 

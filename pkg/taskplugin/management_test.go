@@ -184,10 +184,17 @@ func TestManagementExpiredPreflightDoesNotUnpublishHost(t *testing.T) {
 	go func() { close(started); done <- catalog.ValidateInstall(ctx, pkg) }()
 	<-started
 	cancel()
-	catalog.mu.Unlock()
-	require.ErrorIs(t, <-done, context.Canceled)
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		catalog.mu.Unlock()
+		<-done
+		t.Fatal("canceled preflight must return while the catalog lock is still held")
+	}
 	require.Same(t, published, catalog.host.state.Load())
 	require.Equal(t, calls, store.loadCalls, "expired preflight never reaches storage")
+	catalog.mu.Unlock()
 	_, _, err = catalog.ManagementSnapshot(ctx)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Same(t, published, catalog.host.state.Load(), "an expired administrative read also leaves the healthy publication intact")

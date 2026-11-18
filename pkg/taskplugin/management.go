@@ -54,7 +54,12 @@ type ManagementMutation struct {
 // ValidateInstall checks the current catalog without committing an installation.
 // The eventual write still requires the caller's observed revision and CAS.
 func (catalog *Catalog) ValidateInstall(ctx context.Context, pkg *Package) error {
-	catalog.mu.Lock()
+	if err := managementContextError(ctx); err != nil {
+		return err
+	}
+	if err := catalog.mu.Acquire(ctx, 1); err != nil {
+		return errors.Join(ErrCatalogUnavailable, err)
+	}
 	defer catalog.mu.Unlock()
 	if err := managementContextError(ctx); err != nil {
 		return err
