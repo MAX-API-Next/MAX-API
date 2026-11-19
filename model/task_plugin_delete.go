@@ -81,6 +81,7 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 	if !db.Migrator().HasColumn(&TaskPluginDeletion{}, "models") {
 		return 0, taskplugin.ErrCatalogUnavailable
 	}
+	referenceChecksStarted, mutationAttempted := false, false
 	err := db.Transaction(func(tx *gorm.DB) error {
 		var head TaskPluginCatalogHead
 		// Match pricing writers before taking the catalog head or reading references.
@@ -123,6 +124,7 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		if err != nil {
 			return taskplugin.ErrCatalogInvalid
 		}
+		referenceChecksStarted = true
 		if err := rejectTaskPluginReferences(tx, pkg); err != nil {
 			return err
 		}
@@ -157,6 +159,7 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		if len(models) > maxTaskPluginModelIndexBytes {
 			return taskplugin.ErrCatalogInvalid
 		}
+		mutationAttempted = true // Even an UPDATE error can have an unknown outcome.
 		result := tx.Model(&TaskPluginCatalogHead{}).Where("id = ? AND revision = ?", 1, revision).
 			Updates(map[string]any{"revision": revision + 1, "mutation_id": common.GetUUID(), "last_deletion_revision": revision + 1})
 		if result.Error != nil {
@@ -184,6 +187,9 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 	})
 	if err != nil {
 		if ctx.Err() != nil {
+			if referenceChecksStarted && !mutationAttempted {
+				return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, ctx.Err())
+			}
 			return 0, errors.Join(taskplugin.ErrCatalogUnavailable, ctx.Err())
 		}
 		var mapping *taskplugin.CatalogChannelMappingError
@@ -435,11 +441,11 @@ func visitTaskPluginReferencePath(value any, path []string, visit func(taskPlugi
 	// These canonical maps hold arbitrary billing facts, not package identity.
 	// Unknown historical objects and actual binding/plan/envelope paths remain
 	// recursive reference containers in both persistence and deletion scans.
-	if len(path) >= 3 && path[0] == "billing_context" {
-		if len(path) == 3 && (path[1] == "task_billing" && (path[2] == "fields" || path[2] == "matched") || path[1] == "pricing_usage_envelope" && path[2] == "facts") {
+	if len(path) >= 3 && strings.EqualFold(path[0], "billing_context") {
+		if len(path) == 3 && (strings.EqualFold(path[1], "task_billing") && (strings.EqualFold(path[2], "fields") || strings.EqualFold(path[2], "matched")) || strings.EqualFold(path[1], "pricing_usage_envelope") && strings.EqualFold(path[2], "facts")) {
 			return false
 		}
-		if len(path) == 4 && path[1] == "task_billing_plan" && path[2] == "expression_plan" && path[3] == "submit_facts" {
+		if len(path) == 4 && strings.EqualFold(path[1], "task_billing_plan") && strings.EqualFold(path[2], "expression_plan") && strings.EqualFold(path[3], "submit_facts") {
 			return false
 		}
 	}
@@ -468,7 +474,7 @@ func visitTaskPluginReferencePath(value any, path []string, visit func(taskPlugi
 			}
 		}
 		for key, child := range v {
-			if visitTaskPluginReferencePath(child, append(path, strings.ToLower(key)), visit) {
+			if visitTaskPluginReferencePath(child, append(path, key), visit) {
 				return true
 			}
 		}

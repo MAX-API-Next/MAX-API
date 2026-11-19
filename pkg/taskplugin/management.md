@@ -31,6 +31,17 @@ administrative operation's 10-second context, starting before candidate loading.
 The existing JavaScript per-call execution limits remain secondary bounds.
 Catalog mutex waits use that context too; an operation canceled while waiting
 does not read storage or unpublish an otherwise healthy Host.
+Upload preflight also preserves an unchanged published Host when its own
+catalog read/metadata budget expires. A conflicting, invalid or changed
+authoritative generation remains fail-closed; this never restores a Host after
+such evidence or an unknown write. Activation, enable/disable and retained
+version checks propagate the same operation context through every reload.
+
+If deletion expires during reference checks before the first catalog mutation,
+it returns HTTP 503 with `code: "catalog_operation_not_committed"` and
+`committed: false`, preserving the healthy Host. Refresh before retrying.
+A newer generation or an error after a mutation attempt still suspends the
+Host until an authoritative refresh; an error alone cannot prove non-commit.
 
 ## UTF-8 BOM packages
 
@@ -260,6 +271,13 @@ Repair their metadata from trusted evidence before expecting further processing.
 Applied-finalize recovery uses its own `(submit_time, id)` cursor, wrapping after
 an empty page so repaired earlier rows can be retried. It only publishes already
 funded terminal evidence through the existing CAS, without replaying funding.
+When an applied finalize record has no recoverable pending terminal status,
+recovery can instead mark the nonterminal task `FAILURE` with a manual
+reconciliation reason. Funding remains applied and is not replayed or refunded
+by this disposition; reconcile the missing provider evidence separately.
+Ordinary timeout decisions also compare the observed `updated_at` with status.
+A same-status submission update makes the old decision lose without a terminal
+transition or settlement intent; the next sweep reevaluates the newer task.
 Each recovery/timeout class scans at most 2,000 rows per invocation by default;
 both share the existing cap of 100 successful transitions. This permits up to
 4,000 scans when both classes contain many unreadable or otherwise skipped rows.

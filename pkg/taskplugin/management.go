@@ -63,7 +63,7 @@ func (catalog *Catalog) ValidateInstall(ctx context.Context, pkg *Package) error
 	if err := managementContextError(ctx); err != nil {
 		return err
 	}
-	if err := catalog.refreshLocked(ctx); err != nil {
+	if err := catalog.refreshLockedForRead(ctx, true); err != nil {
 		return err
 	}
 	if catalog.snapshot.Revision == math.MaxInt64 {
@@ -105,16 +105,16 @@ func (catalog *Catalog) MutateExpected(ctx context.Context, expected int64, muta
 			}
 			return installCatalogPackagesContext(ctx, next, mutation.Package)
 		case "activate":
-			return activateCatalogVersion(next, mutation.Key, mutation.Version)
+			return activateCatalogVersion(ctx, next, mutation.Key, mutation.Version)
 		case "enable", "disable":
-			index, err := catalogVersion(next, mutation.Key, mutation.Version, false)
+			index, err := catalogVersion(ctx, next, mutation.Key, mutation.Version, false)
 			if err != nil {
 				return err
 			}
 			if !next.Packages[index].Active {
 				return ErrCatalogInvalid
 			}
-			return setCatalogEnabled(next, mutation.Key, mutation.Action == "enable")
+			return setCatalogEnabled(ctx, next, mutation.Key, mutation.Action == "enable")
 		default:
 			return ErrCatalogInvalid
 		}
@@ -146,6 +146,9 @@ func (catalog *Catalog) deleteExpected(ctx context.Context, expected int64, key,
 			return ErrCatalogConflict
 		}
 		if errors.Is(err, ErrCatalogInUse) || errors.Is(err, ErrBindingRejected) || errors.Is(err, ErrCatalogInvalid) {
+			return err
+		}
+		if errors.Is(err, ErrCatalogNotCommitted) {
 			return err
 		}
 		catalog.host.state.Store(nil)

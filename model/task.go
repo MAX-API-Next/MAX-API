@@ -696,7 +696,24 @@ func (t *Task) UpdateQuota() error {
 // INSERT ON CONFLICT when the WHERE-guarded UPDATE matches zero rows, which
 // silently bypasses the CAS guard.
 func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
-	result := DB.Model(t).Where("status = ?", fromStatus).Updates(t.statusUpdateValues())
+	return t.updateWithStatusSnapshot(fromStatus, nil)
+}
+
+// UpdateWithStatusSnapshot refuses a decision based on older task metadata,
+// even when another writer kept the same status.
+func (t *Task) UpdateWithStatusSnapshot(fromStatus TaskStatus, expectedUpdatedAt int64) (bool, error) {
+	return t.updateWithStatusSnapshot(fromStatus, &expectedUpdatedAt)
+}
+
+func (t *Task) updateWithStatusSnapshot(fromStatus TaskStatus, expectedUpdatedAt *int64) (bool, error) {
+	if t == nil || t.ID <= 0 || expectedUpdatedAt != nil && *expectedUpdatedAt < 0 {
+		return false, errors.New("persisted task and valid snapshot are required")
+	}
+	query := DB.Model(&Task{ID: t.ID}).Where("status = ?", fromStatus)
+	if expectedUpdatedAt != nil {
+		query = query.Where("updated_at = ?", *expectedUpdatedAt)
+	}
+	result := query.Updates(t.statusUpdateValues())
 	if result.Error != nil {
 		return false, result.Error
 	}
@@ -751,6 +768,16 @@ var errTaskStatusCASLost = errors.New("task status compare-and-swap lost")
 // durable settlement intent atomically. Balance mutations are applied after
 // this transaction by ApplyBillingSettlementOnce or its retry runner.
 func (t *Task) UpdateWithStatusAndSettlement(fromStatus TaskStatus, input BillingSettlementInput) (bool, error) {
+	return t.updateWithStatusAndSettlementSnapshot(fromStatus, nil, input)
+}
+
+// The intent and guarded terminal update still share the original transaction.
+// A stale snapshot rolls back the intent before any funding application.
+func (t *Task) UpdateWithStatusAndSettlementSnapshot(fromStatus TaskStatus, expectedUpdatedAt int64, input BillingSettlementInput) (bool, error) {
+	return t.updateWithStatusAndSettlementSnapshot(fromStatus, &expectedUpdatedAt, input)
+}
+
+func (t *Task) updateWithStatusAndSettlementSnapshot(fromStatus TaskStatus, expectedUpdatedAt *int64, input BillingSettlementInput) (bool, error) {
 	if t == nil || t.ID <= 0 {
 		return false, errors.New("persisted task is required")
 	}
@@ -760,12 +787,19 @@ func (t *Task) UpdateWithStatusAndSettlement(fromStatus TaskStatus, input Billin
 	if err := validateBillingSettlementInput(input); err != nil {
 		return false, err
 	}
+	if expectedUpdatedAt != nil && *expectedUpdatedAt < 0 {
+		return false, errors.New("task updated_at snapshot is invalid")
+	}
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		if _, _, err := ensureBillingSettlementRecordDB(tx, input); err != nil {
 			return err
 		}
-		result := tx.Model(t).Where("status = ?", fromStatus).Updates(t.statusUpdateValues())
+		query := tx.Model(&Task{ID: t.ID}).Where("status = ?", fromStatus)
+		if expectedUpdatedAt != nil {
+			query = query.Where("updated_at = ?", *expectedUpdatedAt)
+		}
+		result := query.Updates(t.statusUpdateValues())
 		if result.Error != nil {
 			return result.Error
 		}

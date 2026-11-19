@@ -221,6 +221,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 			}
 
 			oldStatus := task.Status
+			observedUpdatedAt := task.UpdatedAt
 			task.Status = model.TaskStatusFailure
 			task.Progress = "100%"
 			task.FinishTime = now
@@ -244,9 +245,9 @@ func sweepTimedOutTasks(ctx context.Context) {
 			var err error
 			task.PreservePrivateDataOnStatusUpdate()
 			if settlement != nil {
-				won, err = task.UpdateWithStatusAndSettlement(oldStatus, *settlement)
+				won, err = task.UpdateWithStatusAndSettlementSnapshot(oldStatus, observedUpdatedAt, *settlement)
 			} else {
-				won, err = task.UpdateWithStatus(oldStatus)
+				won, err = task.UpdateWithStatusSnapshot(oldStatus, observedUpdatedAt)
 			}
 			if err != nil {
 				logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks CAS update error for task %s: %v", task.TaskID, err))

@@ -240,6 +240,83 @@ func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T)
 	require.Zero(t, settlementCount)
 }
 
+func TestSweepTimeoutSnapshotLosesToConfirmedSubmission(t *testing.T) {
+	for _, source := range []string{BillingSourceWallet, BillingSourceSubscription} {
+		for _, awaiting := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/awaiting_%t", source, awaiting), func(t *testing.T) {
+				truncate(t)
+				resetTimedOutTaskSweepCursorForTest(t)
+				previous := constant.TaskTimeoutMinutes
+				constant.TaskTimeoutMinutes = 1
+				t.Cleanup(func() { constant.TaskTimeoutMinutes = previous })
+				const userID, tokenID, channelID, subID = 731, 732, 733, 734
+				seedUser(t, userID, 80)
+				seedToken(t, tokenID, userID, "synthetic-snapshot-token", 80)
+				seedChannel(t, channelID)
+				if source == BillingSourceSubscription {
+					seedSubscription(t, subID, userID, 1000, 100)
+				}
+				task := makeTask(userID, channelID, 20, tokenID, source, subID)
+				task.Status = model.TaskStatusSubmitted
+				task.SubmitTime = time.Now().Add(-2 * time.Minute).Unix()
+				task.PrivateData.AwaitingUpstreamID = awaiting
+				persistTask(t, task)
+				confirmed := task.PrivateData
+				confirmed.AwaitingUpstreamID = false
+				confirmed.UpstreamTaskID = "confirmed-upstream-id"
+				injected := false
+				// The worker has loaded its old page; publish a newer same-status
+				// submission before its decision/transaction, using the real DB.
+				require.NoError(t, model.DB.Callback().Query().After("gorm:query").Register("confirm-after-timeout-page", func(tx *gorm.DB) {
+					if !injected && tx.Statement.Table == "tasks" && tx.RowsAffected > 0 {
+						injected = true
+						require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).UpdateColumns(map[string]any{"private_data": confirmed, "updated_at": task.UpdatedAt + 1}).Error)
+					}
+				}))
+				t.Cleanup(func() { _ = model.DB.Callback().Query().Remove("confirm-after-timeout-page") })
+				sweepTimedOutTasks(t.Context())
+				require.True(t, injected)
+				var fresh model.Task
+				require.NoError(t, model.DB.First(&fresh, task.ID).Error)
+				require.Equal(t, model.TaskStatus(model.TaskStatusSubmitted), fresh.Status)
+				require.Equal(t, confirmed, fresh.PrivateData)
+				require.Equal(t, 20, fresh.Quota)
+				var intents int64
+				require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Count(&intents).Error)
+				require.Zero(t, intents, "a stale timeout must not leave an intent")
+				require.EqualValues(t, 80, getUserQuota(t, userID))
+				require.Equal(t, 80, getTokenRemainQuota(t, tokenID))
+				require.Equal(t, 80, getTokenUsedQuota(t, tokenID))
+				require.Zero(t, countLogs(t))
+				if source == BillingSourceSubscription {
+					require.EqualValues(t, 100, getSubscriptionUsed(t, subID))
+				}
+				// A later fresh sweep reevaluates confirmed-but-overdue work and
+				// applies the original refund exactly once, also after reload.
+				resetTimedOutTaskSweepCursorForTest(t)
+				sweepTimedOutTasks(t.Context())
+				sweepTimedOutTasks(t.Context())
+				require.NoError(t, model.DB.First(&fresh, task.ID).Error)
+				require.Equal(t, model.TaskStatus(model.TaskStatusFailure), fresh.Status)
+				require.NotContains(t, fresh.FailReason, "未自动退款")
+				require.Zero(t, fresh.Quota)
+				require.Equal(t, confirmed, fresh.PrivateData)
+				require.Equal(t, 100, getTokenRemainQuota(t, tokenID))
+				require.Equal(t, 60, getTokenUsedQuota(t, tokenID))
+				if source == BillingSourceWallet {
+					require.EqualValues(t, 100, getUserQuota(t, userID))
+				} else {
+					require.EqualValues(t, 80, getUserQuota(t, userID))
+					require.EqualValues(t, 80, getSubscriptionUsed(t, subID))
+				}
+				require.EqualValues(t, 1, countLogs(t))
+				require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Count(&intents).Error)
+				require.EqualValues(t, 1, intents)
+			})
+		}
+	}
+}
+
 func TestSweepTimedOutTaskWaitsForSubmissionSettlement(t *testing.T) {
 	truncate(t)
 	resetTimedOutTaskSweepCursorForTest(t)

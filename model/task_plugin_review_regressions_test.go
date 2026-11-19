@@ -972,9 +972,12 @@ func TestTaskPluginPrivateDataStringAndBytesSurviveFreshReload(t *testing.T) {
 
 func TestTaskPluginPrivateDataScanDoesNotMergeStaleIdentity(t *testing.T) {
 	before := TaskPrivateData{TokenId: 73, BillingRequestId: "original-request", PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", UserID: 71}}
+	expectedBinding := *before.PluginBinding
+	expected := before
+	expected.PluginBinding = &expectedBinding
 	current := before
-	require.Error(t, current.Scan(`{"token_id":99,"plugin_binding":{"user_id":"invalid"}}`))
-	require.Equal(t, before, current, "failed decoding cannot partially replace the funding identity")
+	require.Error(t, current.Scan(`{"token_id":99,"plugin_binding":{"plugin_key":"changed","user_id":"invalid"}}`))
+	require.Equal(t, expected, current, "failed decoding cannot partially replace the funding identity")
 	require.NoError(t, current.Scan(nil))
 	require.Equal(t, TaskPrivateData{}, current)
 	require.NoError(t, current.Scan([]byte{}))
@@ -1713,6 +1716,130 @@ func TestTaskPluginCandidateQueryBuildsForSupportedSQLDialects(t *testing.T) {
 			}
 			// Uses real dialect builders with SQL execution disabled; it is not
 			// a MySQL/PostgreSQL server, role or isolation integration test.
+		})
+	}
+}
+
+func TestTaskPluginUnicodeFoldedFactsRemainData(t *testing.T) {
+	db := deletionDB(t)
+	pkg, entry := catalogFixture(t, "stored", "1.0.0", "unicode-facts")
+	_, err := NewTaskPluginCatalogStore(db).CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	for _, spelling := range []string{"factſ", "FACTſ"} {
+		raw := fmt.Sprintf(`{"billing_context":{"pricing_usage_envelope":{"package_digest":%q,%q:{"package_digest":"standard"}}}}`, pkg.Digest(), spelling)
+		var private TaskPrivateData
+		require.NoError(t, common.UnmarshalJsonStr(raw, &private))
+		require.Contains(t, private.BillingContext.PricingUsageEnvelope.Facts, "package_digest", "typed decoder accepts the Unicode alias")
+		row := &Task{TaskID: spelling}
+		require.NoError(t, db.Create(row).Error)
+		require.NoError(t, db.Model(row).Updates(map[string]any{"private_data": raw}).Error)
+		wrong := strings.Replace(raw, pkg.Digest(), strings.Repeat("f", 64), 1)
+		require.Error(t, db.Model(row).Updates(map[string]any{"private_data": wrong}).Error, "adjacent real digest remains strict")
+	}
+	_, err = NewTaskPluginCatalogStore(db).DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.ErrorIs(t, err, taskplugin.ErrCatalogInUse)
+}
+
+func TestTaskPluginCanceledReferenceScanHasNoCommitAndKeepsHost(t *testing.T) {
+	db := deletionDB(t)
+	pkg, _ := catalogFixture(t, "stored", "1.0.0", "scan-cancellation")
+	catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	actor := taskplugin.Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "scan-cancel"}
+	binding, err := catalog.Host().Bind(actor, "GET", "/stored/one", "catalog-model", taskusage.MiniMaxH3Contract())
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	reached := false
+	require.NoError(t, db.Callback().Row().Before("gorm:row").Register("expire-reference-scan", func(tx *gorm.DB) {
+		if tx.Statement.Table == db.NamingStrategy.TableName("Task") {
+			reached = true
+			<-ctx.Done()
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Row().Remove("expire-reference-scan") })
+	err = catalog.MutateExpected(ctx, 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"})
+	require.True(t, reached)
+	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NotErrorIs(t, err, taskplugin.ErrCatalogUnavailable, "a known pre-write cancellation is not an unknown commit")
+	_, err = catalog.Host().Resolve(binding, actor)
+	require.NoError(t, err)
+	var head TaskPluginCatalogHead
+	require.NoError(t, db.First(&head, 1).Error)
+	require.EqualValues(t, 1, head.Revision)
+	var receipts int64
+	require.NoError(t, db.Model(&TaskPluginDeletion{}).Count(&receipts).Error)
+	require.Zero(t, receipts)
+}
+
+func TestTaskPluginCanceledMutationAttemptRemainsUnknown(t *testing.T) {
+	db := deletionDB(t)
+	pkg, _ := catalogFixture(t, "stored", "1.0.0", "mutation-cancellation")
+	catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	actor := taskplugin.Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "mutation-cancel"}
+	binding, err := catalog.Host().Bind(actor, "GET", "/stored/one", "catalog-model", taskusage.MiniMaxH3Contract())
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	reached := false
+	require.NoError(t, db.Callback().Update().After("gorm:update").Register("expire-after-head-write", func(tx *gorm.DB) {
+		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginCatalogHead") {
+			if values, ok := tx.Statement.Dest.(map[string]any); ok && values["revision"] != nil {
+				reached = true
+				<-ctx.Done()
+			}
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Update().Remove("expire-after-head-write") })
+	err = catalog.MutateExpected(ctx, 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"})
+	require.True(t, reached)
+	require.ErrorIs(t, err, taskplugin.ErrCatalogUnavailable)
+	require.NotErrorIs(t, err, taskplugin.ErrCatalogNotCommitted)
+	_, err = catalog.Host().Resolve(binding, actor)
+	require.Error(t, err, "after a mutation attempt only authoritative refresh can restore the Host")
+}
+
+func TestTaskPluginPreflightTimeoutRetainsObservedHeadEvidence(t *testing.T) {
+	for _, newer := range []bool{false, true} {
+		t.Run(fmt.Sprint(newer), func(t *testing.T) {
+			db := deletionDB(t)
+			store := NewTaskPluginCatalogStore(db)
+			pkg, entry := catalogFixture(t, "stored", "1.0.0", "observed-head")
+			catalog, err := taskplugin.OpenCatalog(t.Context(), store)
+			require.NoError(t, err)
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			actor := taskplugin.Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "head-observation"}
+			binding, err := catalog.Host().Bind(actor, "GET", "/stored/one", "catalog-model", taskusage.MiniMaxH3Contract())
+			require.NoError(t, err)
+			if newer {
+				entry.Enabled = false
+				_, err = store.CompareAndSwap(t.Context(), 1, []taskplugin.StoredPackage{entry})
+				require.NoError(t, err)
+			}
+			candidate, _ := catalogFixture(t, "candidate", "1.0.0", "candidate-source")
+			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+			defer cancel()
+			reached := false
+			require.NoError(t, db.Callback().Query().Before("gorm:query").Register("expire-retained-read", func(tx *gorm.DB) {
+				if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginVersion") {
+					reached = true
+					<-ctx.Done()
+				}
+			}))
+			t.Cleanup(func() { _ = db.Callback().Query().Remove("expire-retained-read") })
+			err = catalog.ValidateInstall(ctx, candidate)
+			require.True(t, reached)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			_, err = catalog.Host().Resolve(binding, actor)
+			if newer {
+				require.Error(t, err, "newer head observed before the interrupted package read must suspend the old Host")
+			} else {
+				require.NoError(t, err)
+			}
 		})
 	}
 }

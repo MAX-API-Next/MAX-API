@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 
@@ -55,6 +56,18 @@ func (*CatalogPricingDataError) Error() string {
 }
 func (*CatalogPricingDataError) Unwrap() error { return ErrCatalogInvalid }
 
+// A failed store read may still have observed an authoritative head. Upload
+// preflight must not preserve an older Host merely because the later read timed out.
+type CatalogReadObservationError struct {
+	Revision int64
+	Err      error
+}
+
+func (*CatalogReadObservationError) Error() string {
+	return "task plugin catalog read did not complete"
+}
+func (err *CatalogReadObservationError) Unwrap() error { return err.Err }
+
 type catalogMutex struct{ *semaphore.Weighted }
 
 func (mu catalogMutex) Lock()   { _ = mu.Acquire(context.Background(), 1) }
@@ -64,6 +77,7 @@ var (
 	ErrCatalogConflict       = errors.New("task plugin catalog changed; refresh before retrying")
 	ErrCatalogInvalid        = errors.New("task plugin catalog is invalid")
 	ErrCatalogUnavailable    = errors.New("task plugin catalog storage is unavailable")
+	ErrCatalogNotCommitted   = errors.New("task plugin deletion stopped before commit")
 	ErrCatalogInUse          = errors.New("task plugin version is still referenced; remove references before deleting")
 	ErrCatalogRevoked        = errors.New("task plugin version was permanently revoked")
 	ErrCatalogContentChanged = errors.New("task plugin version has different content")
@@ -155,6 +169,13 @@ func (catalog *Catalog) Refresh(ctx context.Context) error {
 }
 
 func (catalog *Catalog) refreshLocked(ctx context.Context) error {
+	return catalog.refreshLockedForRead(ctx, false)
+}
+
+// Only upload preflight may preserve an unchanged published generation when
+// its own read budget expires. Never restore state after a conflict or ignore
+// an authoritative invalid/changed generation or an unknown write outcome.
+func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool) error {
 	if err := managementContextError(ctx); err != nil {
 		return err
 	}
@@ -173,19 +194,34 @@ func (catalog *Catalog) refreshLocked(ctx context.Context) error {
 		}
 	}
 	if err != nil || ctx.Err() != nil {
-		catalog.host.state.Store(nil)
+		var observation *CatalogReadObservationError
+		changed := errors.As(err, &observation) && observation.Revision != catalog.snapshot.Revision
+		if !preflight || ctx.Err() == nil || changed || errors.Is(err, ErrCatalogInvalid) || err == nil && !sameCatalogSnapshot(snapshot, catalog.snapshot) {
+			catalog.host.state.Store(nil)
+		}
 		if ctx.Err() == nil && errors.Is(err, ErrCatalogInvalid) {
 			return ErrCatalogInvalid
 		}
-		return ErrCatalogUnavailable
+		return errors.Join(ErrCatalogUnavailable, ctx.Err())
 	}
 	state, err := buildCatalogStateContext(ctx, snapshot, catalog.snapshot, catalog.state != nil)
 	if err != nil {
-		catalog.host.state.Store(nil)
+		if !preflight || ctx.Err() == nil || !sameCatalogSnapshot(snapshot, catalog.snapshot) || errors.Is(err, ErrCatalogInvalid) {
+			catalog.host.state.Store(nil)
+		}
+		if ctx.Err() != nil {
+			return errors.Join(ErrCatalogUnavailable, ctx.Err())
+		}
 		return err
 	}
 	catalog.publish(snapshot, state)
 	return nil
+}
+
+func sameCatalogSnapshot(a, b CatalogSnapshot) bool {
+	return a.Revision == b.Revision && slices.Equal(a.Deletions, b.Deletions) && slices.EqualFunc(a.Packages, b.Packages, func(x, y StoredPackage) bool {
+		return x.Digest == y.Digest && x.Active == y.Active && x.Enabled == y.Enabled && x.Revoked == y.Revoked && bytes.Equal(x.Document, y.Document)
+	})
 }
 
 func (catalog *Catalog) publish(snapshot CatalogSnapshot, state *hostState) {
@@ -442,9 +478,12 @@ func installCatalogPackagesContext(ctx context.Context, next *CatalogSnapshot, p
 	return nil
 }
 
-func catalogVersion(snapshot *CatalogSnapshot, key, version string, activeOnly bool) (int, error) {
+func catalogVersion(ctx context.Context, snapshot *CatalogSnapshot, key, version string, activeOnly bool) (int, error) {
 	for i, entry := range snapshot.Packages {
-		p, err := LoadPackage(bytes.NewReader(entry.Document), entry.Digest)
+		p, err := LoadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest)
+		if ctx.Err() != nil {
+			return -1, ctx.Err()
+		}
 		if err != nil {
 			return -1, ErrCatalogInvalid
 		}
@@ -456,11 +495,11 @@ func catalogVersion(snapshot *CatalogSnapshot, key, version string, activeOnly b
 }
 
 func (catalog *Catalog) Activate(ctx context.Context, key, version string) error {
-	return catalog.update(ctx, func(next *CatalogSnapshot) error { return activateCatalogVersion(next, key, version) })
+	return catalog.update(ctx, func(next *CatalogSnapshot) error { return activateCatalogVersion(ctx, next, key, version) })
 }
 
-func activateCatalogVersion(next *CatalogSnapshot, key, version string) error {
-	index, err := catalogVersion(next, key, version, false)
+func activateCatalogVersion(ctx context.Context, next *CatalogSnapshot, key, version string) error {
+	index, err := catalogVersion(ctx, next, key, version, false)
 	if err != nil {
 		return err
 	}
@@ -468,7 +507,13 @@ func activateCatalogVersion(next *CatalogSnapshot, key, version string) error {
 		return ErrBindingRejected
 	}
 	for i, entry := range next.Packages {
-		p, _ := LoadPackage(bytes.NewReader(entry.Document), entry.Digest)
+		p, err := LoadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil {
+			return ErrCatalogInvalid
+		}
 		if p.manifest.Key == key {
 			next.Packages[i].Active = i == index
 		}
@@ -478,11 +523,11 @@ func activateCatalogVersion(next *CatalogSnapshot, key, version string) error {
 }
 
 func (catalog *Catalog) SetEnabled(ctx context.Context, key string, enabled bool) error {
-	return catalog.update(ctx, func(next *CatalogSnapshot) error { return setCatalogEnabled(next, key, enabled) })
+	return catalog.update(ctx, func(next *CatalogSnapshot) error { return setCatalogEnabled(ctx, next, key, enabled) })
 }
 
-func setCatalogEnabled(next *CatalogSnapshot, key string, enabled bool) error {
-	index, err := catalogVersion(next, key, "", true)
+func setCatalogEnabled(ctx context.Context, next *CatalogSnapshot, key string, enabled bool) error {
+	index, err := catalogVersion(ctx, next, key, "", true)
 	if err != nil {
 		return err
 	}
@@ -494,11 +539,11 @@ func setCatalogEnabled(next *CatalogSnapshot, key string, enabled bool) error {
 }
 
 func (catalog *Catalog) Revoke(ctx context.Context, key, version string) error {
-	return catalog.update(ctx, func(next *CatalogSnapshot) error { return revokeCatalogVersion(next, key, version) })
+	return catalog.update(ctx, func(next *CatalogSnapshot) error { return revokeCatalogVersion(ctx, next, key, version) })
 }
 
-func revokeCatalogVersion(next *CatalogSnapshot, key, version string) error {
-	index, err := catalogVersion(next, key, version, false)
+func revokeCatalogVersion(ctx context.Context, next *CatalogSnapshot, key, version string) error {
+	index, err := catalogVersion(ctx, next, key, version, false)
 	if err != nil {
 		return err
 	}

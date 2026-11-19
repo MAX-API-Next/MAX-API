@@ -12,6 +12,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
+	"github.com/MoeForge/moejs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -378,11 +379,79 @@ func TestManagementPreflightDeadlineReachesRetainedMetadata(t *testing.T) {
 	manifest := Manifest{APIVersion: 1, Key: "custom-upload", Name: "Custom", Version: "1.0.0", Models: []string{"custom-model"}}
 	document, err := common.Marshal(PackageDocument{FormatVersion: 3, Manifest: manifest, Source: `for(;;){};` + validUploadSource})
 	require.NoError(t, err)
+	program, err := moejs.Compile("retained-preflight.js", `for(;;){};`+validUploadSource)
+	require.NoError(t, err)
+	require.Contains(t, program.Exports(), "meta")
 	store.snapshot = CatalogSnapshot{Revision: 1, Packages: []StoredPackage{{Document: document, Digest: fmt.Sprintf("%x", sha256.Sum256(document)), Active: true}}}
+	candidate := testPackage(t, validManifest(), "candidate-source")
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	err = catalog.ValidateInstall(ctx, testPackage(t, validManifest(), "candidate-source"))
-	require.Error(t, err)
+	err = catalog.ValidateInstall(ctx, candidate)
+	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+	require.ErrorIs(t, err, ErrCatalogUnavailable)
 	require.Less(t, time.Since(started), 2*time.Second, "metadata must stop at the request deadline, not the independent five-second call limit")
+}
+
+func TestManagementPreflightReadTimeoutPreservesOnlyUnchangedHost(t *testing.T) {
+	for _, kind := range []string{"read-timeout", "changed-generation", "invalid-generation", "conflict-then-timeout"} {
+		t.Run(kind, func(t *testing.T) {
+			store := &memoryCatalogStore{}
+			catalog, err := OpenCatalog(t.Context(), store)
+			require.NoError(t, err)
+			pkg := testPackage(t, validManifest(), "source")
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			published := catalog.host.state.Load()
+			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+			defer cancel()
+			switch kind {
+			case "changed-generation":
+				store.snapshot.Revision++
+			case "invalid-generation":
+				store.loadErrors = []error{ErrCatalogInvalid}
+			case "conflict-then-timeout":
+				store.loadErrors = []error{ErrCatalogConflict, context.DeadlineExceeded}
+			}
+			store.onLoad = func(int) {
+				if kind != "invalid-generation" && !(kind == "conflict-then-timeout" && len(store.loadErrors) == 2) {
+					<-ctx.Done()
+					if kind == "read-timeout" {
+						store.loadErrors = []error{ctx.Err()}
+					}
+				}
+			}
+			err = catalog.ValidateInstall(ctx, testPackage(t, validManifest(), "candidate"))
+			require.Error(t, err)
+			if kind == "read-timeout" {
+				require.Same(t, published, catalog.host.state.Load())
+				_, err = catalog.Host().PricingPackage("POST", "/vendor/v1/jobs", "vendor-model")
+				require.NoError(t, err)
+			} else {
+				require.Nil(t, catalog.host.state.Load(), "authoritative invalid/change/conflict stays fail-closed")
+			}
+		})
+	}
+}
+
+func TestCatalogVersionChecksHonorCancellation(t *testing.T) {
+	pkg := testPackage(t, validManifest(), "source")
+	for _, action := range []string{"activate", "enable", "revoke"} {
+		t.Run(action, func(t *testing.T) {
+			snapshot := CatalogSnapshot{Revision: 1, Packages: []StoredPackage{{Document: pkg.Document(), Digest: pkg.Digest(), Active: true, Enabled: true}}}
+			before := cloneCatalogSnapshot(snapshot)
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			var err error
+			switch action {
+			case "activate":
+				err = activateCatalogVersion(ctx, &snapshot, pkg.Manifest().Key, pkg.Manifest().Version)
+			case "enable":
+				err = setCatalogEnabled(ctx, &snapshot, pkg.Manifest().Key, false)
+			case "revoke":
+				err = revokeCatalogVersion(ctx, &snapshot, pkg.Manifest().Key, pkg.Manifest().Version)
+			}
+			require.ErrorIs(t, err, context.Canceled)
+			require.Equal(t, before, snapshot)
+		})
+	}
 }
