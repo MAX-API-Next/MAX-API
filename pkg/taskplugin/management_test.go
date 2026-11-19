@@ -497,3 +497,93 @@ func TestPreflightSnapshotOrderDoesNotSuspendUnchangedHost(t *testing.T) {
 		})
 	}
 }
+
+type cancelAfterCatalogRead struct {
+	context.Context
+	armed  bool
+	checks int
+}
+
+func (ctx *cancelAfterCatalogRead) Err() error {
+	if ctx.armed {
+		ctx.checks++
+		if ctx.checks > 1 {
+			return context.Canceled
+		}
+	}
+	return nil
+}
+
+func TestRefreshReusesOnlyCurrentlyPublishedIdenticalGeneration(t *testing.T) {
+	for _, change := range []bool{false, true} {
+		t.Run(fmt.Sprint(change), func(t *testing.T) {
+			store := &memoryCatalogStore{}
+			catalog, err := OpenCatalog(t.Context(), store)
+			require.NoError(t, err)
+			pkg := testPackage(t, validManifest(), "validated-source")
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			published := catalog.host.state.Load()
+			if change {
+				store.snapshot.Packages[0].Enabled = false
+			}
+			ctx := &cancelAfterCatalogRead{Context: t.Context()}
+			store.onLoad = func(int) { ctx.armed = true }
+			err = catalog.Refresh(ctx)
+			if change {
+				require.ErrorIs(t, err, context.Canceled)
+				require.Nil(t, catalog.host.state.Load())
+			} else {
+				require.NoError(t, err)
+				require.Same(t, published, catalog.host.state.Load())
+				require.Equal(t, 1, ctx.checks, "unchanged published generation must not reenter metadata construction")
+			}
+		})
+	}
+}
+
+type noWriteCASStore struct{ memoryCatalogStore }
+
+func (store *noWriteCASStore) CompareAndSwap(context.Context, int64, []StoredPackage) (int64, error) {
+	return 0, errors.Join(ErrCatalogNotCommitted, context.Canceled)
+}
+
+func TestManagementExplicitCASNoWritePreservesPublishedHost(t *testing.T) {
+	store := &noWriteCASStore{}
+	pkg := testPackage(t, validManifest(), "known-source")
+	store.snapshot = CatalogSnapshot{Revision: 1, Packages: []StoredPackage{{Document: pkg.Document(), Digest: pkg.Digest(), Active: true, Enabled: true}}}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	published := catalog.host.state.Load()
+	err = catalog.MutateExpected(t.Context(), 1, ManagementMutation{Action: "disable", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version})
+	require.ErrorIs(t, err, ErrCatalogNotCommitted)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Same(t, published, catalog.host.state.Load())
+}
+
+type cancelInstallReceiptTraversal struct {
+	context.Context
+	cancel context.CancelFunc
+	checks int
+}
+
+func (ctx *cancelInstallReceiptTraversal) Err() error {
+	ctx.checks++
+	if ctx.checks == 2 {
+		ctx.cancel()
+	}
+	return ctx.Context.Err()
+}
+
+func TestInstallReceiptTraversalHonorsCancellationBeforeRevocation(t *testing.T) {
+	pkg := testPackage(t, validManifest(), "receipt-cancel")
+	next := CatalogSnapshot{Revision: 1, Deletions: []PackageDeletion{{Key: "unrelated", Version: "1.0.0", Digest: pkg.Digest()}, {Key: pkg.Manifest().Key, Version: pkg.Manifest().Version, Digest: pkg.Digest(), Revoked: true}}}
+	before := cloneCatalogSnapshot(next)
+	inner, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx := &cancelInstallReceiptTraversal{Context: inner, cancel: cancel}
+	err := installCatalogPackagesContext(ctx, &next, pkg)
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotErrorIs(t, err, ErrCatalogRevoked)
+	require.Equal(t, before, next)
+	require.ErrorIs(t, installCatalogPackagesContext(t.Context(), &next, pkg), ErrCatalogRevoked, "uncanceled receipt still enforces revocation")
+}

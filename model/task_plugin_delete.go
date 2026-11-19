@@ -85,7 +85,7 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 	if !db.Migrator().HasColumn(&TaskPluginDeletion{}, "models") {
 		return 0, taskplugin.ErrCatalogUnavailable
 	}
-	referenceChecksStarted, mutationAttempted := false, false
+	headVerified, mutationAttempted := false, false
 	err := db.Transaction(func(tx *gorm.DB) error {
 		var head TaskPluginCatalogHead
 		// Match pricing writers before taking the catalog head or reading references.
@@ -101,6 +101,7 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		if head.Revision != revision {
 			return taskplugin.ErrCatalogConflict
 		}
+		headVerified = true
 		deletions, err := loadTaskPluginDeletions(tx)
 		if err != nil {
 			return err
@@ -128,7 +129,6 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		if err != nil {
 			return taskplugin.ErrCatalogInvalid
 		}
-		referenceChecksStarted = true
 		if err := rejectTaskPluginReferences(tx, pkg); err != nil {
 			return err
 		}
@@ -191,7 +191,7 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 	})
 	if err != nil {
 		if ctx.Err() != nil {
-			if referenceChecksStarted && !mutationAttempted {
+			if headVerified && !mutationAttempted {
 				return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, ctx.Err())
 			}
 			return 0, errors.Join(taskplugin.ErrCatalogUnavailable, ctx.Err())
@@ -635,7 +635,7 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 		return err
 	}
 	if !present {
-		return nil
+		return validateTaskPluginAbsentReceiptSet(tx)
 	}
 	if _, ok := tx.Statement.ConnPool.(gorm.TxCommitter); !ok {
 		return taskplugin.ErrCatalogUnavailable

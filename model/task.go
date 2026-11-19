@@ -74,6 +74,7 @@ type Task struct {
 	preservePrivateDataOnStatusUpdate bool `gorm:"-"`
 	privateDataUnreadable             bool `gorm:"-"`
 	quotaWasNull                      bool `gorm:"-"`
+	updatedAtWasNull                  bool `gorm:"-"`
 }
 
 // PrivateDataUnreadable marks worker-only rows whose original metadata could
@@ -86,6 +87,7 @@ type taskWorkerRow struct {
 	Task
 	PrivateData []byte `gorm:"column:private_data;type:json"`
 	Quota       *int   `gorm:"column:quota"`
+	UpdatedAt   *int64 `gorm:"column:updated_at"`
 }
 
 func decodeTaskWorkerRows(rows []taskWorkerRow) []*Task {
@@ -93,6 +95,10 @@ func decodeTaskWorkerRows(rows []taskWorkerRow) []*Task {
 	for i := range rows {
 		task := &rows[i].Task
 		task.quotaWasNull = rows[i].Quota == nil
+		task.updatedAtWasNull = rows[i].UpdatedAt == nil
+		if rows[i].UpdatedAt != nil {
+			task.UpdatedAt = *rows[i].UpdatedAt
+		}
 		if rows[i].Quota != nil {
 			task.Quota = *rows[i].Quota
 		}
@@ -731,7 +737,7 @@ func (t *Task) updateWithStatusSnapshot(fromStatus TaskStatus, expectedUpdatedAt
 	}
 	query := DB.Model(&Task{ID: t.ID}).Where("status = ?", fromStatus)
 	if expectedUpdatedAt != nil {
-		query = t.whereQuotaSnapshot(query.Where("updated_at = ?", *expectedUpdatedAt))
+		query = t.whereQuotaSnapshot(t.whereTimestampSnapshot(query, *expectedUpdatedAt))
 	}
 	result := query.Updates(t.statusUpdateValues())
 	if result.Error != nil {
@@ -745,6 +751,13 @@ func (t *Task) whereQuotaSnapshot(query *gorm.DB) *gorm.DB {
 		return query.Where("quota IS NULL")
 	}
 	return query.Where("quota = ?", t.Quota)
+}
+
+func (t *Task) whereTimestampSnapshot(query *gorm.DB, observed int64) *gorm.DB {
+	if t.updatedAtWasNull {
+		return query.Where("updated_at IS NULL")
+	}
+	return query.Where("updated_at = ?", observed)
 }
 
 // UpdateWithStatusAndPendingTerminalEvidence durably records terminal provider
@@ -824,7 +837,7 @@ func (t *Task) updateWithStatusAndSettlementSnapshot(fromStatus TaskStatus, expe
 		}
 		query := tx.Model(&Task{ID: t.ID}).Where("status = ?", fromStatus)
 		if expectedUpdatedAt != nil {
-			query = t.whereQuotaSnapshot(query.Where("updated_at = ?", *expectedUpdatedAt))
+			query = t.whereQuotaSnapshot(t.whereTimestampSnapshot(query, *expectedUpdatedAt))
 		}
 		result := query.Updates(t.statusUpdateValues())
 		if result.Error != nil {

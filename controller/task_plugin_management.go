@@ -60,7 +60,7 @@ func taskPluginAdminError(c *gin.Context, err error) {
 	case errors.Is(err, taskplugin.ErrCatalogConflict):
 		status, message = http.StatusConflict, "Task plugin catalog changed; refresh before retrying"
 	case errors.Is(err, taskplugin.ErrCatalogNotCommitted):
-		status, message = http.StatusServiceUnavailable, "Task plugin deletion stopped before commit; refresh and retry"
+		status, message = http.StatusServiceUnavailable, "Task plugin catalog mutation stopped before commit; refresh and retry"
 		response["code"], response["committed"] = "catalog_operation_not_committed", false
 	case errors.Is(err, taskplugin.ErrCatalogInUse):
 		status, message = http.StatusUnprocessableEntity, "Task plugin version is still referenced; remove task, channel or pricing references before deleting"

@@ -220,8 +220,11 @@ func TestTaskPluginPricingAndDeletionLockOrder(t *testing.T) {
 	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
 	require.NoError(t, err)
 	var order []string
-	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("record_price_writer_lock", func(tx *gorm.DB) {
-		if row, ok := tx.Statement.Dest.(*Option); ok && row.Key == modelPricingLockOption {
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("record_price_writer_lock", func(tx *gorm.DB) {
+		if tx.Statement.Table == db.NamingStrategy.TableName("Option") && strings.Contains(fmt.Sprint(tx.Statement.Clauses["WHERE"].Expression), modelPricingLockOption) {
+			locking, ok := tx.Statement.Clauses["FOR"].Expression.(clause.Locking)
+			require.True(t, ok, "the price event must be an actual locking read")
+			require.Equal(t, "UPDATE", locking.Strength)
 			order = append(order, "price")
 		}
 	}))
@@ -1802,6 +1805,96 @@ func TestTaskPluginCanceledMutationAttemptRemainsUnknown(t *testing.T) {
 	require.NotErrorIs(t, err, taskplugin.ErrCatalogNotCommitted)
 	_, err = catalog.Host().Resolve(binding, actor)
 	require.Error(t, err, "after a mutation attempt only authoritative refresh can restore the Host")
+}
+
+func TestTaskPluginPreparationCancellationAfterHeadIsKnownNoWrite(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	_, entry := catalogFixture(t, "stored", "1.0.0", "preparation-cancel")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	reached := false
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("cancel-preparation", func(tx *gorm.DB) {
+		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginVersion") {
+			reached = true
+			cancel()
+		}
+	}))
+	_, err = store.DeleteVersion(ctx, 1, "stored", "1.0.0")
+	require.True(t, reached)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, taskplugin.ErrCatalogNotCommitted)
+	var head TaskPluginCatalogHead
+	require.NoError(t, db.First(&head, 1).Error)
+	require.EqualValues(t, 1, head.Revision)
+}
+
+func TestTaskReferencesRejectMissingReceiptTableAfterDeletion(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	pkg, entry := catalogFixture(t, "stored", "1.0.0", "task-receipt-loss")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	row := &Task{TaskID: "late-binding"}
+	require.NoError(t, db.Create(row).Error)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.NoError(t, err)
+	require.NoError(t, db.Migrator().DropTable(&TaskPluginDeletion{}))
+	private := TaskPrivateData{PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", Version: "1.0.0", PackageDigest: pkg.Digest()}}
+	require.ErrorIs(t, db.Model(row).Updates(map[string]any{"private_data": private}).Error, taskplugin.ErrCatalogInvalid)
+	require.NoError(t, db.Model(row).Updates(map[string]any{"status": TaskStatusInProgress}).Error, "an unrelated status patch emits no reference")
+}
+
+func TestTaskPluginCASPretransactionCancellationIsKnownNoWrite(t *testing.T) {
+	db := deletionDB(t)
+	_, entry := catalogFixture(t, "stored", "1.0.0", "pretransaction-cancel")
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	writes := 0
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("count-cas-prevalidation-writes", func(*gorm.DB) { writes++ }))
+	_, err := NewTaskPluginCatalogStore(db).CompareAndSwap(ctx, 0, []taskplugin.StoredPackage{entry})
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, taskplugin.ErrCatalogNotCommitted)
+	require.Zero(t, writes)
+}
+
+type cancelPricingTraversal struct {
+	context.Context
+	cancel context.CancelFunc
+	checks int
+}
+
+func (ctx *cancelPricingTraversal) Err() error {
+	ctx.checks++
+	if ctx.checks == 2 {
+		ctx.cancel()
+	}
+	return ctx.Context.Err()
+}
+
+func TestPricingContextTraversalReturnsNoPartialResultOnCancel(t *testing.T) {
+	pkg, entry := catalogFixture(t, "stored", "1.0.0", "cached-pricing")
+	for _, kind := range []string{"channels", "cached-plugins"} {
+		t.Run(kind, func(t *testing.T) {
+			authority := &pricingAuthority{validatedPackages: map[string]*taskplugin.Package{pkg.Digest(): pkg}}
+			if kind == "channels" {
+				authority.channels = []pricingChannel{{ID: 1, Models: "catalog-model"}, {ID: 2, Models: "catalog-model"}}
+			} else {
+				authority.plugins = []taskplugin.StoredPackage{entry}
+			}
+			ordinary, err := authority.contextsContext(t.Context(), "catalog-model")
+			require.NoError(t, err)
+			require.NotEmpty(t, ordinary)
+			inner, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			ctx := &cancelPricingTraversal{Context: inner, cancel: cancel}
+			partial, err := authority.contextsContext(ctx, "catalog-model")
+			require.ErrorIs(t, err, context.Canceled)
+			require.Nil(t, partial)
+		})
+	}
 }
 
 func TestTaskPluginPreflightCancellationRetainsObservedHeadEvidence(t *testing.T) {

@@ -335,7 +335,7 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 	}
 	next := taskplugin.CatalogSnapshot{Revision: revision + 1, Packages: packages}
 	if err := taskplugin.ValidateCatalogTransitionContext(ctx, taskplugin.CatalogSnapshot{}, next); err != nil {
-		return 0, err
+		return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, err)
 	}
 	// Input identities do not depend on database state. Compute them before
 	// taking the singleton head lock; keep transition validation in the transaction.
@@ -344,7 +344,7 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 	for i, entry := range next.Packages {
 		identity, err := taskPluginStorageIdentityContext(ctx, entry)
 		if err != nil {
-			return 0, err
+			return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, err)
 		}
 		nextIdentities[i] = identity
 		retained[identity] = true

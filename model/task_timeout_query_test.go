@@ -2,6 +2,7 @@ package model
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -59,6 +60,43 @@ func TestTimeoutCASPreservesQuotaNullability(t *testing.T) {
 			}
 			require.Equal(t, expectedNull, !stored.Valid, "CAS must not normalize NULL into an explicit zero")
 		})
+	}
+}
+
+func TestTimeoutCASPreservesTimestampNullability(t *testing.T) {
+	for _, withSettlement := range []bool{false, true} {
+		for _, change := range []bool{false, true} {
+			t.Run(fmt.Sprintf("settlement_%t/change_%t", withSettlement, change), func(t *testing.T) {
+				truncateTables(t)
+				row := &Task{TaskID: "nullable-version", Status: TaskStatusSubmitted, Quota: 10, SubmitTime: 1}
+				insertTask(t, row)
+				require.NoError(t, DB.Model(row).UpdateColumn("updated_at", nil).Error)
+				rows, err := GetTimedOutUnfinishedTasksAfter(1000, 0, 0, 10)
+				require.NoError(t, err)
+				require.Len(t, rows, 1)
+				observed := rows[0]
+				if change {
+					require.NoError(t, DB.Model(row).UpdateColumn("updated_at", 0).Error)
+				}
+				observed.Status = TaskStatusFailure
+				observed.PreservePrivateDataOnStatusUpdate()
+				var won bool
+				if withSettlement {
+					won, err = observed.UpdateWithStatusAndSettlementSnapshot(TaskStatusSubmitted, 0, BillingSettlementInput{OperationKey: "task-null:refund", Source: BillingSettlementSourceWallet, UserID: 1, FundingDelta: -10, TokenDelta: -10, TaskID: row.ID, TaskQuota: 10, TaskQuotaTarget: 0})
+				} else {
+					won, err = observed.UpdateWithStatusSnapshot(TaskStatusSubmitted, 0)
+				}
+				require.NoError(t, err)
+				require.Equal(t, !change, won)
+				var intents int64
+				require.NoError(t, DB.Model(&BillingSettlement{}).Count(&intents).Error)
+				if withSettlement && !change {
+					require.EqualValues(t, 1, intents)
+				} else {
+					require.Zero(t, intents)
+				}
+			})
+		}
 	}
 }
 

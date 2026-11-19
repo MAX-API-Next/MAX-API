@@ -76,7 +76,7 @@ var (
 	ErrCatalogConflict       = errors.New("task plugin catalog changed; refresh before retrying")
 	ErrCatalogInvalid        = errors.New("task plugin catalog is invalid")
 	ErrCatalogUnavailable    = errors.New("task plugin catalog storage is unavailable")
-	ErrCatalogNotCommitted   = errors.New("task plugin deletion stopped before commit")
+	ErrCatalogNotCommitted   = errors.New("task plugin catalog mutation stopped before commit")
 	ErrCatalogInUse          = errors.New("task plugin version is still referenced; remove references before deleting")
 	ErrCatalogRevoked        = errors.New("task plugin version was permanently revoked")
 	ErrCatalogContentChanged = errors.New("task plugin version has different content")
@@ -202,6 +202,9 @@ func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool
 			return ErrCatalogInvalid
 		}
 		return errors.Join(ErrCatalogUnavailable, ctx.Err())
+	}
+	if catalog.state != nil && catalog.host.state.Load() == catalog.state && sameCatalogSnapshot(snapshot, catalog.snapshot) {
+		return nil // Exact completed read; these immutable bytes are already validated.
 	}
 	state, err := buildCatalogStateContext(ctx, snapshot, catalog.snapshot, catalog.state != nil)
 	if err != nil {
@@ -435,6 +438,9 @@ func (catalog *Catalog) updateExpected(ctx context.Context, expected *int64, cha
 	}
 	revision, err := catalog.store.CompareAndSwap(ctx, catalog.snapshot.Revision, next.Packages)
 	if err != nil || revision != next.Revision {
+		if errors.Is(err, ErrCatalogNotCommitted) && !errors.Is(err, ErrCatalogConflict) {
+			return err
+		}
 		// A DB error may have happened after commit. Do not publish a guessed
 		// outcome; suspend until Refresh reads the authoritative persisted set.
 		catalog.host.state.Store(nil)
@@ -466,6 +472,9 @@ func installCatalogPackagesContext(ctx context.Context, next *CatalogSnapshot, p
 		seen[p.manifest.Key] = true
 		var receiptMismatch bool
 		for _, receipt := range next.Deletions {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if receipt.Key == p.manifest.Key && receipt.Version == p.manifest.Version {
 				if receipt.Revoked {
 					return errors.Join(ErrCatalogRevoked, ErrBindingRejected)

@@ -14,14 +14,62 @@ import (
 
 // BeforeSave covers Insert, Save, UpdateFields, batch and tag-based writes.
 // Only emitted model references participate; status/metadata-only patches do not.
+type channelEmittedReferences struct{ models, mapping *string }
+
+const channelBatchReferenceCheck = "max:channel_batch_reference_check"
+
 func (channel *Channel) BeforeSave(tx *gorm.DB) error {
-	models, mapping, err := channelReferenceUpdate(tx, channel)
-	if err != nil {
-		return err
+	statement := tx.Statement
+	value := reflect.ValueOf(statement.Dest)
+	for value.IsValid() && value.Kind() == reflect.Pointer {
+		value = value.Elem()
 	}
-	if models == nil && mapping == nil {
+	batch := value.IsValid() && (value.Kind() == reflect.Slice || value.Kind() == reflect.Array)
+	if checked, ok := statement.Settings.Load(channelBatchReferenceCheck); batch && ok && checked == statement {
 		return nil
 	}
+	receivers := []*Channel{channel}
+	if batch {
+		receivers = make([]*Channel, 0, value.Len())
+		for i := 0; i < value.Len(); i++ {
+			row := value.Index(i)
+			for row.IsValid() && row.Kind() == reflect.Pointer {
+				if row.IsNil() {
+					return taskplugin.ErrCatalogInvalid
+				}
+				row = row.Elem()
+			}
+			if !row.IsValid() || row.Type() != reflect.TypeOf(Channel{}) || !row.CanAddr() {
+				return taskplugin.ErrCatalogInvalid
+			}
+			receivers = append(receivers, row.Addr().Interface().(*Channel))
+		}
+	}
+	updates := make([]channelEmittedReferences, 0, len(receivers))
+	for _, receiver := range receivers {
+		models, mapping, err := channelReferenceUpdate(tx, receiver)
+		if err != nil {
+			return err
+		}
+		if models != nil || mapping != nil {
+			updates = append(updates, channelEmittedReferences{models, mapping})
+		}
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	if err := validateChannelReferenceSet(tx, updates); err != nil {
+		return err
+	}
+	// Only this exact statement may reuse its complete union validation. GORM
+	// clones statement settings for later statements; pointer equality forbids reuse.
+	if batch {
+		statement.Settings.Store(channelBatchReferenceCheck, statement)
+	}
+	return nil
+}
+
+func validateChannelReferenceSet(tx *gorm.DB, updates []channelEmittedReferences) error {
 	if err := taskPluginSQLiteWriteIntent(tx, &Channel{}); err != nil {
 		return err
 	}
@@ -30,37 +78,27 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 		return err
 	}
 	if !present {
-		// A genuinely old schema may have no receipts. A surviving deletion
-		// marker is authoritative evidence that the whole set was lost.
-		headPresent, err := taskPluginTableAvailable(tx, &TaskPluginCatalogHead{})
-		if err != nil || !headPresent {
-			return err
-		}
-		head, err := taskPluginChannelHead(tx)
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		return validateTaskPluginDeletionPresence(head, false)
+		return validateTaskPluginAbsentReceiptSet(tx)
 	}
 	references := map[string]bool{}
-	if models != nil {
-		for _, model := range strings.Split(*models, ",") {
-			if model = strings.TrimSpace(model); model != "" {
-				references[model] = true
+	for _, update := range updates {
+		models, mapping := update.models, update.mapping
+		if models != nil {
+			for _, model := range strings.Split(*models, ",") {
+				if model = strings.TrimSpace(model); model != "" {
+					references[model] = true
+				}
 			}
 		}
-	}
-	if mapping != nil && strings.TrimSpace(*mapping) != "" {
-		var values map[string]string
-		if common.UnmarshalJsonStr(*mapping, &values) != nil {
-			return taskplugin.ErrCatalogInvalid
-		}
-		for _, model := range values {
-			if model != "" {
-				references[model] = true
+		if mapping != nil && strings.TrimSpace(*mapping) != "" {
+			var values map[string]string
+			if common.UnmarshalJsonStr(*mapping, &values) != nil {
+				return taskplugin.ErrCatalogInvalid
+			}
+			for _, model := range values {
+				if model != "" {
+					references[model] = true
+				}
 			}
 		}
 	}
@@ -135,6 +173,21 @@ func taskPluginChannelHead(tx *gorm.DB) (TaskPluginCatalogHead, error) {
 		err = taskplugin.ErrCatalogInvalid
 	}
 	return head, err
+}
+
+func validateTaskPluginAbsentReceiptSet(tx *gorm.DB) error {
+	headPresent, err := taskPluginTableAvailable(tx, &TaskPluginCatalogHead{})
+	if err != nil || !headPresent {
+		return err
+	}
+	head, err := taskPluginChannelHead(tx)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return validateTaskPluginDeletionPresence(head, false)
 }
 
 func channelReferenceUpdate(tx *gorm.DB, channel *Channel) (*string, *string, error) {

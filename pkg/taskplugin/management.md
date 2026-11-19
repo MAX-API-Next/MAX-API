@@ -54,11 +54,19 @@ authoritative generation remains fail-closed; this never restores a Host after
 such evidence or an unknown write. Activation, enable/disable and retained
 version checks propagate the same operation context through every reload.
 
-If deletion expires during reference checks before the first catalog mutation,
-it returns HTTP 503 with `code: "catalog_operation_not_committed"` and
+After deletion verifies the expected locked head, expiration during preparation
+or reference checks before the first catalog mutation returns HTTP 503 with
+`code: "catalog_operation_not_committed"` and
 `committed: false`, preserving the healthy Host. Refresh before retrying.
 A newer generation or an error after a mutation attempt still suspends the
 Host until an authoritative refresh; an error alone cannot prove non-commit.
+CAS input validation that ends before opening its database transaction also
+returns the explicit no-write sentinel; the manager preserves the published
+Host only for that result, not a bare context error after a write attempt.
+After a successful complete read, an exact snapshot match reuses the validated
+Host only when that generation is still published. Changed, conflicting or
+invalid reads retain validation and suspension behavior. No suspended Host is
+restored merely because the old snapshot matches.
 
 ## UTF-8 BOM packages
 
@@ -196,6 +204,11 @@ channel coverage for an unreconciled legacy catalog. The current channel guard
 scans indexed receipts under the head lock, so deletion history size affects
 channel-write latency. A durable per-model lookup/backfill remains separate
 scalability work; the current implementation does not provide indexed lookup.
+Bulk channel statements validate the union of emitted model/mapping references
+once under the same head lock and transaction. This includes Select/Omit rules;
+an invalid member rejects the whole statement. Only that exact GORM statement
+can reuse its check. Separate statements, chunks and transactions reread the
+history; there is no cross-transaction cache or constant-time receipt lookup.
 Any retained non-revoked declaration intentionally satisfies this metadata
 reference check, including inactive or disabled versions. This preserves channel
 configuration and does not prove an active route, executor or paid admission.
@@ -337,5 +350,7 @@ stored rows, so a page can contain fewer items until those records are repaired.
 Single-task reads used for billing remain strict. Workers also retain whether
 quota was SQL NULL or an explicit zero: timeout/manual CAS uses `IS NULL` or an
 exact value match accordingly, without normalizing stored data or inferring a
-refund. The manual-settlement guard includes the observed quota so a changed
+refund. Worker timestamp snapshots similarly retain SQL NULL separately from
+numeric zero; timeout CAS uses `IS NULL` only when the read observed NULL. The
+manual-settlement guard includes the observed quota so a changed
 reservation rolls back its stale manual intent.

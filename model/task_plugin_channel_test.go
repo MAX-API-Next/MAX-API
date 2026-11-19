@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -72,6 +73,45 @@ func TestChannelReferencesRejectLostWholeReceiptSet(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestChannelBatchValidatesReceiptUnionOncePerStatement(t *testing.T) {
+	db := deletionDB(t)
+	catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+	require.NoError(t, err)
+	pkg, _ := catalogFixture(t, "stored", "1.0.0", "batch-union")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	require.NoError(t, catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"}))
+	reads := 0
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("count-batch-receipts", func(tx *gorm.DB) {
+		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginDeletion") {
+			reads++
+		}
+	}))
+	rows := []Channel{{Name: "a", Models: "ordinary-a"}, {Name: "b", Models: "ordinary-b"}, {Name: "c", ModelMapping: common.GetPointer(`{"alias":"ordinary-c"}`)}}
+	require.NoError(t, db.Create(&rows).Error)
+	require.Equal(t, 1, reads)
+	reads = 0
+	more := []Channel{{Name: "d", Models: "ordinary-d"}, {Name: "e", Models: "ordinary-e"}}
+	require.NoError(t, db.Create(&more).Error)
+	require.Equal(t, 1, reads, "another statement cannot reuse a previous validation")
+	bad := []Channel{{Name: "safe-member", Models: "ordinary"}, {Name: "deleted-member", Models: "catalog-model"}}
+	require.ErrorIs(t, db.Create(&bad).Error, taskplugin.ErrBindingRejected)
+	var count int64
+	require.NoError(t, db.Model(&Channel{}).Where("name IN ?", []string{"safe-member", "deleted-member"}).Count(&count).Error)
+	require.Zero(t, count, "one invalid union member rolls back the whole statement")
+	ignored := []Channel{{Name: "omitted-a", Models: "catalog-model"}, {Name: "omitted-b", Models: "catalog-model"}}
+	require.NoError(t, db.Omit("models").Create(&ignored).Error)
+	reads = 0
+	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
+		first := []Channel{{Name: "tx-first-a", Models: "ordinary"}, {Name: "tx-first-b", Models: "ordinary"}}
+		if err := tx.Create(&first).Error; err != nil {
+			return err
+		}
+		second := []Channel{{Name: "tx-second-a", Models: "ordinary"}, {Name: "tx-second-b", Models: "ordinary"}}
+		return tx.Create(&second).Error
+	}))
+	require.Equal(t, 2, reads, "even statements in the same transaction must not share a validation result")
 }
 
 func TestTaskPluginChannelReferencesCannotOutliveDeletion(t *testing.T) {

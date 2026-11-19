@@ -185,11 +185,17 @@ func (a *pricingAuthority) contextsContext(ctx context.Context, model string) ([
 	}
 	result := []ModelPricingContext{}
 	for _, channel := range a.channels {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		advertised := slices.Contains(strings.Split(channel.Models, ","), model)
 		mapping := map[string]string{}
 		mappingValid := channel.ModelMapping == nil || *channel.ModelMapping == "" || common.UnmarshalJsonStr(*channel.ModelMapping, &mapping) == nil
 		referenced := false
 		for original, target := range mapping {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if target == model && slices.Contains(strings.Split(channel.Models, ","), original) {
 				referenced = true
 			}
@@ -235,6 +241,9 @@ func (a *pricingAuthority) contextsContext(ctx context.Context, model string) ([
 		result = append(result, context)
 	}
 	for _, entry := range a.plugins {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if !entry.Active {
 			continue
 		}
@@ -281,8 +290,14 @@ func (a *pricingAuthority) contextsContext(ctx context.Context, model string) ([
 		}
 		result = append(result, context)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
-	return result, ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 func findPricingContext(contexts []ModelPricingContext, id string) (ModelPricingContext, bool) {
 	for _, context := range contexts {
