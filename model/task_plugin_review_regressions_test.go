@@ -757,7 +757,7 @@ func TestTaskPluginReferenceFreeHugeNumbersRemainWritable(t *testing.T) {
 	require.NoError(t, err)
 	task := Task{TaskID: "reference-free-number"}
 	require.NoError(t, db.Create(&task).Error)
-	raw := `{"history":{"value":1e400,"tiny":1e-4000}}`
+	raw := `{"history":{"value":1e400,"tiny":1e-4000},"notes":"stored"}`
 	require.NoError(t, db.Model(&task).Updates(map[string]any{"private_data": raw}).Error)
 	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
 	require.NoError(t, err)
@@ -1726,7 +1726,7 @@ func TestTaskPluginUnicodeFoldedFactsRemainData(t *testing.T) {
 	_, err := NewTaskPluginCatalogStore(db).CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
 	require.NoError(t, err)
 	for _, spelling := range []string{"factſ", "FACTſ"} {
-		raw := fmt.Sprintf(`{"billing_context":{"pricing_usage_envelope":{"package_digest":%q,%q:{"package_digest":"standard"}}}}`, pkg.Digest(), spelling)
+		raw := fmt.Sprintf(`{"billing_context":{"pricing_usage_envelope":{"package_digest":%q,%q:{"package_digest":"standard","PACKAGE_DIGEST":"premium"}}}}`, pkg.Digest(), spelling)
 		var private TaskPrivateData
 		require.NoError(t, common.UnmarshalJsonStr(raw, &private))
 		require.Contains(t, private.BillingContext.PricingUsageEnvelope.Facts, "package_digest", "typed decoder accepts the Unicode alias")
@@ -1763,6 +1763,7 @@ func TestTaskPluginCanceledReferenceScanHasNoCommitAndKeepsHost(t *testing.T) {
 	require.True(t, reached)
 	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, taskplugin.ErrCatalogNotCommitted)
 	require.NotErrorIs(t, err, taskplugin.ErrCatalogUnavailable, "a known pre-write cancellation is not an unknown commit")
 	_, err = catalog.Host().Resolve(binding, actor)
 	require.NoError(t, err)
@@ -1804,42 +1805,104 @@ func TestTaskPluginCanceledMutationAttemptRemainsUnknown(t *testing.T) {
 }
 
 func TestTaskPluginPreflightTimeoutRetainsObservedHeadEvidence(t *testing.T) {
-	for _, newer := range []bool{false, true} {
-		t.Run(fmt.Sprint(newer), func(t *testing.T) {
+	for _, stage := range []string{"packages", "head-reread"} {
+		for _, newer := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%t", stage, newer), func(t *testing.T) {
+				db := deletionDB(t)
+				store := NewTaskPluginCatalogStore(db)
+				pkg, entry := catalogFixture(t, "stored", "1.0.0", "observed-head")
+				catalog, err := taskplugin.OpenCatalog(t.Context(), store)
+				require.NoError(t, err)
+				require.NoError(t, catalog.Install(t.Context(), pkg))
+				actor := taskplugin.Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "head-observation"}
+				binding, err := catalog.Host().Bind(actor, "GET", "/stored/one", "catalog-model", taskusage.MiniMaxH3Contract())
+				require.NoError(t, err)
+				if newer {
+					entry.Enabled = false
+					_, err = store.CompareAndSwap(t.Context(), 1, []taskplugin.StoredPackage{entry})
+					require.NoError(t, err)
+				}
+				candidate, _ := catalogFixture(t, "candidate", "1.0.0", "candidate-source")
+				ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+				defer cancel()
+				reached := false
+				headReads := 0
+				require.NoError(t, db.Callback().Query().Before("gorm:query").Register("expire-retained-read", func(tx *gorm.DB) {
+					if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginCatalogHead") {
+						headReads++
+					}
+					if stage == "packages" && tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginVersion") || stage == "head-reread" && headReads == 2 {
+						reached = true
+						<-ctx.Done()
+					}
+				}))
+				t.Cleanup(func() { _ = db.Callback().Query().Remove("expire-retained-read") })
+				err = catalog.ValidateInstall(ctx, candidate)
+				require.True(t, reached)
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				_, err = catalog.Host().Resolve(binding, actor)
+				if newer {
+					require.Error(t, err, "newer head observed before the interrupted package read must suspend the old Host")
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
+	}
+}
+
+func TestTaskPluginConflictingIdentityAliasesRequireRepair(t *testing.T) {
+	for _, field := range []string{"plugin_key", "package_digest", "selected_plugin_key", "canonical-key", "mixed-type"} {
+		t.Run(field, func(t *testing.T) {
 			db := deletionDB(t)
 			store := NewTaskPluginCatalogStore(db)
-			pkg, entry := catalogFixture(t, "stored", "1.0.0", "observed-head")
-			catalog, err := taskplugin.OpenCatalog(t.Context(), store)
+			pkg, entry := catalogFixture(t, "stored", "1.0.0", "ambiguous-alias")
+			_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
 			require.NoError(t, err)
-			require.NoError(t, catalog.Install(t.Context(), pkg))
-			actor := taskplugin.Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "head-observation"}
-			binding, err := catalog.Host().Bind(actor, "GET", "/stored/one", "catalog-model", taskusage.MiniMaxH3Contract())
+			raw := `{"legacy":{"PLUGIN_KEY":"stored","Plugin_Key":"other","version":"1.0.0"}}`
+			switch field {
+			case "canonical-key":
+				raw = `{"legacy":{"plugin_key":"stored","PLUGIN_KEY":"other"}}`
+			case "mixed-type":
+				raw = `{"legacy":{"plugin_key":"stored","PLUGIN_KEY":42}}`
+			case "package_digest":
+				raw = fmt.Sprintf(`{"legacy":{"PACKAGE_DIGEST":%q,"Package_Digest":%q}}`, pkg.Digest(), strings.Repeat("f", 64))
+			case "selected_plugin_key":
+				raw = `{"legacy":{"SELECTED_PLUGIN_KEY":"stored","Selected_Plugin_Key":"other"}}`
+			}
+			row := &Task{TaskID: field}
+			require.NoError(t, db.Create(row).Error)
+			require.ErrorIs(t, db.Model(row).Updates(map[string]any{"private_data": raw}).Error, taskplugin.ErrCatalogInvalid)
+			// Model an existing historical row written before these guards.
+			require.NoError(t, db.Model(row).UpdateColumn("private_data", raw).Error)
+			_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+			var data *taskplugin.CatalogTaskDataError
+			require.ErrorAs(t, err, &data)
+			require.Equal(t, row.ID, data.TaskID)
+			require.NoError(t, db.Model(row).Updates(map[string]any{"private_data": `{"legacy":{"PLUGIN_KEY":"stored","Plugin_Key":"stored","VERSION":"1.0.0"}}`}).Error, "equal aliases remain valid")
+			_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+			require.ErrorIs(t, err, taskplugin.ErrCatalogInUse)
+			require.NoError(t, db.Model(row).Updates(map[string]any{"private_data": `{"legacy":{"plugin_key":42}}`}).Error, "single non-string unknown data is not an identity")
+			_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
 			require.NoError(t, err)
-			if newer {
-				entry.Enabled = false
-				_, err = store.CompareAndSwap(t.Context(), 1, []taskplugin.StoredPackage{entry})
-				require.NoError(t, err)
-			}
-			candidate, _ := catalogFixture(t, "candidate", "1.0.0", "candidate-source")
-			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-			defer cancel()
-			reached := false
-			require.NoError(t, db.Callback().Query().Before("gorm:query").Register("expire-retained-read", func(tx *gorm.DB) {
-				if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginVersion") {
-					reached = true
-					<-ctx.Done()
-				}
-			}))
-			t.Cleanup(func() { _ = db.Callback().Query().Remove("expire-retained-read") })
-			err = catalog.ValidateInstall(ctx, candidate)
-			require.True(t, reached)
-			require.ErrorIs(t, err, context.DeadlineExceeded)
-			_, err = catalog.Host().Resolve(binding, actor)
-			if newer {
-				require.Error(t, err, "newer head observed before the interrupted package read must suspend the old Host")
-			} else {
-				require.NoError(t, err)
-			}
+		})
+	}
+}
+
+func TestTaskPluginAmbiguousVersionsCannotPinDeletion(t *testing.T) {
+	for _, field := range []string{"version", "plugin_version"} {
+		t.Run(field, func(t *testing.T) {
+			db := deletionDB(t)
+			store := NewTaskPluginCatalogStore(db)
+			_, entry := catalogFixture(t, "stored", "1.0.0", "ambiguous-version")
+			_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+			require.NoError(t, err)
+			row := &Task{TaskID: field}
+			require.NoError(t, db.Create(row).Error)
+			raw := fmt.Sprintf(`{"legacy":{"plugin_key":"stored","version":"2.0.0",%q:"2.0.0",%q:"3.0.0"}}`, strings.ToUpper(field), strings.Title(field))
+			require.NoError(t, db.Model(row).UpdateColumn("private_data", raw).Error)
+			_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+			require.ErrorIs(t, err, taskplugin.ErrCatalogInUse, "an ambiguous explicit version cannot fall back to another version field")
 		})
 	}
 }

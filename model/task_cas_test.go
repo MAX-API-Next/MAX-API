@@ -318,6 +318,63 @@ func TestUpdateWithSettlementIntentCommitsTaskAndIntentTogether(t *testing.T) {
 	require.Equal(t, int64(5), settlement.FundingDelta)
 }
 
+func TestSubmitConfirmationAdvancesDatabaseVersionAtomically(t *testing.T) {
+	for _, mode := range []string{"current-database-version", "overflow", "readback-failure"} {
+		t.Run(mode, func(t *testing.T) {
+			truncateTables(t)
+			task := &Task{TaskID: mode, Status: TaskStatusSubmitted, UpdatedAt: 100, Quota: 10, PrivateData: TaskPrivateData{AwaitingUpstreamID: true}}
+			insertTask(t, task)
+			originalCallerVersion := task.UpdatedAt
+			persistedVersion := time.Now().Unix() + 100000
+			if mode == "overflow" {
+				persistedVersion = 1<<63 - 1
+			}
+			require.NoError(t, DB.Model(&Task{}).Where("id = ?", task.ID).UpdateColumn("updated_at", persistedVersion).Error)
+			task.PrivateData.AwaitingUpstreamID = false
+			task.PrivateData.UpstreamTaskID = "confirmed-provider-id"
+			input := &BillingSettlementInput{OperationKey: "request:" + mode + ":finalize", Source: BillingSettlementSourceWallet, UserID: 1, TaskID: task.ID, TaskQuota: 10, TaskQuotaTarget: 10}
+			readbackReached := false
+			if mode == "readback-failure" {
+				require.NoError(t, DB.Callback().Query().Before("gorm:query").Register("fail-confirmation-version-read", func(tx *gorm.DB) {
+					if tx.Statement.Table == "tasks" && len(tx.Statement.Selects) == 1 && tx.Statement.Selects[0] == "updated_at" {
+						readbackReached = true
+						tx.AddError(fmt.Errorf("synthetic version read failure"))
+					}
+				}))
+				t.Cleanup(func() { _ = DB.Callback().Query().Remove("fail-confirmation-version-read") })
+			}
+			err := task.UpdateWithSettlementIntent(input)
+			var fresh Task
+			require.NoError(t, DB.First(&fresh, task.ID).Error)
+			var records int64
+			require.NoError(t, DB.Model(&BillingSettlement{}).Count(&records).Error)
+			if mode != "current-database-version" {
+				require.Error(t, err)
+				if mode == "readback-failure" {
+					require.True(t, readbackReached)
+				}
+				require.Equal(t, persistedVersion, fresh.UpdatedAt)
+				require.Equal(t, originalCallerVersion, task.UpdatedAt)
+				require.True(t, fresh.PrivateData.AwaitingUpstreamID)
+				require.Empty(t, fresh.PrivateData.UpstreamTaskID)
+				require.Zero(t, records, "task metadata and intent must roll back together")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, persistedVersion+1, fresh.UpdatedAt)
+			require.Equal(t, fresh.UpdatedAt, task.UpdatedAt)
+			require.Equal(t, 10, fresh.Quota)
+			require.Equal(t, "confirmed-provider-id", fresh.PrivateData.UpstreamTaskID)
+			require.EqualValues(t, 1, records)
+			require.NoError(t, task.UpdateWithSettlementIntent(input))
+			require.NoError(t, DB.First(&fresh, task.ID).Error)
+			require.Equal(t, persistedVersion+2, fresh.UpdatedAt)
+			require.NoError(t, DB.Model(&BillingSettlement{}).Count(&records).Error)
+			require.EqualValues(t, 1, records, "duplicate confirmation keeps the stable intent identity")
+		})
+	}
+}
+
 func TestUpdateWithSettlementIntentRollsBackIntentWhenTaskIsMissing(t *testing.T) {
 	truncateTables(t)
 	operationKey := "request:submit-intent-missing:finalize"

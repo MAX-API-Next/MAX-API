@@ -293,6 +293,9 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		}
 		var after TaskPluginCatalogHead
 		err = tx.First(&after, 1).Error
+		if err != nil && ctx.Err() != nil {
+			return err // An interrupted reread did not establish a conflicting head.
+		}
 		// Under READ COMMITTED, reject a mixed snapshot. MySQL's consistent
 		// snapshot and SQLite's transaction also satisfy this invariant.
 		if missing {

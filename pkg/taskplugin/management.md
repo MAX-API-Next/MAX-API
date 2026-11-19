@@ -19,6 +19,15 @@ task updates now validate recursive legacy map/array references as well as typed
 bindings and frozen plans under the catalog-head lock. Unknown fields without
 references remain writable; omitted fields do not participate in the check.
 
+**Existing subscription refund limit:** a legacy task reserved at 20 and reduced
+to 15 by request finalization can later have its timeout refund of 15 held for
+manual reconciliation against the original pre-consume record of 20. The legacy
+timeout may already show `FAILURE` while that credit is manual; inspect the
+settlement state and remaining task quota, not status alone. This change keeps
+the existing financial coverage guard and does not implement automatic
+reconciliation for this case. Validate the original reservation, request-finalize
+and refund records in isolated business acceptance before rollout.
+
 Deletion now prefilters historical task JSON for the target identity before
 decoding it. A corrupt row proven unrelated to that identity no longer blocks
 its deletion; candidate rows with invalid JSON or typed data still require
@@ -248,6 +257,13 @@ Typed billing fact containers (`task_billing.fields`/`matched`,
 `pricing_usage_envelope.facts` and `task_billing_plan.expression_plan.submit_facts`
 within `billing_context`) are data, even when a declared fact is named
 `package_digest` or `plugin_key`. Adjacent package identity fields remain strict.
+Known fact paths use the typed JSON decoder's Unicode case folding, including
+spellings such as `factſ`. Conflicting case aliases for `plugin_key`,
+`selected_plugin_key` or `package_digest` in identity containers are invalid,
+even if one alias uses the canonical spelling. New writes reject them; candidate
+historical rows block deletion with the existing repairable `invalid_task_data`
+response. Equal aliases and single case variants remain supported. Ambiguous
+version aliases cannot pin a version, so their key references remain conservative.
 Valid task defaults that depend on the removed package are checked under the
 same pricing lock. Deletion cannot newly invalidate such a default, but remains
 allowed when another declared source satisfies it. Prices are never rewritten.
@@ -275,9 +291,18 @@ When an applied finalize record has no recoverable pending terminal status,
 recovery can instead mark the nonterminal task `FAILURE` with a manual
 reconciliation reason. Funding remains applied and is not replayed or refunded
 by this disposition; reconcile the missing provider evidence separately.
-Ordinary timeout decisions also compare the observed `updated_at` with status.
+Ordinary timeout decisions compare the observed `updated_at` and quota with status.
 A same-status submission update makes the old decision lose without a terminal
 transition or settlement intent; the next sweep reevaluates the newer task.
+The real Relay confirmation writer advances `updated_at` atomically from its
+current database value, even when its in-memory task or wall clock is older.
+This version update, upstream identity and existing settlement intent commit or
+roll back together. Duplicate confirmation retains the original intent key;
+overflow or failed version readback cannot release a successful confirmation.
+Request funding can project a changed task quota and set its timestamp back to
+wall time. The quota predicate still rejects the old timeout in that case;
+zero-delta projections leave the confirmation version intact. Funding SQL and
+the original operation identities remain unchanged.
 Each recovery/timeout class scans at most 2,000 rows per invocation by default;
 both share the existing cap of 100 successful transitions. This permits up to
 4,000 scans when both classes contain many unreadable or otherwise skipped rows.

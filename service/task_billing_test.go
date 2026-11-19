@@ -270,7 +270,9 @@ func TestSweepTimeoutSnapshotLosesToConfirmedSubmission(t *testing.T) {
 				require.NoError(t, model.DB.Callback().Query().After("gorm:query").Register("confirm-after-timeout-page", func(tx *gorm.DB) {
 					if !injected && tx.Statement.Table == "tasks" && tx.RowsAffected > 0 {
 						injected = true
-						require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).UpdateColumns(map[string]any{"private_data": confirmed, "updated_at": task.UpdatedAt + 1}).Error)
+						confirmation := *task
+						confirmation.PrivateData = confirmed
+						require.NoError(t, confirmation.UpdateWithSettlementIntent(nil), "use the actual Relay confirmation writer")
 					}
 				}))
 				t.Cleanup(func() { _ = model.DB.Callback().Query().Remove("confirm-after-timeout-page") })
@@ -312,6 +314,124 @@ func TestSweepTimeoutSnapshotLosesToConfirmedSubmission(t *testing.T) {
 				require.EqualValues(t, 1, countLogs(t))
 				require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Count(&intents).Error)
 				require.EqualValues(t, 1, intents)
+			})
+		}
+	}
+}
+
+func TestSweepTimeoutCannotReopenAfterConfirmedFunding(t *testing.T) {
+	for _, source := range []string{BillingSourceWallet, BillingSourceSubscription} {
+		for _, delta := range []int{-5, 5} {
+			t.Run(fmt.Sprintf("%s/delta_%d", source, delta), func(t *testing.T) {
+				truncate(t)
+				resetTimedOutTaskSweepCursorForTest(t)
+				priorDB, priorTimeout := model.DB, constant.TaskTimeoutMinutes
+				fixed := time.Now()
+				model.DB = model.DB.Session(&gorm.Session{NowFunc: func() time.Time { return fixed }})
+				constant.TaskTimeoutMinutes = 1
+				t.Cleanup(func() { model.DB, constant.TaskTimeoutMinutes = priorDB, priorTimeout })
+				const userID, tokenID, channelID, subID = 741, 742, 743, 744
+				seedUser(t, userID, 80)
+				seedToken(t, tokenID, userID, "synthetic-funded-confirm-token", 80)
+				seedChannel(t, channelID)
+				if source == BillingSourceSubscription {
+					seedSubscription(t, subID, userID, 1000, 100)
+				}
+				task := makeTask(userID, channelID, 20, tokenID, source, subID)
+				task.Status = model.TaskStatusSubmitted
+				task.SubmitTime = fixed.Add(-2 * time.Minute).Unix()
+				task.PrivateData.AwaitingUpstreamID = true
+				if source == BillingSourceWallet {
+					task.PrivateData.BillingRequestId = fmt.Sprintf("funded-confirm-%s-%d", source, delta)
+				}
+				persistTask(t, task)
+				var funding FundingSource = &WalletFunding{userId: userID, consumed: 20}
+				if source == BillingSourceSubscription {
+					funding = &SubscriptionFunding{requestId: task.PrivateData.BillingRequestId, userId: userID, subscriptionId: subID, preConsumed: 20}
+				}
+				session := &BillingSession{relayInfo: &relaycommon.RelayInfo{RequestId: task.PrivateData.BillingRequestId, UserId: userID, TokenId: tokenID, TokenKey: "synthetic-funded-confirm-token", TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: task.ID}}, funding: funding, preConsumedQuota: 20, tokenConsumed: 20}
+				injected := false
+				require.NoError(t, model.DB.Callback().Query().After("gorm:query").Register("fund-after-timeout-page", func(tx *gorm.DB) {
+					if !injected && tx.Statement.Table == "tasks" && tx.RowsAffected > 0 {
+						injected = true
+						confirmed := *task
+						confirmed.PrivateData.AwaitingUpstreamID = false
+						confirmed.PrivateData.UpstreamTaskID = "confirmed-funded-id"
+						input, err := session.PrepareSettlement(20 + delta)
+						require.NoError(t, err)
+						require.NoError(t, confirmed.UpdateWithSettlementIntent(input))
+						require.NoError(t, session.Settle(20+delta))
+					}
+				}))
+				t.Cleanup(func() { _ = model.DB.Callback().Query().Remove("fund-after-timeout-page") })
+				sweepTimedOutTasks(t.Context())
+				require.True(t, injected)
+				var fresh model.Task
+				require.NoError(t, model.DB.First(&fresh, task.ID).Error)
+				require.Equal(t, model.TaskStatus(model.TaskStatusSubmitted), fresh.Status)
+				require.Equal(t, "confirmed-funded-id", fresh.PrivateData.UpstreamTaskID)
+				require.False(t, fresh.PrivateData.AwaitingUpstreamID)
+				require.Equal(t, 20+delta, fresh.Quota)
+				require.Equal(t, 80-delta, getTokenRemainQuota(t, tokenID))
+				require.Equal(t, 80+delta, getTokenUsedQuota(t, tokenID))
+				if source == BillingSourceWallet {
+					require.EqualValues(t, 80-delta, getUserQuota(t, userID))
+				} else {
+					require.EqualValues(t, 100+delta, getSubscriptionUsed(t, subID))
+				}
+				var records []model.BillingSettlement
+				require.NoError(t, model.DB.Find(&records).Error)
+				require.Len(t, records, 1, "stale timeout cannot append another funding operation")
+				require.Equal(t, model.BillingSettlementStatusApplied, records[0].Status)
+				require.NoError(t, session.Settle(20+delta))
+				resetTimedOutTaskSweepCursorForTest(t)
+				sweepTimedOutTasks(t.Context())
+				sweepTimedOutTasks(t.Context())
+				require.NoError(t, model.DB.First(&fresh, task.ID).Error)
+				require.Equal(t, model.TaskStatus(model.TaskStatusFailure), fresh.Status)
+				require.NotContains(t, fresh.FailReason, "未自动退款")
+				if source == BillingSourceSubscription && delta < 0 {
+					// Existing full-refund coverage uses the original pre-consume20,
+					// so refund15 after a -5 request adjustment requires reconciliation.
+					// This metadata/CAS fix must not invent a second funding policy.
+					require.Equal(t, 15, fresh.Quota)
+					require.EqualValues(t, 95, getSubscriptionUsed(t, subID))
+					require.Equal(t, 85, getTokenRemainQuota(t, tokenID))
+					require.Equal(t, 75, getTokenUsedQuota(t, tokenID))
+					require.NoError(t, model.DB.Find(&records).Error)
+					require.Len(t, records, 2)
+					var manual *model.BillingSettlement
+					for i := range records {
+						if records[i].Status == model.BillingSettlementStatusManual {
+							manual = &records[i]
+						}
+					}
+					require.NotNil(t, manual)
+					require.EqualValues(t, -15, manual.FundingDelta)
+					require.Zero(t, manual.AppliedFundingDelta)
+					require.Zero(t, manual.AppliedTokenDelta)
+					require.Contains(t, manual.LastError, "does not cover pre-consumed amount")
+					require.Zero(t, countLogs(t))
+					return
+				}
+				require.Zero(t, fresh.Quota)
+				require.Equal(t, 100, getTokenRemainQuota(t, tokenID))
+				require.Equal(t, 60, getTokenUsedQuota(t, tokenID))
+				if source == BillingSourceWallet {
+					require.EqualValues(t, 100, getUserQuota(t, userID))
+				} else {
+					require.EqualValues(t, 80, getSubscriptionUsed(t, subID))
+				}
+				require.NoError(t, model.DB.Find(&records).Error)
+				require.Len(t, records, 2)
+				var fundingSum, tokenSum int64
+				for _, record := range records {
+					require.Equal(t, model.BillingSettlementStatusApplied, record.Status)
+					fundingSum += record.AppliedFundingDelta
+					tokenSum += record.AppliedTokenDelta
+				}
+				require.EqualValues(t, -20, fundingSum)
+				require.EqualValues(t, -20, tokenSum)
 			})
 		}
 	}

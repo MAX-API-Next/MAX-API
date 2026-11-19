@@ -699,8 +699,9 @@ func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
 	return t.updateWithStatusSnapshot(fromStatus, nil)
 }
 
-// UpdateWithStatusSnapshot refuses a decision based on older task metadata,
-// even when another writer kept the same status.
+// UpdateWithStatusSnapshot refuses a decision based on older task metadata
+// or quota, even when another writer kept the same status. The quota guard
+// also covers a funding projection whose timestamp returns to wall time.
 func (t *Task) UpdateWithStatusSnapshot(fromStatus TaskStatus, expectedUpdatedAt int64) (bool, error) {
 	return t.updateWithStatusSnapshot(fromStatus, &expectedUpdatedAt)
 }
@@ -711,7 +712,7 @@ func (t *Task) updateWithStatusSnapshot(fromStatus TaskStatus, expectedUpdatedAt
 	}
 	query := DB.Model(&Task{ID: t.ID}).Where("status = ?", fromStatus)
 	if expectedUpdatedAt != nil {
-		query = query.Where("updated_at = ?", *expectedUpdatedAt)
+		query = query.Where("updated_at = ? AND quota = ?", *expectedUpdatedAt, t.Quota)
 	}
 	result := query.Updates(t.statusUpdateValues())
 	if result.Error != nil {
@@ -797,7 +798,7 @@ func (t *Task) updateWithStatusAndSettlementSnapshot(fromStatus TaskStatus, expe
 		}
 		query := tx.Model(&Task{ID: t.ID}).Where("status = ?", fromStatus)
 		if expectedUpdatedAt != nil {
-			query = query.Where("updated_at = ?", *expectedUpdatedAt)
+			query = query.Where("updated_at = ? AND quota = ?", *expectedUpdatedAt, t.Quota)
 		}
 		result := query.Updates(t.statusUpdateValues())
 		if result.Error != nil {
@@ -946,7 +947,8 @@ func (t *Task) UpdateWithSettlementIntent(input *BillingSettlementInput) error {
 	if t == nil || t.ID <= 0 {
 		return errors.New("persisted task is required")
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+	var updatedAt int64
+	err := DB.Transaction(func(tx *gorm.DB) error {
 		if input != nil {
 			if err := validateBillingSettlementInput(*input); err != nil {
 				return err
@@ -955,17 +957,32 @@ func (t *Task) UpdateWithSettlementIntent(input *BillingSettlementInput) error {
 				return err
 			}
 		}
+		values := t.submitResultUpdateValues()
+		now := time.Now().Unix()
+		// The caller can be older than the stored task. Advance from the DB
+		// value atomically so a timeout based on any earlier version loses CAS.
+		values["updated_at"] = gorm.Expr("CASE WHEN updated_at IS NULL OR updated_at < ? THEN ? ELSE updated_at + 1 END", now, now)
 		result := tx.Model(&Task{ID: t.ID}).
 			Where("id = ? AND status NOT IN ?", t.ID, []string{TaskStatusFailure, TaskStatusSuccess}).
-			Updates(t.submitResultUpdateValues())
+			Where("updated_at IS NULL OR updated_at < ?", int64(1<<63-1)).
+			Updates(values)
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
 			return taskSubmitResultUpdateMissError(tx, t.ID)
 		}
+		var persisted struct{ UpdatedAt int64 }
+		if err := tx.Model(&Task{}).Select("updated_at").Where("id = ?", t.ID).Take(&persisted).Error; err != nil {
+			return err
+		}
+		updatedAt = persisted.UpdatedAt
 		return nil
 	})
+	if err == nil {
+		t.UpdatedAt = updatedAt
+	}
+	return err
 }
 
 func taskSubmitResultUpdateMissError(tx *gorm.DB, taskID int64) error {

@@ -272,7 +272,11 @@ func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 		if err := common.UnmarshalUseNumber(raw, &value); err != nil {
 			return &taskplugin.CatalogTaskDataError{TaskID: taskID}
 		}
-		if taskPluginReference(value, m.Key, m.Version, pkg.Digest()) {
+		referenced, ambiguous := taskPluginReference(value, m.Key, m.Version, pkg.Digest())
+		if ambiguous {
+			return &taskplugin.CatalogTaskDataError{TaskID: taskID}
+		}
+		if referenced {
 			return taskplugin.ErrCatalogInUse
 		}
 		if _, object := value.(map[string]any); object {
@@ -429,7 +433,10 @@ func rejectTaskPluginDefaultRemoval(tx *gorm.DB, pkg *taskplugin.Package, remain
 	return nil
 }
 
-type taskPluginReferenceIdentity struct{ key, version, digest string }
+type taskPluginReferenceIdentity struct {
+	key, version, digest string
+	ambiguous            bool
+}
 
 // Keep legacy deletion scans and serialized write validation on the same
 // reference vocabulary. Returning true from visit stops the traversal.
@@ -451,15 +458,24 @@ func visitTaskPluginReferencePath(value any, path []string, visit func(taskPlugi
 	}
 	switch v := value.(type) {
 	case map[string]any:
-		key, _ := taskPluginReferenceString(v, "plugin_key")
-		boundVersion, _ := taskPluginReferenceString(v, "version")
-		if explicit, ok := taskPluginReferenceString(v, "plugin_version"); ok {
+		key, _, keyConflict := taskPluginReferenceString(v, "plugin_key")
+		digest, _, digestConflict := taskPluginReferenceString(v, "package_digest")
+		selected, _, selectionConflict := taskPluginReferenceString(v, "selected_plugin_key")
+		if keyConflict || digestConflict || selectionConflict {
+			return visit(taskPluginReferenceIdentity{ambiguous: true})
+		}
+		boundVersion, _, versionConflict := taskPluginReferenceString(v, "version")
+		explicit, ok, explicitConflict := taskPluginReferenceString(v, "plugin_version")
+		if ok {
 			boundVersion = explicit
 		}
-		if digest, ok := taskPluginReferenceString(v, "package_digest"); ok && digest != "" && visit(taskPluginReferenceIdentity{digest: digest}) {
+		if versionConflict || explicitConflict {
+			boundVersion = "" // Ambiguity cannot establish a version pin.
+		}
+		if digest != "" && visit(taskPluginReferenceIdentity{digest: digest}) {
 			return true
 		}
-		if selected, ok := taskPluginReferenceString(v, "selected_plugin_key"); ok && selected != "" {
+		if selected != "" {
 			ref := taskPluginReferenceIdentity{key: selected}
 			if selected == key {
 				ref.version = boundVersion
@@ -488,29 +504,41 @@ func visitTaskPluginReferencePath(value any, path []string, visit func(taskPlugi
 	return false
 }
 
-func taskPluginReferenceString(value map[string]any, name string) (string, bool) {
-	if exact, ok := value[name].(string); ok {
-		return exact, true
-	}
+func taskPluginReferenceString(value map[string]any, name string) (text string, present, ambiguous bool) {
 	var result string
-	found := false
+	found, nonString := false, false
+	aliases := 0
 	for key, raw := range value {
 		if !strings.EqualFold(key, name) {
 			continue
 		}
+		aliases++
 		text, ok := raw.(string)
-		if !ok || found && text != result {
-			return "", false // Ambiguous aliases cannot establish a version pin.
+		if !ok {
+			nonString = true
+			continue
+		}
+		if found && text != result {
+			return "", false, true
 		}
 		result, found = text, true
 	}
-	return result, found
+	if aliases > 1 && nonString && found {
+		return "", false, true
+	}
+	return result, found, false
 }
 
-func taskPluginReference(value any, key, version, digest string) bool {
-	return visitTaskPluginReferences(value, func(ref taskPluginReferenceIdentity) bool {
-		return ref.digest != "" && ref.digest == digest || ref.key == key && (ref.version == "" || ref.version == version)
+func taskPluginReference(value any, key, version, digest string) (referenced, ambiguous bool) {
+	visitTaskPluginReferences(value, func(ref taskPluginReferenceIdentity) bool {
+		if ref.ambiguous {
+			ambiguous = true
+			return true
+		}
+		referenced = referenced || ref.digest != "" && ref.digest == digest || ref.key == key && (ref.version == "" || ref.version == version)
+		return false // Later identity ambiguity must still be reported as repairable.
 	})
+	return
 }
 
 func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
@@ -556,16 +584,24 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 	if common.UnmarshalUseNumber(serialized, &raw) != nil {
 		return taskplugin.ErrCatalogInvalid
 	}
+	ambiguous := false
 	visitTaskPluginReferences(raw, func(ref taskPluginReferenceIdentity) bool {
+		if ref.ambiguous {
+			ambiguous = true
+			return true
+		}
 		legacy[ref] = true
 		return false
 	})
+	if ambiguous {
+		return taskplugin.ErrCatalogInvalid
+	}
 	references := make([]taskPluginReferenceIdentity, 0, 3)
 	bindingIndex := -1
 	if binding := private.PluginBinding; binding != nil {
 		if binding.PluginKey != "" || binding.PackageDigest != "" {
 			bindingIndex = len(references)
-			references = append(references, taskPluginReferenceIdentity{binding.PluginKey, binding.Version, binding.PackageDigest})
+			references = append(references, taskPluginReferenceIdentity{key: binding.PluginKey, version: binding.Version, digest: binding.PackageDigest})
 		}
 	}
 	if context := private.BillingContext; context != nil {
@@ -577,7 +613,7 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 				return taskplugin.ErrBindingRejected
 			}
 			if p.PluginKey != "" || p.PackageDigest != "" {
-				references = append(references, taskPluginReferenceIdentity{p.PluginKey, p.PluginVersion, p.PackageDigest})
+				references = append(references, taskPluginReferenceIdentity{key: p.PluginKey, version: p.PluginVersion, digest: p.PackageDigest})
 			}
 		}
 		if envelope := context.PricingUsageEnvelope; envelope != nil && envelope.PackageDigest != "" {
