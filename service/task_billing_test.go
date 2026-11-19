@@ -343,6 +343,10 @@ func testSweepTimedOutHistoricalPluginBindingPreservesRefund(t *testing.T, asTex
 	catalog, err := taskplugin.OpenCatalog(t.Context(), model.NewTaskPluginCatalogStore(model.DB))
 	require.NoError(t, err)
 	require.NoError(t, catalog.Install(t.Context(), pkg))
+	bad := &model.Task{TaskID: "unreadable-timeout-neighbor", Status: model.TaskStatusSubmitted, UserId: userID, Quota: 20, SubmitTime: time.Now().Add(-3 * time.Minute).Unix()}
+	require.NoError(t, model.DB.Create(bad).Error)
+	const malformed = `{"upstream_task_id":42}`
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", bad.ID).UpdateColumn("private_data", malformed).Error)
 	task := &model.Task{TaskID: "historical-timeout-refund", Status: model.TaskStatusSubmitted, UserId: userID, Quota: 20, SubmitTime: time.Now().Add(-2 * time.Minute).Unix(), PrivateData: model.TaskPrivateData{UpstreamTaskID: "old-provider-id", BillingSource: model.BillingSettlementSourceWallet, BillingRequestId: "historical-timeout", TokenId: tokenID}}
 	require.NoError(t, model.DB.Create(task).Error)
 	task.PrivateData.PluginBinding = &types.TaskPluginBinding{PluginKey: "stored"}
@@ -364,6 +368,18 @@ func testSweepTimedOutHistoricalPluginBindingPreservesRefund(t *testing.T, asTex
 	require.Zero(t, result.Quota)
 	require.EqualValues(t, 100, getUserQuota(t, userID))
 	require.EqualValues(t, 100, getTokenRemainQuota(t, tokenID))
+	var badRow struct {
+		Status      model.TaskStatus
+		Quota       int
+		PrivateData string
+	}
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", bad.ID).Take(&badRow).Error)
+	require.EqualValues(t, model.TaskStatusSubmitted, badRow.Status)
+	require.Equal(t, 20, badRow.Quota)
+	require.Equal(t, malformed, badRow.PrivateData, "bad metadata is retained for repair, never replaced with zero values")
+	var badIntents int64
+	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Where("task_id = ?", bad.ID).Count(&badIntents).Error)
+	require.Zero(t, badIntents, "an unreadable neighbor must not create a refund or finalization intent")
 	var actual string
 	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Select("private_data").Scan(&actual).Error)
 	require.Equal(t, string(raw), actual, "timeout must leave historical metadata bytes intact")

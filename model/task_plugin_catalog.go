@@ -96,7 +96,9 @@ func taskPluginLargeTextType(db *gorm.DB) string {
 
 type taskPluginModelIndex string
 
-const maxTaskPluginModelIndexBytes = taskplugin.MaxPackageBytes
+// A valid package is at most MaxPackageBytes. Re-encoding model names may
+// expand each source byte to a six-byte JSON escape (for example '<').
+const maxTaskPluginModelIndexBytes = 6 * taskplugin.MaxPackageBytes
 
 func (index taskPluginModelIndex) Value() (driver.Value, error) {
 	if len(index) > maxTaskPluginModelIndexBytes {
@@ -111,8 +113,23 @@ func (index *taskPluginModelIndex) Scan(value any) error {
 		return nil
 	}
 	var document taskPluginDocument
-	if err := document.Scan(value); err != nil {
-		return err
+	switch raw := value.(type) {
+	case string:
+		document = taskPluginDocument(raw)
+	case []byte:
+		document = bytes.Clone(raw)
+	default:
+		return taskplugin.ErrCatalogInvalid
+	}
+	if encoded, ok := bytes.CutPrefix(document, []byte(taskPluginDocumentPrefix)); ok {
+		if len(encoded) > base64.StdEncoding.EncodedLen(maxTaskPluginModelIndexBytes) {
+			return taskplugin.ErrCatalogInvalid
+		}
+		decoded, err := base64.StdEncoding.Strict().DecodeString(string(encoded))
+		if err != nil {
+			return taskplugin.ErrCatalogInvalid
+		}
+		document = decoded
 	}
 	if len(document) > maxTaskPluginModelIndexBytes {
 		return taskplugin.ErrCatalogInvalid

@@ -142,9 +142,6 @@ func channelReferenceUpdate(tx *gorm.DB, channel *Channel) (*string, *string, er
 // destination schemas. For batch creates the hook receiver is the current row.
 func taskPluginEmittedField(tx *gorm.DB, receiver any, column string) (any, bool, error) {
 	selected, restricted := tx.Statement.SelectAndOmitColumns(false, true)
-	if include, exists := selected[column]; !include && (exists || restricted) {
-		return nil, false, nil
-	}
 	value := reflect.ValueOf(tx.Statement.Dest)
 	for value.IsValid() && value.Kind() == reflect.Pointer {
 		value = value.Elem()
@@ -162,7 +159,12 @@ func taskPluginEmittedField(tx *gorm.DB, receiver any, column string) (any, bool
 					name = field.DBName
 				}
 			}
-			if name != column {
+			// Unknown map keys are emitted verbatim by GORM. Select/Omit must
+			// therefore use that spelling before applying DB identifier folding.
+			if include, exists := selected[name]; !include && (exists || restricted) {
+				continue
+			}
+			if !strings.EqualFold(name, column) {
 				continue
 			}
 			if found {
@@ -171,6 +173,9 @@ func taskPluginEmittedField(tx *gorm.DB, receiver any, column string) (any, bool
 			result, found = value, true
 		}
 		return result, found, nil
+	}
+	if include, exists := selected[column]; !include && (exists || restricted) {
+		return nil, false, nil
 	}
 	if value.Kind() == reflect.Slice || value.Kind() == reflect.Array {
 		value = reflect.Indirect(reflect.ValueOf(receiver))

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,9 +72,9 @@ func TestTaskPluginDeletedModelIndexCapacity(t *testing.T) {
 	require.Empty(t, oldRow.Models)
 }
 
-func TestTaskPluginDeletionRejectsOversizedEscapedModelIndex(t *testing.T) {
+func TestTaskPluginDeletionAcceptsEscapedModelIndex(t *testing.T) {
 	db := deletionDB(t)
-	name := strings.Repeat("<", 200000)
+	name := strings.Repeat("<", 700000)
 	document, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "source", Manifest: taskplugin.Manifest{APIVersion: 1, Key: "escaped", Name: "escaped", Version: "1.0.0", Models: []string{name}}})
 	require.NoError(t, err)
 	document = bytes.ReplaceAll(document, []byte(`\u003c`), []byte("<"))
@@ -84,21 +85,26 @@ func TestTaskPluginDeletionRejectsOversizedEscapedModelIndex(t *testing.T) {
 	catalog, err := taskplugin.OpenCatalog(t.Context(), store)
 	require.NoError(t, err)
 	require.NoError(t, catalog.Install(t.Context(), pkg))
-	before, err := store.Load(t.Context())
-	require.NoError(t, err)
-	require.ErrorIs(t, catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "escaped", Version: "1.0.0"}), taskplugin.ErrCatalogInvalid)
+	require.NoError(t, catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "escaped", Version: "1.0.0"}))
 	after, err := store.Load(t.Context())
-	require.NoError(t, err, "failed deletion must leave the catalog readable")
-	require.Equal(t, before, after, "failed deletion must preserve source, head and receipts")
-	require.NoError(t, db.Create(&Channel{Models: "unrelated"}).Error, "a rejected deletion must not poison channel writes")
+	require.NoError(t, err, "the committed receipt must remain readable")
+	require.EqualValues(t, 2, after.Revision)
+	require.Empty(t, after.Packages)
+	var receipt TaskPluginDeletion
+	require.NoError(t, db.First(&receipt).Error)
+	var names []string
+	require.NoError(t, common.UnmarshalJsonStr(string(receipt.Models), &names))
+	require.Equal(t, []string{name}, names)
+	require.ErrorIs(t, db.Create(&Channel{Models: name}).Error, taskplugin.ErrBindingRejected, "the full original name must still protect future writes")
+	require.NoError(t, db.Create(&Channel{Models: "unrelated"}).Error)
 }
 
 func TestTaskPluginModelIndexCodecBounds(t *testing.T) {
-	for _, size := range []int{taskplugin.MaxPackageBytes - 1, taskplugin.MaxPackageBytes, taskplugin.MaxPackageBytes + 1} {
+	for _, size := range []int{maxTaskPluginModelIndexBytes - 1, maxTaskPluginModelIndexBytes, maxTaskPluginModelIndexBytes + 1} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
 			index := taskPluginModelIndex(strings.Repeat("x", size))
 			value, err := index.Value()
-			if size > taskplugin.MaxPackageBytes {
+			if size > maxTaskPluginModelIndexBytes {
 				require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
 				require.Nil(t, value)
 			} else {
@@ -112,7 +118,7 @@ func TestTaskPluginModelIndexCodecBounds(t *testing.T) {
 			for _, raw := range []any{string(index), encoded} {
 				var decoded taskPluginModelIndex
 				err := decoded.Scan(raw)
-				if size > taskplugin.MaxPackageBytes {
+				if size > maxTaskPluginModelIndexBytes {
 					require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
 				} else {
 					require.NoError(t, err)
@@ -1310,7 +1316,7 @@ func TestTaskPluginDeletionPreservesDeclaredTaskDefault(t *testing.T) {
 			_, err = store.DeleteVersion(t.Context(), revision, "kling", "1.0.0")
 			if alternate {
 				require.NoError(t, err, "another declared source keeps the unchanged default valid")
-				pricingEntryForTest(t, db, "kling-v1")
+				require.Empty(t, pricingEntryForTest(t, db, "kling-v1").ConfigurationError)
 			} else {
 				require.ErrorIs(t, err, taskplugin.ErrCatalogInUse, "deletion must not strand a valid stored task default")
 				after, err := store.Load(t.Context())
@@ -1318,6 +1324,125 @@ func TestTaskPluginDeletionPreservesDeclaredTaskDefault(t *testing.T) {
 				require.Equal(t, before, after)
 			}
 			require.Equal(t, `u("units") * 0.1`, rawPricingObjectForTest(t, db, "billing_setting.billing_expr")["kling-v1"])
+		})
+	}
+}
+
+func TestTaskPluginCaseVariantReferenceUpdates(t *testing.T) {
+	db := deletionDB(t)
+	require.NoError(t, db.Callback().Update().Remove("guard_catalog_update_columns"))
+	pkg, entry := catalogFixture(t, "stored", "1.0.0", "case-spelling")
+	store := NewTaskPluginCatalogStore(db)
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	channel := Channel{Name: "case", Models: "ordinary"}
+	task := Task{TaskID: "case"}
+	require.NoError(t, db.Create(&channel).Error)
+	require.NoError(t, db.Create(&task).Error)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.NoError(t, err)
+	private := TaskPrivateData{PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", Version: "1.0.0", PackageDigest: pkg.Digest()}}
+	for _, test := range []struct {
+		key   string
+		value any
+		model any
+		id    int64
+	}{
+		{"MODELS", "catalog-model", &Channel{}, int64(channel.Id)},
+		{"MoDeL_MaPpInG", `{"alias":"catalog-model"}`, &Channel{}, int64(channel.Id)},
+		{"PRIVATE_DATA", private, &Task{}, task.ID},
+	} {
+		t.Run(test.key, func(t *testing.T) {
+			query := func() *gorm.DB { return db.Model(test.model).Where("id = ?", test.id) }
+			require.ErrorIs(t, query().Updates(map[string]any{test.key: test.value}).Error, taskplugin.ErrBindingRejected)
+			require.ErrorIs(t, query().Omit(strings.ToLower(test.key)).Updates(map[string]any{test.key: test.value}).Error, taskplugin.ErrBindingRejected, "GORM still emits an unknown case spelling when only the canonical spelling is omitted")
+			require.NoError(t, query().Omit(test.key).Updates(map[string]any{test.key: test.value}).Error, "actually omitted alternate spelling is safe")
+			require.NoError(t, query().Select("updated_at").Updates(map[string]any{test.key: test.value}).Error, "unselected target is not emitted")
+		})
+	}
+	require.ErrorIs(t, db.Model(&Channel{}).Where("id = ?", channel.Id).Updates(map[string]any{"models": "ordinary", "MODELS": "catalog-model"}).Error, taskplugin.ErrCatalogInvalid)
+	var saved Channel
+	require.NoError(t, db.First(&saved, channel.Id).Error)
+	require.Equal(t, "ordinary", saved.Models)
+}
+
+func TestTaskWorkerMalformedPrivateDataDoesNotStarveClaimQueue(t *testing.T) {
+	db := deletionDB(t)
+	previous := DB
+	DB = db
+	t.Cleanup(func() { DB = previous })
+	bad := Task{TaskID: "malformed-worker", Status: TaskStatusSubmitted, UpdatedAt: 1}
+	good := Task{TaskID: "healthy-worker", Status: TaskStatusSubmitted, UpdatedAt: 2}
+	require.NoError(t, db.Create(&bad).Error)
+	require.NoError(t, db.Create(&good).Error)
+	require.NoError(t, db.Model(&Task{}).Where("id = ?", bad.ID).UpdateColumn("private_data", `{"upstream_task_id":42}`).Error)
+	require.Empty(t, GetAllUnFinishSyncTasks(1), "unreadable private data must never reach a poller")
+	claimed := GetAllUnFinishSyncTasks(1)
+	require.Len(t, claimed, 1, "the bad row must rotate so the next healthy task can be claimed")
+	require.Equal(t, good.ID, claimed[0].ID)
+	require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+	page, err := GetTimedOutUnfinishedTasksAfter(time.Now().Unix()+1, 0, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, page, 2)
+	for _, row := range page {
+		require.Equal(t, row.ID == bad.ID, row.PrivateDataUnreadable(), "timeout pages retain an explicit skip marker for cursor advancement")
+	}
+	_, err = GetTaskByID(bad.ID)
+	require.Error(t, err, "ordinary task reads retain strict decoding")
+}
+
+type defaultScanCancelContext struct {
+	context.Context
+	cancel context.CancelFunc
+	checks atomic.Int32
+}
+
+func (ctx *defaultScanCancelContext) Err() error {
+	if ctx.checks.Add(1) == 100 {
+		ctx.cancel()
+	}
+	return ctx.Context.Err()
+}
+
+func TestTaskPluginDefaultRemovalHonorsCancellationDuringModelScan(t *testing.T) {
+	db := deletionDB(t)
+	_, entry := catalogFixture(t, "stored", "1.0.0", "default-scan")
+	var document taskplugin.PackageDocument
+	require.NoError(t, common.Unmarshal(entry.Document, &document))
+	document.Manifest.Models = make([]string, 1000)
+	for i := range document.Manifest.Models {
+		document.Manifest.Models[i] = fmt.Sprintf("ordinary-%d", i)
+	}
+	data, err := common.Marshal(document)
+	require.NoError(t, err)
+	pkg, err := taskplugin.LoadPackage(bytes.NewReader(data), fmt.Sprintf("%x", sha256.Sum256(data)))
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	scan := &defaultScanCancelContext{Context: ctx, cancel: cancel}
+	err = rejectTaskPluginDefaultRemoval(db.WithContext(scan), pkg, nil)
+	require.ErrorIs(t, err, context.Canceled, "even non-tiered model scans must check cancellation")
+}
+
+func TestTaskPluginMalformedDefaultPricingIsRepairable(t *testing.T) {
+	for _, key := range []string{"billing_setting.billing_mode", "billing_setting.billing_expr", "ModelRatio"} {
+		t.Run(key, func(t *testing.T) {
+			db := deletionDB(t)
+			pkg, _ := catalogFixture(t, "stored", "1.0.0", "bad-default")
+			catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+			require.NoError(t, err)
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			require.NoError(t, db.Create(&Option{Key: key, Value: `[]`}).Error)
+			err = catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"})
+			var repair *taskplugin.CatalogPricingDataError
+			require.ErrorAs(t, err, &repair)
+			require.Equal(t, key, repair.OptionKey)
+			actor := taskplugin.Actor{UserID: 71, TokenID: 72, ChannelID: 73, RequestID: "bad-default-repair"}
+			_, err = catalog.Host().Bind(actor, "GET", "/stored/one", "catalog-model", taskusage.MiniMaxH3Contract())
+			require.NoError(t, err, "known bad price data must leave the Host published")
+			var count int64
+			require.NoError(t, db.Model(&TaskPluginVersion{}).Count(&count).Error)
+			require.EqualValues(t, 1, count)
 		})
 	}
 }

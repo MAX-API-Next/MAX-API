@@ -98,6 +98,17 @@ func defaultPricingMaps() pricingMaps {
 	}
 	return result
 }
+
+type modelPricingDataError struct {
+	key string
+	err error
+}
+
+func (err *modelPricingDataError) Error() string {
+	return err.err.Error()
+}
+func (err *modelPricingDataError) Unwrap() error { return err.err }
+
 func readModelPricingMaps(tx *gorm.DB) (pricingMaps, error) {
 	var rows []Option
 	if err := tx.Where(map[string]any{"key": modelPricingOptionKeys}).Find(&rows).Error; err != nil {
@@ -107,24 +118,24 @@ func readModelPricingMaps(tx *gorm.DB) (pricingMaps, error) {
 	seen := map[string]bool{}
 	for _, row := range rows {
 		if seen[row.Key] {
-			return nil, errors.New("duplicate model pricing option rows")
+			return nil, &modelPricingDataError{row.Key, errors.New("duplicate model pricing option rows")}
 		}
 		seen[row.Key] = true
 		if len(row.Value) > 2*1024*1024 {
-			return nil, errors.New("model pricing option exceeds size limit")
+			return nil, &modelPricingDataError{row.Key, errors.New("model pricing option exceeds size limit")}
 		}
 		var entries map[string]any
 		if err := common.UnmarshalJsonStr(row.Value, &entries); err != nil {
-			return nil, fmt.Errorf("invalid model pricing object: %s: %w", row.Key, err)
+			return nil, &modelPricingDataError{row.Key, fmt.Errorf("invalid model pricing object: %s: %w", row.Key, err)}
 		}
 		if entries == nil {
-			return nil, fmt.Errorf("invalid model pricing object: %s: value is null", row.Key)
+			return nil, &modelPricingDataError{row.Key, fmt.Errorf("invalid model pricing object: %s: value is null", row.Key)}
 		}
 		// Legacy billing entry type errors belong to their model, so a valid
 		// replacement can repair them. Structural/DB errors still fail closed.
 		if !strings.HasPrefix(row.Key, "billing_setting.") {
 			if err := validateOptionUpdate(row.Key, row.Value); err != nil {
-				return nil, fmt.Errorf("invalid stored numeric pricing map: %s: %w", row.Key, err)
+				return nil, &modelPricingDataError{row.Key, fmt.Errorf("invalid stored numeric pricing map: %s: %w", row.Key, err)}
 			}
 		}
 		values[row.Key] = entries

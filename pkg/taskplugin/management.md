@@ -214,7 +214,16 @@ allowed when another declared source satisfies it. Prices are never rewritten.
 The source-free declared-model index uses LONGTEXT on MySQL and TEXT on SQLite
 and PostgreSQL, with ASCII storage encoding for legacy character sets. Migrate
 existing experimental index columns before using deletion on upgraded nodes.
-The serialized JSON model index is limited to 1 MiB before storage encoding.
-JSON escaping can expand model names beyond the uploaded package size. If the
-index exceeds this bound, deletion is rejected and the transaction preserves
-the installed version and catalog revision; it never commits an unreadable receipt.
+The serialized JSON model index is limited to 6 MiB before storage encoding,
+covering the worst-case six-byte JSON escape expansion of every accepted 1 MiB
+package. Readers and writers use the same bound and existing ASCII/base64
+encoding; older raw JSON and encoded receipts remain readable. Upgrade every
+catalog and channel writer before deleting versions whose indexes exceed the
+older 1 MiB reader limit. The upload/package limit remains 1 MiB.
+The maximum index occupies about 8 MiB after base64, plus the receipt and SQL
+overhead. Ensure MySQL client and server packet limits can carry it; 16 MiB or
+higher leaves room for this write. See MySQL's [packet-size guidance](https://dev.mysql.com/doc/refman/8.0/en/packet-too-large.html).
+Workers isolate unreadable task private data, log the database row ID, and
+continue valid neighbors. Timeout cursors advance past bad rows; those rows
+retain their status, quota and original metadata without a new settlement.
+Repair their metadata from trusted evidence before expecting further processing.

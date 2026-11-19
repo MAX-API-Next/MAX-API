@@ -28,8 +28,9 @@ installation or activation, including format 1, and acknowledge `bom_nodes_ready
 Validation alone does not establish that older nodes accept those retained bytes.
 See the [BOM compatibility guidance](../pkg/taskplugin/management.md#utf-8-bom-packages).
 
-For a separately downloaded official `plugin.js`, the publisher's repository-root
-`index.json` lists each version's `sha256`. Upload the exact published bytes:
+For a separately downloaded official `plugin.js`, use the publisher's expected
+SHA-256 from release metadata when available; otherwise leave the field blank.
+Upload the exact published bytes:
 Git's Windows line-ending conversion changes the hash. Extract the Git blob or
 download the raw file at the pinned commit rather than hashing a converted
 checkout and treating that new hash as the publisher's pin.
@@ -141,7 +142,10 @@ validation reads current locked package rows rather than a prior MySQL snapshot.
 The source-free declared-model index uses LONGTEXT on MySQL and TEXT on SQLite
 and PostgreSQL, with ASCII storage encoding for legacy character sets. Migrate
 existing experimental index columns before using deletion on upgraded nodes.
-Deletion also requires the serialized JSON model index to fit within 1 MiB.
-Names that expand heavily under JSON escaping may exceed this limit even when
-the uploaded package fits. Such deletion is rejected atomically, preserving the
-installed version and catalog revision.
+The decoded JSON model index is bounded to 6 MiB to cover worst-case escaping
+for every accepted 1 MiB package; the upload limit stays unchanged. Storage keeps
+the existing ASCII/base64 encoding and accepts old raw/encoded receipts. Upgrade
+all catalog/channel writers before creating indexes above the old 1 MiB limit.
+Maximum encoded indexes are about 8 MiB plus receipt/SQL overhead; ensure MySQL
+client and server packet limits can carry them (16 MiB or higher for this write).
+See the [packet-size guidance](https://dev.mysql.com/doc/refman/8.0/en/packet-too-large.html).

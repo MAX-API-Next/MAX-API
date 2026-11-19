@@ -72,6 +72,31 @@ type Task struct {
 	includeDataInUpdate               bool `gorm:"-"`
 	includePrivateDataInUpdate        bool `gorm:"-"`
 	preservePrivateDataOnStatusUpdate bool `gorm:"-"`
+	privateDataUnreadable             bool `gorm:"-"`
+}
+
+// PrivateDataUnreadable marks worker-only rows whose original metadata could
+// not be decoded. They may advance a scan cursor, but must never be settled.
+func (t *Task) PrivateDataUnreadable() bool { return t.privateDataUnreadable }
+
+// The direct field overrides the embedded scanner only for worker queries.
+// A malformed row cannot abort its healthy neighbors; ordinary reads stay strict.
+type taskWorkerRow struct {
+	Task
+	PrivateData []byte `gorm:"column:private_data;type:json"`
+}
+
+func decodeTaskWorkerRows(rows []taskWorkerRow) []*Task {
+	tasks := make([]*Task, 0, len(rows))
+	for i := range rows {
+		task := &rows[i].Task
+		if err := task.PrivateData.Scan(rows[i].PrivateData); err != nil {
+			task.privateDataUnreadable = true
+			common.SysError(fmt.Sprintf("task worker skipped unreadable private data: id=%d", task.ID))
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks
 }
 
 // IsMiniMaxH3Task reports whether the persisted task has an explicit,
@@ -397,7 +422,7 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 }
 
 func GetAppliedTaskFinalizeRecoveryCandidates(cutoffUnix int64, limit int) ([]*Task, error) {
-	var tasks []*Task
+	var rows []taskWorkerRow
 	if limit <= 0 {
 		limit = 100
 	}
@@ -408,20 +433,23 @@ func GetAppliedTaskFinalizeRecoveryCandidates(cutoffUnix int64, limit int) ([]*T
 		Where("status NOT IN ?", []TaskStatus{TaskStatusFailure, TaskStatusSuccess}).
 		Where("submit_time < ?", cutoffUnix).
 		Where("EXISTS (?)", finalize).
-		Order("submit_time ASC, id ASC").Limit(limit).Find(&tasks).Error
-	return tasks, err
+		Order("submit_time ASC, id ASC").Limit(limit).Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	return decodeTaskWorkerRows(rows), nil
 }
 
 // GetTimedOutUnfinishedTasksAfter returns timed-out non-terminal tasks after
 // the supplied (submit_time, id) cursor in stable ascending order.
 func GetTimedOutUnfinishedTasksAfter(cutoffUnix int64, afterSubmitTime int64, afterID int64, limit int) ([]*Task, error) {
-	var tasks []*Task
+	var rows []taskWorkerRow
 	err := timedOutUnfinishedTasksQuery(DB, common.UsingSQLite, cutoffUnix, afterSubmitTime, afterID, limit).
-		Find(&tasks).Error
+		Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	return tasks, nil
+	return decodeTaskWorkerRows(rows), nil
 }
 
 func timedOutUnfinishedTasksQuery(db *gorm.DB, usingSQLite bool, cutoffUnix int64, afterSubmitTime int64, afterID int64, limit int) *gorm.DB {
@@ -462,12 +490,14 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 	}
 	var tasks []*Task
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := withRowLock(tx).Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+		var rows []taskWorkerRow
+		if err := withRowLock(tx).Model(&Task{}).Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
 			Limit(limit).
 			Order("updated_at ASC, id ASC").
-			Find(&tasks).Error; err != nil {
+			Find(&rows).Error; err != nil {
 			return err
 		}
+		tasks = decodeTaskWorkerRows(rows)
 		if len(tasks) == 0 {
 			return nil
 		}
@@ -489,7 +519,13 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 	if err != nil {
 		return nil
 	}
-	return tasks
+	healthy := tasks[:0]
+	for _, task := range tasks {
+		if !task.PrivateDataUnreadable() {
+			healthy = append(healthy, task)
+		}
+	}
+	return healthy
 }
 
 func GetByOnlyTaskId(taskId string) (*Task, bool, error) {

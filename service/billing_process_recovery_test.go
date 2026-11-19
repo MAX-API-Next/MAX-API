@@ -475,8 +475,18 @@ func awaitBillingProcessBarrier(t *testing.T, p *billingTestProcess) billingProc
 		}
 		require.True(t, billingProcessMarkerNotReady(err), "barrier read: %v", err)
 		select {
-		case err := <-p.done:
-			t.Fatalf("child exited before its barrier: %v\n%s", err, p.output.text())
+		case <-p.exited:
+			// A fast recovery child may publish its marker and exit between our
+			// read and select. Re-read after exit, keeping done for the caller.
+			data, err := os.ReadFile(p.ready)
+			if err == nil {
+				var event billingProcessBarrier
+				require.NoError(t, common.Unmarshal(data, &event))
+				require.Equal(t, p.cmd.Process.Pid, event.PID)
+				return event
+			}
+			require.True(t, billingProcessMarkerNotReady(err), "barrier read after exit: %v", err)
+			t.Fatalf("child exited before its barrier: %v\n%s", <-p.done, p.output.text())
 		case <-timer.C:
 			t.Fatalf("child never reached its barrier\n%s", p.output.text())
 		case <-ticker.C:

@@ -332,21 +332,31 @@ func taskPluginTypedReference(private TaskPrivateData, key, version, digest stri
 // newly invalid defaults; do not rewrite prices or block removal when another
 // declared source still satisfies the existing configuration contract.
 func rejectTaskPluginDefaultRemoval(tx *gorm.DB, pkg *taskplugin.Package, remaining []taskplugin.StoredPackage) error {
+	if err := tx.Statement.Context.Err(); err != nil {
+		return errors.Join(taskplugin.ErrCatalogUnavailable, err)
+	}
 	values, err := readModelPricingMaps(tx)
 	if err != nil {
+		var data *modelPricingDataError
+		if errors.As(err, &data) {
+			return &taskplugin.CatalogPricingDataError{OptionKey: data.key}
+		}
 		return taskplugin.ErrCatalogUnavailable
 	}
 	var before *pricingAuthority
 	for _, model := range pkg.Manifest().Models {
-		draft := effectiveModelPricing(values, model)
-		expression, _ := draft["billing_setting.billing_expr"].(string)
-		if draft["billing_setting.billing_mode"] != "tiered_expr" {
+		if err := tx.Statement.Context.Err(); err != nil {
+			return errors.Join(taskplugin.ErrCatalogUnavailable, err)
+		}
+		if values["billing_setting.billing_mode"][model] != "tiered_expr" {
 			continue
 		}
+		expression, _ := values["billing_setting.billing_expr"][model].(string)
 		keys, err := billingexpr.TaskUsageKeys(expression)
 		if err != nil || len(keys) == 0 {
 			continue
 		}
+		draft := effectiveModelPricing(values, model)
 		if before == nil {
 			before, err = readPricingAuthority(tx, false)
 			if err != nil {

@@ -97,6 +97,9 @@ func sweepTimedOutTasks(ctx context.Context) {
 			if remaining <= 0 {
 				break
 			}
+			if task.PrivateDataUnreadable() {
+				continue
+			}
 			recoveryOutcome, recoveryErr := recoverAppliedTaskTerminalEvidence(task)
 			if recoveryErr != nil {
 				logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize terminal recovery error for task %s: %v", task.TaskID, recoveryErr))
@@ -144,6 +147,9 @@ func sweepTimedOutTasks(ctx context.Context) {
 			afterSubmitTime = task.SubmitTime
 			afterID = task.ID
 			scanBudget--
+			if task.PrivateDataUnreadable() {
+				continue
+			}
 			settlementPending, taskFinalizeApplied, settlementErr := taskTerminalSettlementState(task, true)
 			if settlementErr != nil {
 				logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks settlement lookup error for task %s: %v", task.TaskID, settlementErr))
