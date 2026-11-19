@@ -20,6 +20,9 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 // These cover dynamic labels (e.g. constants, configs) that are passed into t at runtime.
 export const STATIC_I18N_KEYS = [
   'API Extensions',
+  'Task Plugins',
+  'Bind task plugins',
+  'Bind registered task plugins to channels.',
   'All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.',
   'All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.',
   'All catalog nodes support this package format. Older nodes may suspend their entire plugin host.',

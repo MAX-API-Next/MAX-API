@@ -123,7 +123,7 @@ func (catalog *Catalog) MutateExpected(ctx context.Context, expected int64, muta
 
 func (catalog *Catalog) deleteExpected(ctx context.Context, expected int64, key, version string) error {
 	if err := catalog.acquire(ctx); err != nil {
-		return err
+		return errors.Join(ErrCatalogNotCommitted, err)
 	}
 	defer catalog.mu.Unlock()
 	if err := managementContextError(ctx); err != nil {
@@ -158,6 +158,7 @@ func (catalog *Catalog) deleteExpected(ctx context.Context, expected int64, key,
 		catalog.host.state.Store(nil)
 		return ErrCatalogUnavailable
 	}
+	catalog.observeRevision(revision)
 	// The durable store has confirmed the exact commit. Publication failure
 	// suspends the local Host, but cannot turn that receipt into an unknown write.
 	catalog.host.state.Store(nil)

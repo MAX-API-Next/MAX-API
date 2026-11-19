@@ -271,6 +271,7 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 	}
 	var snapshot taskplugin.CatalogSnapshot
 	var observedRevision *int64
+	var completedPackages *[]taskplugin.StoredPackage
 	var completedData *taskplugin.CatalogSnapshot
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var head TaskPluginCatalogHead
@@ -279,15 +280,16 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		if err != nil && !missing {
 			return err
 		}
-		observed := head.Revision
-		observedRevision = &observed
 		if !missing && (head.Revision <= 0 || head.MutationID == "") {
 			return taskplugin.ErrCatalogInvalid
 		}
+		observed := head.Revision
+		observedRevision = &observed
 		rows, _, err := loadTaskPluginVersions(tx)
 		if err != nil {
 			return err
 		}
+		completedPackages = &rows
 		deletions, err := loadTaskPluginDeletions(tx)
 		if err != nil {
 			return err
@@ -295,6 +297,9 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		completedData = &taskplugin.CatalogSnapshot{Revision: head.Revision, Packages: rows, Deletions: deletions}
 		var after TaskPluginCatalogHead
 		err = tx.First(&after, 1).Error
+		if err == nil && after.Revision > *observedRevision && after.MutationID != "" {
+			*observedRevision = after.Revision
+		}
 		if err != nil && ctx.Err() != nil {
 			if validateTaskPluginDeletionHead(head, deletions) != nil {
 				return errors.Join(taskplugin.ErrCatalogConflict, ctx.Err())
@@ -324,7 +329,7 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 			err = errors.Join(taskplugin.ErrCatalogUnavailable, ctx.Err())
 		}
 		if observedRevision != nil {
-			err = &taskplugin.CatalogReadObservationError{Revision: *observedRevision, Snapshot: completedData, Err: err}
+			err = &taskplugin.CatalogReadObservationError{Revision: *observedRevision, Packages: completedPackages, Snapshot: completedData, Err: err}
 		}
 		return taskplugin.CatalogSnapshot{}, err
 	}

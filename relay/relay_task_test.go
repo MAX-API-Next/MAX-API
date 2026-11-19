@@ -2,9 +2,11 @@ package relay
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -28,12 +30,72 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+func placeholderSnapshotInQuery(tx *gorm.DB) *model.Task {
+	if task, ok := tx.Statement.Dest.(*model.Task); ok {
+		return task
+	}
+	value := reflect.Indirect(reflect.ValueOf(tx.Statement.Dest))
+	if value.IsValid() && value.Kind() == reflect.Struct {
+		field := value.FieldByName("Task")
+		if field.IsValid() && field.CanAddr() {
+			task, _ := field.Addr().Interface().(*model.Task)
+			return task
+		}
+	}
+	return nil
+}
+
+func TestEnsureTaskPlaceholderNullVersionMatchesOnlyNull(t *testing.T) {
+	for _, changedToZero := range []bool{false, true} {
+		t.Run(fmt.Sprintf("changed-to-zero-%t", changedToZero), func(t *testing.T) {
+			db, err := gorm.Open(sqlite.Open(t.TempDir()+"/nullable-retry.db"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+			require.NoError(t, err)
+			require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.BillingSettlement{}))
+			previous, oldSQLite := model.DB, common.UsingSQLite
+			model.DB, common.UsingSQLite = db, true
+			t.Cleanup(func() {
+				model.DB, common.UsingSQLite = previous, oldSQLite
+				if pool, err := db.DB(); err == nil {
+					_ = pool.Close()
+				}
+			})
+			row := &model.Task{TaskID: "null-retry", UserId: 1, ChannelId: 1, Status: model.TaskStatusSubmitted, Quota: 10, PrivateData: model.TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: "original"}}
+			require.NoError(t, db.Create(row).Error)
+			require.NoError(t, db.Model(row).UpdateColumn("updated_at", nil).Error)
+			injected := false
+			require.NoError(t, db.Callback().Query().After("gorm:query").Register("replace-null-with-zero", func(tx *gorm.DB) {
+				if loaded := placeholderSnapshotInQuery(tx); loaded != nil && loaded.ID == row.ID && changedToZero && !injected {
+					injected = true
+					require.NoError(t, db.Model(&model.Task{}).Where("id = ?", row.ID).UpdateColumn("updated_at", 0).Error)
+				}
+			}))
+			info := &relaycommon.RelayInfo{RequestId: "retry", UserId: 1, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 99}, TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: row.ID}}
+			result, taskErr := ensureTaskPlaceholder("", info, 10)
+			require.NoError(t, db.Callback().Query().Remove("replace-null-with-zero"))
+			if changedToZero {
+				require.True(t, injected)
+				require.NotNil(t, taskErr)
+				require.Nil(t, result)
+				var stored model.Task
+				require.NoError(t, db.First(&stored, row.ID).Error)
+				require.Equal(t, 1, stored.ChannelId)
+				require.Equal(t, "original", stored.PrivateData.BillingRequestId)
+			} else {
+				require.Nil(t, taskErr)
+				require.NotNil(t, result)
+				require.Equal(t, 99, result.ChannelId)
+				require.Positive(t, result.UpdatedAt)
+			}
+		})
+	}
+}
+
 func TestEnsureTaskPlaceholderRetriesOnlyClaimChanges(t *testing.T) {
 	for _, change := range []string{"claim", "continuous-claims", "private-data", "manual-finalize", "confirmed-upstream"} {
 		t.Run(change, func(t *testing.T) {
 			db, err := gorm.Open(sqlite.Open(t.TempDir()+"/retry.db"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 			require.NoError(t, err)
-			require.NoError(t, db.AutoMigrate(&model.Task{}, &model.BillingSettlement{}))
+			require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.BillingSettlement{}))
 			previous, oldSQLite := model.DB, common.UsingSQLite
 			model.DB, common.UsingSQLite = db, true
 			t.Cleanup(func() {
@@ -47,8 +109,8 @@ func TestEnsureTaskPlaceholderRetriesOnlyClaimChanges(t *testing.T) {
 			require.NoError(t, db.Create(row).Error)
 			injected := 0
 			require.NoError(t, db.Callback().Query().After("gorm:query").Register("poll-claims-between-read-and-rewrite", func(tx *gorm.DB) {
-				loaded, ok := tx.Statement.Dest.(*model.Task)
-				if !ok || tx.Error != nil || loaded.ID != row.ID || injected > 0 && change != "continuous-claims" {
+				loaded := placeholderSnapshotInQuery(tx)
+				if loaded == nil || tx.Error != nil || loaded.ID != row.ID || injected > 0 && change != "continuous-claims" {
 					return
 				}
 				injected++
@@ -96,6 +158,8 @@ func TestEnsureTaskPlaceholderRetriesOnlyClaimChanges(t *testing.T) {
 			}
 			if change == "continuous-claims" {
 				require.Equal(t, 3, injected, "two bounded reloads, no provider or money replay")
+				require.Equal(t, "task_rewrite_conflict", taskErr.Code)
+				require.Equal(t, http.StatusConflict, taskErr.StatusCode)
 			} else {
 				require.Equal(t, 1, injected)
 			}

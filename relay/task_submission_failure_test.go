@@ -39,7 +39,7 @@ func TestMidjourneySubmitFailurePreservesFundingOwner(t *testing.T) {
 						_ = pool.Close()
 					}
 				})
-				require.NoError(t, db.AutoMigrate(&model.Task{}, &model.User{}, &model.Token{}, &model.Channel{}, &model.Log{}, &model.BillingLogReceipt{}, &model.BillingSettlement{}, &model.BillingPreConsumeSelection{}, &model.CacheInvalidationTask{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}))
+				require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.User{}, &model.Token{}, &model.Channel{}, &model.Log{}, &model.BillingLogReceipt{}, &model.BillingSettlement{}, &model.BillingPreConsumeSelection{}, &model.CacheInvalidationTask{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}))
 				require.NoError(t, db.Create(&model.User{Id: 52001, Username: "mj-cleanup-fixture", Quota: 1000}).Error)
 				require.NoError(t, db.Create(&model.Token{Id: 52002, UserId: 52001, Key: "synthetic-mj-cleanup-key", RemainQuota: 1000}).Error)
 				if funding == "subscription_only" {

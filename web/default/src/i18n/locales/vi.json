@@ -6063,6 +6063,8 @@
     "Invalid API extension request": "Yêu cầu tiện ích mở rộng API không hợp lệ",
     "Invalid API extension response": "Phản hồi tiện ích mở rộng API không hợp lệ",
     "Bind API extensions": "Liên kết tiện ích mở rộng API",
+    "Bind task plugins": "Liên kết tiện ích mở rộng API",
+    "Bind registered task plugins to channels.": "Liên kết các tiện ích mở rộng API đã đăng ký với kênh.",
     "Bind registered API extensions to channels.": "Liên kết các tiện ích mở rộng API đã đăng ký với kênh.",
     "Disabling blocks new bindings while keeping installed files and historical tasks available.": "Việc tắt sẽ dừng định tuyến tác vụ mới đến phần mở rộng này, đồng thời giữ lại tệp đã cài đặt và tác vụ lịch sử. Các kênh vẫn có thể tham chiếu mô hình của phần mở rộng.",
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles, audit identity and historical revocation are retained. Re-importing the same file remains blocked.": "Có thể xóa trực tiếp khi không có tham chiếu từ tác vụ, kênh hoặc cấu hình giá. Mã nguồn đã cài sẽ bị xóa; gói phân phối, định danh kiểm toán và bản ghi thu hồi trước đây được giữ lại. Việc nhập lại cùng tệp vẫn bị chặn.",

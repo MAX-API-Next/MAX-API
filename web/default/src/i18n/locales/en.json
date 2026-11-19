@@ -6066,6 +6066,8 @@
     "Invalid API extension request": "Invalid API extension request",
     "Invalid API extension response": "Invalid API extension response",
     "Bind API extensions": "Bind API extensions",
+    "Bind task plugins": "Bind API extensions",
+    "Bind registered task plugins to channels.": "Bind registered API extensions to channels.",
     "Bind registered API extensions to channels.": "Bind registered API extensions to channels.",
     "Disabling blocks new bindings while keeping installed files and historical tasks available.": "Disabling stops new task routing to this extension while keeping installed files and historical tasks available. Channel model references remain allowed.",
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles, audit identity and historical revocation are retained. Re-importing the same file remains blocked.": "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles, audit identity and historical revocation are retained. Re-importing the same file remains blocked.",

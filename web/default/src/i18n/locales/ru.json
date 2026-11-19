@@ -6071,6 +6071,8 @@
     "Invalid API extension request": "Некорректный запрос расширения API",
     "Invalid API extension response": "Некорректный ответ расширения API",
     "Bind API extensions": "Привязка расширений API",
+    "Bind task plugins": "Привязка расширений API",
+    "Bind registered task plugins to channels.": "Привязывать зарегистрированные расширения API к каналам.",
     "Bind registered API extensions to channels.": "Привязывать зарегистрированные расширения API к каналам.",
     "Disabling blocks new bindings while keeping installed files and historical tasks available.": "Отключение прекращает маршрутизацию новых задач к этому расширению, сохраняя установленные файлы и исторические задачи. Каналы по-прежнему могут ссылаться на его модели.",
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles, audit identity and historical revocation are retained. Re-importing the same file remains blocked.": "Версию можно удалить напрямую, если на неё не ссылаются задачи, каналы или тарифы. Установленный исходный код удаляется; дистрибутивы, идентификатор аудита и историческая запись отзыва сохраняются. Повторный импорт того же файла остаётся заблокированным.",

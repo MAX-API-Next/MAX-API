@@ -79,7 +79,10 @@ func readTaskPricingShadowWithPlugin(db *gorm.DB, ctx context.Context, request T
 	}
 	var result *TaskPricingShadowContext
 	err := readPricingState(db.WithContext(ctx), func(tx *gorm.DB, values pricingMaps, authority *pricingAuthority) error {
-		entry := buildModelPricingEntry(values, authority, request.ModelName)
+		entry, err := buildModelPricingEntry(values, authority, request.ModelName)
+		if err != nil {
+			return err
+		}
 		if entry.ConfigurationError != "" {
 			return errors.New(entry.ConfigurationError)
 		}
@@ -105,7 +108,10 @@ func readTaskPricingShadowWithPlugin(db *gorm.DB, ctx context.Context, request T
 			return err
 		}
 		if selection.Model != request.ModelName {
-			mapped := buildModelPricingEntry(values, authority, selection.Model)
+			mapped, err := buildModelPricingEntry(values, authority, selection.Model)
+			if err != nil {
+				return err
+			}
 			if mapped.ConfigurationError != "" {
 				return errors.New(mapped.ConfigurationError)
 			}

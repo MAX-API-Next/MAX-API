@@ -1701,6 +1701,7 @@ func processPendingBillingSettlements() {
 	if DB == nil {
 		return
 	}
+	processPendingTaskSubmitFailures()
 	var records []BillingSettlement
 	if err := DB.Where("status = ? AND next_attempt <= ?", BillingSettlementStatusPending, time.Now().Unix()).Order("id").Limit(100).Find(&records).Error; err != nil {
 		common.SysLog("failed to load billing settlement retries: " + err.Error())

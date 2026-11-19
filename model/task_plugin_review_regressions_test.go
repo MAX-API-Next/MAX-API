@@ -29,6 +29,58 @@ import (
 	"gorm.io/gorm/schema"
 )
 
+func TestChannelSettingRepairUsesExactStoredBytes(t *testing.T) {
+	for _, column := range []string{"setting", "settings"} {
+		for _, changed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/changed-%t", column, changed), func(t *testing.T) {
+				db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "repair.db")), &gorm.Config{})
+				require.NoError(t, err)
+				pool, err := db.DB()
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = pool.Close() })
+				require.NoError(t, db.Exec(`CREATE TABLE channels (id integer PRIMARY KEY, setting text COLLATE NOCASE, settings text COLLATE NOCASE)`).Error)
+				const bad, valid = `{"concurrent":TRUE}`, `{"concurrent":true}`
+				require.NoError(t, db.Exec("INSERT INTO channels(id, setting, settings) VALUES(1, ?, ?)", bad, bad).Error)
+				var stale Channel
+				require.NoError(t, db.First(&stale, 1).Error)
+				previous := DB
+				DB = db
+				t.Cleanup(func() { DB = previous })
+				if changed {
+					require.NoError(t, db.Model(&Channel{}).Where("id = ?", 1).UpdateColumn(column, valid).Error)
+				}
+				if column == "setting" {
+					stale.GetSetting()
+				} else {
+					stale.GetOtherSettings()
+				}
+				var value *string
+				require.NoError(t, db.Model(&Channel{}).Select(column).Where("id = ?", 1).Row().Scan(&value))
+				if changed {
+					require.NotNil(t, value)
+					require.Equal(t, valid, *value)
+				} else if column == "setting" {
+					require.Nil(t, value)
+				} else {
+					require.Equal(t, "{}", *value)
+				}
+			})
+		}
+	}
+}
+
+func TestChannelExplicitSetCannotBypassReferenceGuard(t *testing.T) {
+	db := deletionDB(t)
+	row := &Channel{Name: "before", Models: "ordinary"}
+	require.NoError(t, db.Create(row).Error)
+	err := db.Model(row).Clauses(clause.Set{{Column: clause.Column{Name: "models"}, Value: "unvalidated-model"}}).Update("name", "after").Error
+	require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+	var stored Channel
+	require.NoError(t, db.First(&stored, row.Id).Error)
+	require.Equal(t, "ordinary", stored.Models)
+	require.Equal(t, "before", stored.Name)
+}
+
 func TestTaskPluginDeletedModelIndexCapacity(t *testing.T) {
 	field, ok := any((TaskPluginDeletion{}).Models).(interface {
 		GormDBDataType(*gorm.DB, *schema.Field) string
@@ -1200,6 +1252,19 @@ func TestTaskPluginTruncatedAndRepeatedHistoricalMembersBlockDeletion(t *testing
 	}
 }
 
+func TestPricingEntryDoesNotSignAnIncompleteAuthority(t *testing.T) {
+	authority := &pricingAuthority{
+		catalogReady: true,
+		channels:     []pricingChannel{{ID: 1, Models: "sample", Status: 1}},
+		plugins:      []taskplugin.StoredPackage{{Active: true, Digest: "invalid-reload", Document: []byte("invalid-after-captured-read")}},
+	}
+	entry, err := buildModelPricingEntry(defaultPricingMaps(), authority, "sample")
+	require.Error(t, err)
+	require.Empty(t, entry.Version, "failed authority loading cannot issue a usable pricing version")
+	require.Empty(t, entry.BindingVersion)
+	require.Empty(t, entry.ContractDigest)
+}
+
 func TestPricingReloadFailureReturnsNoIncompleteBaseline(t *testing.T) {
 	_, entry := catalogFixture(t, "stored", "1.0.0", "pricing-reload")
 	entry.Document = []byte("invalid-reload-fixture")
@@ -2105,6 +2170,48 @@ func TestInterruptedCatalogRereadRetainsConflictingReceiptEvidence(t *testing.T)
 	require.ErrorIs(t, err, context.Canceled)
 	_, err = catalog.Host().Resolve(binding, actor)
 	require.Error(t, err, "mixed receipt evidence must suspend the old Host")
+}
+
+func TestInterruptedReceiptReadComparesCompletedPackages(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("changed-%t", changed), func(t *testing.T) {
+			db := deletionDB(t)
+			catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+			require.NoError(t, err)
+			pkg, _ := catalogFixture(t, "stored", "1.0.0", "partial-package-observation")
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			actor := taskplugin.Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "partial-observation"}
+			binding, err := catalog.Host().Bind(actor, "GET", "/stored/one", "catalog-model", taskusage.MiniMaxH3Contract())
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			packagesRead, receiptsReached := false, false
+			require.NoError(t, db.Callback().Query().After("gorm:query").Register("observe-completed-packages", func(tx *gorm.DB) {
+				if rows, ok := tx.Statement.Dest.(*[]TaskPluginVersion); ok && tx.Error == nil {
+					packagesRead = true
+					if changed {
+						*rows = nil
+					}
+				}
+			}))
+			require.NoError(t, db.Callback().Query().Before("gorm:query").Register("interrupt-receipt-read", func(tx *gorm.DB) {
+				if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginDeletion") {
+					receiptsReached = true
+					cancel()
+				}
+			}))
+			err = catalog.ValidateInstall(ctx, pkg)
+			require.ErrorIs(t, err, context.Canceled)
+			require.True(t, packagesRead)
+			require.True(t, receiptsReached)
+			_, err = catalog.Host().Resolve(binding, actor)
+			if changed {
+				require.Error(t, err, "completed changed packages must suspend admission even if receipts were unreadable")
+			} else {
+				require.NoError(t, err, "an incomplete receipt read does not prove an unchanged package set is stale")
+			}
+		})
+	}
 }
 
 func TestInterruptedCatalogReadComparesCompletedObservedSet(t *testing.T) {

@@ -231,6 +231,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 			remaining--
 			isLegacy := task.SubmitTime > 0 && task.SubmitTime < legacyTaskRefundCutoff
 			isUnconfirmedSubmit := task.PrivateData.AwaitingUpstreamID
+			task.PreserveDataOnStatusUpdate()
 			terminalDecision := prepareTaskTerminalBillingDecision(ctx, nil, task, &relaycommon.TaskInfo{
 				Status: string(model.TaskStatusFailure), Reason: reason,
 			}, 0)

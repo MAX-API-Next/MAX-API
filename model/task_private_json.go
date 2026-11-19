@@ -59,13 +59,29 @@ func (p TaskPrivateData) MarshalJSON() ([]byte, error) {
 }
 
 func unknownTaskPrivateFields(object map[string]any, typ reflect.Type) map[string]any {
-	for typ.Kind() == reflect.Pointer {
-		typ = typ.Elem()
+	unknown := make(map[string]any)
+	for key, value := range object {
+		_, field, known := taskPrivateJSONField(typ, key)
+		if !known {
+			unknown[key] = value
+			continue
+		}
+		if nested := unknownTaskPrivateValue(value, field); nested != nil {
+			unknown[key] = taskPrivateNested{value: nested}
+		}
 	}
-	if typ.Kind() != reflect.Struct {
-		return nil
+	return unknown
+}
+
+// encoding/json uses exact names first, then Unicode SimpleFold (EqualFold),
+// which intentionally differs from strings.ToLower for dotted-I and long-S.
+func taskPrivateJSONField(typ reflect.Type, key string) (string, reflect.Type, bool) {
+	typ = taskPrivateJSONType(typ)
+	if typ == nil || typ.Kind() != reflect.Struct {
+		return "", nil, false
 	}
-	fields := make(map[string]reflect.Type)
+	var foldedName string
+	var foldedType reflect.Type
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
 		if !field.IsExported() {
@@ -78,20 +94,21 @@ func unknownTaskPrivateFields(object map[string]any, typ reflect.Type) map[strin
 		if name == "" {
 			name = field.Name
 		}
-		fields[strings.ToLower(name)] = field.Type
-	}
-	unknown := make(map[string]any)
-	for key, value := range object {
-		field, known := fields[strings.ToLower(key)]
-		if !known {
-			unknown[key] = value
-			continue
+		if name == key {
+			return name, field.Type, true
 		}
-		if nested := unknownTaskPrivateValue(value, field); nested != nil {
-			unknown[key] = taskPrivateNested{value: nested}
+		if foldedType == nil && strings.EqualFold(name, key) {
+			foldedName, foldedType = name, field.Type
 		}
 	}
-	return unknown
+	return foldedName, foldedType, foldedType != nil
+}
+
+func taskPrivateJSONType(typ reflect.Type) reflect.Type {
+	for typ != nil && typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	return typ
 }
 
 func unknownTaskPrivateValue(value any, typ reflect.Type) any {
@@ -213,8 +230,8 @@ func mergeTaskPrivateValue(unknown, current any) (any, error) {
 func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 	decoder := common.NewJSONDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
-	var read func([]string, int) (any, error)
-	read = func(path []string, depth int) (any, error) {
+	var read func([]string, int, reflect.Type) (any, error)
+	read = func(path []string, depth int, typ reflect.Type) (any, error) {
 		if depth > 10000 {
 			return nil, errors.New("task private JSON is too deeply nested")
 		}
@@ -239,25 +256,34 @@ func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 				if !ok {
 					return nil, errors.New("invalid task private JSON member")
 				}
-				value, err := read(append(path, key), depth+1)
+				_, childType, _ := taskPrivateJSONField(typ, key)
+				if container := taskPrivateJSONType(typ); container != nil && container.Kind() == reflect.Map {
+					childType = container.Elem()
+				}
+				value, err := read(append(path, key), depth+1, childType)
 				if err != nil {
 					return nil, err
 				}
+				canonical := key
 				if !taskPrivateFactPath(path) {
-					canonical := taskPrivateMemberKey(key)
-					if previous, exists := folded[canonical]; exists && !reflect.DeepEqual(previous, value) {
-						return nil, errors.New("conflicting task private JSON members")
-					}
-					folded[canonical] = value
+					canonical = taskPrivateMemberKey(typ, key)
 				}
+				if previous, exists := folded[canonical]; exists && !reflect.DeepEqual(previous, value) {
+					return nil, errors.New("conflicting task private JSON members")
+				}
+				folded[canonical] = value
 				object[key] = value
 			}
 			_, err := decoder.Token()
 			return object, err
 		case '[':
 			array := []any{}
+			var childType reflect.Type
+			if container := taskPrivateJSONType(typ); container != nil && (container.Kind() == reflect.Slice || container.Kind() == reflect.Array) {
+				childType = container.Elem()
+			}
 			for decoder.More() {
-				value, err := read(path, depth+1)
+				value, err := read(path, depth+1, childType)
 				if err != nil {
 					return nil, err
 				}
@@ -269,7 +295,7 @@ func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 			return nil, errors.New("invalid task private JSON delimiter")
 		}
 	}
-	value, err := read(nil, 0)
+	value, err := read(nil, 0, reflect.TypeOf(TaskPrivateData{}))
 	if err != nil {
 		return nil, err
 	}
@@ -295,11 +321,17 @@ func taskPrivateFactPath(path []string) bool {
 	return len(path) >= 4 && strings.EqualFold(path[1], "task_billing_plan") && strings.EqualFold(path[2], "expression_plan") && strings.EqualFold(path[3], "submit_facts")
 }
 
-func taskPrivateMemberKey(key string) string {
-	switch strings.ToLower(key) {
-	case "plugin_key", "package_digest", "selected_plugin_key", "version", "plugin_version", "plugin_binding", "billing_context", "task_billing_plan", "expression_plan", "pricing_usage_envelope":
-		return strings.ToLower(key)
-	default:
+func taskPrivateMemberKey(typ reflect.Type, key string) string {
+	if name, _, known := taskPrivateJSONField(typ, key); known {
+		return name
+	}
+	if typ = taskPrivateJSONType(typ); typ != nil && typ.Kind() == reflect.Map {
 		return key
 	}
+	for _, name := range []string{"plugin_key", "package_digest", "selected_plugin_key", "version", "plugin_version", "plugin_binding", "billing_context", "task_billing_plan", "expression_plan", "pricing_usage_envelope"} {
+		if strings.EqualFold(name, key) {
+			return name
+		}
+	}
+	return key
 }

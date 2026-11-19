@@ -6063,6 +6063,8 @@
     "Invalid API extension request": "無効な API 拡張リクエスト",
     "Invalid API extension response": "無効な API 拡張レスポンス",
     "Bind API extensions": "API 拡張を関連付ける",
+    "Bind task plugins": "API 拡張を関連付ける",
+    "Bind registered task plugins to channels.": "登録済み API 拡張をチャネルに関連付けます。",
     "Bind registered API extensions to channels.": "登録済み API 拡張をチャネルに関連付けます。",
     "Disabling blocks new bindings while keeping installed files and historical tasks available.": "無効化すると、この拡張への新しいタスクのルーティングを停止します。インストール済みファイルと過去のタスクは保持され、チャネルからのモデル参照は引き続き許可されます。",
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles, audit identity and historical revocation are retained. Re-importing the same file remains blocked.": "タスク・チャネル・料金設定から参照されていなければ直接削除できます。インストール済みソースを削除し、配布パッケージ・監査用識別情報・過去の失効記録は保持します。同じファイルの再インポートは引き続きブロックされます。",

@@ -1193,6 +1193,21 @@ func (channel *Channel) ValidateSettings() error {
 	return nil
 }
 
+// Repairs compare stored bytes, independent of a database's text collation.
+func channelSettingRepairQuery(db *gorm.DB, id int, column, observed string) *gorm.DB {
+	comparison := "? = ?"
+	switch db.Dialector.Name() {
+	case "mysql":
+		comparison = "CAST(? AS BINARY) = CAST(? AS BINARY)"
+	case "sqlite":
+		comparison = "CAST(? AS BLOB) = CAST(? AS BLOB)"
+	case "postgres":
+		comparison = "convert_to(?, 'UTF8') = convert_to(?, 'UTF8')"
+	}
+	return db.Model(&Channel{}).Where("id = ?", id).
+		Where(clause.Expr{SQL: comparison, Vars: []any{clause.Column{Name: column}, observed}})
+}
+
 func (channel *Channel) GetSetting() dto.ChannelSettings {
 	setting := dto.ChannelSettings{}
 	if channel.Setting != nil && *channel.Setting != "" {
@@ -1202,7 +1217,7 @@ func (channel *Channel) GetSetting() dto.ChannelSettings {
 			malformed := *channel.Setting
 			channel.Setting = nil // 清空设置以避免后续错误
 			if channel.Id > 0 {
-				_ = DB.Model(&Channel{}).Where("id = ? AND setting = ?", channel.Id, malformed).Update("setting", nil).Error
+				_ = channelSettingRepairQuery(DB, channel.Id, "setting", malformed).Update("setting", nil).Error
 			}
 		}
 	}
@@ -1236,7 +1251,7 @@ func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 			malformed := channel.OtherSettings
 			channel.OtherSettings = "{}" // 清空设置以避免后续错误
 			if channel.Id > 0 {
-				_ = DB.Model(&Channel{}).Where("id = ? AND settings = ?", channel.Id, malformed).Update("settings", channel.OtherSettings).Error
+				_ = channelSettingRepairQuery(DB, channel.Id, "settings", malformed).Update("settings", channel.OtherSettings).Error
 			}
 		}
 	}

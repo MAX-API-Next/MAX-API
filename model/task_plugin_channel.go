@@ -48,6 +48,9 @@ func registerTaskPluginChannelCreateGuard(db *gorm.DB) error {
 
 func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 	statement := tx.Statement
+	if _, explicit := statement.Clauses["SET"]; explicit {
+		return taskplugin.ErrCatalogInvalid
+	}
 	value := reflect.ValueOf(statement.Dest)
 	for value.IsValid() && value.Kind() == reflect.Pointer {
 		value = value.Elem()

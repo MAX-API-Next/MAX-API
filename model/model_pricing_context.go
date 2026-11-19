@@ -174,9 +174,8 @@ func (a *pricingAuthority) signature() string {
 		SelfUse  bool
 	}{a.channels, a.plugins, a.catalogReady, a.selfUse})
 }
-func (a *pricingAuthority) contexts(model string) []ModelPricingContext {
-	result, _ := a.contextsContext(context.Background(), model)
-	return result
+func (a *pricingAuthority) contexts(model string) ([]ModelPricingContext, error) {
+	return a.contextsContext(context.Background(), model)
 }
 
 func (a *pricingAuthority) contextsContext(ctx context.Context, model string) ([]ModelPricingContext, error) {
@@ -348,8 +347,11 @@ func effectiveModelPricing(values pricingMaps, name string) types.ModelPricingVa
 	}
 	return result
 }
-func buildModelPricingEntry(values pricingMaps, a *pricingAuthority, name string) ModelPricingEntry {
-	contexts := a.contexts(name)
+func buildModelPricingEntry(values pricingMaps, a *pricingAuthority, name string) (ModelPricingEntry, error) {
+	contexts, err := a.contexts(name)
+	if err != nil {
+		return ModelPricingEntry{}, err
+	}
 	contracts := map[string]any{}
 	bindings := map[string]any{"catalog_ready": a.catalogReady}
 	dependencies := struct {
@@ -432,7 +434,7 @@ func buildModelPricingEntry(values pricingMaps, a *pricingAuthority, name string
 		entry.ConfigurationError += "; invalid stored billing values omitted from editable projection; raw values remain in options"
 	}
 	omitInvalidBillingValues(entry.Effective)
-	return entry
+	return entry, nil
 }
 
 func omitInvalidBillingValues(values types.ModelPricingValues) bool {

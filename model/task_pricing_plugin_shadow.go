@@ -32,7 +32,11 @@ func approvedPluginShadow(a *pricingAuthority, request TaskPricingShadowRequest,
 		binding.ChannelID != request.ChannelID || binding.Model != request.ModelName || binding.SourceID != binding.PluginKey {
 		return rejected()
 	}
-	selected, found := findPricingContext(a.contexts(request.ModelName), fmt.Sprintf("channel:%d", request.ChannelID))
+	contexts, err := a.contexts(request.ModelName)
+	if err != nil {
+		return ModelPricingContext{}, "", err
+	}
+	selected, found := findPricingContext(contexts, fmt.Sprintf("channel:%d", request.ChannelID))
 	channel, valid := selected.binding.(pricingChannel)
 	if !found || !valid || channel.Status != 1 || !slices.Contains(strings.Split(channel.Models, ","), request.ModelName) ||
 		selected.Profile != taskpricing.NewAPITask || !slices.Contains(selected.Groups, request.Group) {

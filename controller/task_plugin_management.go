@@ -84,8 +84,31 @@ func taskPluginAdminFields(c *gin.Context, allowed map[string]string) (map[strin
 	if err != nil || len(data) > taskPluginAdminBodyLimit || !utf8.Valid(data) {
 		return nil, taskplugin.ErrCatalogInvalid
 	}
-	var fields map[string]json.RawMessage
-	if common.Unmarshal(data, &fields) != nil || fields == nil {
+	decoder := common.NewJSONDecoder(bytes.NewReader(data))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return nil, taskplugin.ErrCatalogInvalid
+	}
+	fields := make(map[string]json.RawMessage)
+	for decoder.More() {
+		token, err := decoder.Token()
+		key, ok := token.(string)
+		if err != nil || !ok {
+			return nil, taskplugin.ErrCatalogInvalid
+		}
+		if _, duplicate := fields[key]; duplicate {
+			return nil, taskplugin.ErrCatalogInvalid
+		}
+		var raw json.RawMessage
+		if decoder.Decode(&raw) != nil {
+			return nil, taskplugin.ErrCatalogInvalid
+		}
+		fields[key] = raw
+	}
+	if closing, err := decoder.Token(); err != nil || closing != json.Delim('}') {
+		return nil, taskplugin.ErrCatalogInvalid
+	}
+	if _, err := decoder.Token(); err != io.EOF {
 		return nil, taskplugin.ErrCatalogInvalid
 	}
 	for key, raw := range fields {

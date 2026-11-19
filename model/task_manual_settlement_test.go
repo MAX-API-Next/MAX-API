@@ -61,6 +61,11 @@ func TestPlaceholderRewriteLosesAfterNewerManualDecision(t *testing.T) {
 	require.Equal(t, row.ChannelId, fresh.ChannelId)
 	fresh.PrivateData.BillingRequestId = "reloaded-retry"
 	require.Error(t, fresh.RewritePlaceholder(), "reloading does not authorize replacing an owned finalize decision")
+	var afterReloadedAttempt Task
+	require.NoError(t, DB.First(&afterReloadedAttempt, row.ID).Error)
+	require.Equal(t, "original", afterReloadedAttempt.PrivateData.BillingRequestId)
+	require.Equal(t, row.ChannelId, afterReloadedAttempt.ChannelId)
+	require.Equal(t, row.UpdatedAt, afterReloadedAttempt.UpdatedAt)
 	var record BillingSettlement
 	require.NoError(t, DB.Where("operation_key = ?", input.OperationKey).First(&record).Error)
 	require.Equal(t, BillingSettlementStatusManual, record.Status)

@@ -2,6 +2,9 @@
 package service
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
@@ -15,7 +18,7 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 	if info == nil {
 		return
 	}
-	if info.PersistedTaskID > 0 {
+	if info.TaskRelayInfo != nil && info.PersistedTaskID > 0 {
 		var intent *model.BillingSettlementInput
 		if info.Billing != nil {
 			preparer, ok := info.Billing.(RefundSettlementPreparer)
@@ -30,9 +33,24 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 				return
 			}
 		}
-		won, err := model.ClaimTaskSubmitFailureWithSettlement(info.PersistedTaskID, reason, intent)
+		var won bool
+		var err error
+		for attempt := 0; attempt < 3; attempt++ {
+			won, err = model.ClaimTaskSubmitFailureWithSettlement(info.PersistedTaskID, reason, intent)
+			if err == nil || errors.Is(err, model.ErrTaskSubmitRefundIdentityMismatch) || errors.Is(err, model.ErrBillingSettlementOperationConflict) {
+				break
+			}
+		}
 		if err != nil {
-			common.SysError("task submit failure ownership requires reconciliation: " + err.Error())
+			if intent != nil {
+				if journalErr := model.RecordTaskSubmitFailureRecovery(info.PersistedTaskID, reason, *intent); journalErr != nil {
+					common.SysError(fmt.Sprintf("task submit rejection recovery was not recorded: task_id=%d; inspect the original placeholder and preconsume records", info.PersistedTaskID))
+				} else {
+					common.SysLog(fmt.Sprintf("task submit rejection queued for recovery: task_id=%d", info.PersistedTaskID))
+				}
+			} else {
+				common.SysError(fmt.Sprintf("task submit failure ownership could not be determined: task_id=%d", info.PersistedTaskID))
+			}
 			return
 		}
 		if !won {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -13,6 +14,26 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTaskPluginManagementRejectsDuplicateMembers(t *testing.T) {
+	for _, raw := range []string{
+		`{"expected_sha256":"mismatch","expected_sha256":""}`,
+		`{"expected_sha256":"","expected_sha256":""}`,
+		`{"document":"first","document":"second"}`,
+		`{"document":"first","docu\u006dent":"second"}`,
+	} {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(raw))
+		_, err := taskPluginAdminFields(c, map[string]string{"document": "string", "expected_sha256": "string"})
+		require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid, raw)
+	}
+	for _, raw := range []string{`{"document":"source"}`, `{"document":"source","expected_sha256":""}`} {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(raw))
+		_, err := taskPluginAdminFields(c, map[string]string{"document": "string", "expected_sha256": "string"})
+		require.NoError(t, err, raw)
+	}
+}
 
 func TestTaskPluginDeletionOutcomeResponse(t *testing.T) {
 	for _, known := range []bool{false, true} {

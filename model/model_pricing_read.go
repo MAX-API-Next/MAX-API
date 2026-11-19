@@ -95,7 +95,11 @@ func getModelPricingSnapshot(db *gorm.DB, names []string) (*ModelPricingSnapshot
 		}
 		sort.Strings(ordered)
 		for _, name := range ordered {
-			result.Entries = append(result.Entries, buildModelPricingEntry(values, a, name))
+			entry, err := buildModelPricingEntry(values, a, name)
+			if err != nil {
+				return err
+			}
+			result.Entries = append(result.Entries, entry)
 		}
 		for key, entries := range values {
 			encoded, err := common.Marshal(entries)
@@ -114,14 +118,26 @@ func getModelPricingSnapshot(db *gorm.DB, names []string) (*ModelPricingSnapshot
 func PreviewModelPricing(name string, draft types.ModelPricingValues) (*ModelPricingEntry, error) {
 	var result ModelPricingEntry
 	err := readPricingState(DB, func(_ *gorm.DB, values pricingMaps, a *pricingAuthority) error {
-		if err := validateModelPricing(name, draft, modelPricingValues(values, name), a.contexts(name)); err != nil {
+		contexts, err := a.contexts(name)
+		if err != nil {
+			return err
+		}
+		if err := validateModelPricing(name, draft, modelPricingValues(values, name), contexts); err != nil {
 			return modelPricingValidation(err)
 		}
 		candidate := clonePricingMaps(values)
 		replaceModelPricing(candidate, name, draft)
-		result = buildModelPricingEntry(candidate, a, name)
+		entry, err := buildModelPricingEntry(candidate, a, name)
+		if err != nil {
+			return err
+		}
+		previous, err := buildModelPricingEntry(values, a, name)
+		if err != nil {
+			return err
+		}
+		result = entry
 		result.DraftVersion = result.Version
-		result.Version = buildModelPricingEntry(values, a, name).Version
+		result.Version = previous.Version
 		return nil
 	})
 	if err != nil {
@@ -244,7 +260,10 @@ func QuoteModelPricing(request ModelPricingQuoteRequest) (*ModelPricingQuote, er
 	quotaPerUnit := readModelPricingQuotaUnit()
 	var result *ModelPricingQuote
 	err := readPricingState(DB, func(tx *gorm.DB, values pricingMaps, a *pricingAuthority) error {
-		entry := buildModelPricingEntry(values, a, request.ModelName)
+		entry, err := buildModelPricingEntry(values, a, request.ModelName)
+		if err != nil {
+			return err
+		}
 		if request.ExpectedVersion != entry.Version || request.ExpectedContractDigest != entry.ContractDigest || request.ExpectedBindingVersion != entry.BindingVersion {
 			return ErrModelPricingConflict
 		}
@@ -271,7 +290,11 @@ func QuoteModelPricing(request ModelPricingQuoteRequest) (*ModelPricingQuote, er
 		}
 		if selected.Model != request.ModelName {
 			draft := modelPricingValues(candidate, selected.Model)
-			if err := validateModelPricing(selected.Model, draft, draft, a.contexts(selected.Model)); err != nil {
+			contexts, err := a.contexts(selected.Model)
+			if err != nil {
+				return err
+			}
+			if err := validateModelPricing(selected.Model, draft, draft, contexts); err != nil {
 				return modelPricingValidation(err)
 			}
 		}
@@ -368,10 +391,14 @@ func updateLegacyTieredPricing(config map[string]LegacyTieredPricingItem) (*Mode
 			if pricingDigest(old) == pricingDigest(draft) {
 				continue
 			}
-			if protectedTaskPricing(old, a.contexts(name)) || protectedTaskPricing(draft, nil) {
+			contexts, err := a.contexts(name)
+			if err != nil {
+				return nil, err
+			}
+			if protectedTaskPricing(old, contexts) || protectedTaskPricing(draft, nil) {
 				return nil, ErrModelPricingLegacyWrite
 			}
-			if err := validateLegacyModelPricing(name, draft, old, a.contexts(name)); err != nil {
+			if err := validateLegacyModelPricing(name, draft, old, contexts); err != nil {
 				return nil, err
 			}
 			changed = append(changed, name)

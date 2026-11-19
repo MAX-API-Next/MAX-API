@@ -59,7 +59,7 @@ func newBoundedPricingFixtureWithContractAt(t *testing.T, path string, configure
 	sqlDB.SetMaxOpenConns(1)
 	require.NoError(t, db.AutoMigrate(
 		&model.Option{}, &model.Channel{}, &model.TaskPluginCatalogHead{}, &model.TaskPluginVersion{},
-		&model.Task{}, &model.User{}, &model.Token{}, &model.Log{}, &model.BillingLogReceipt{},
+		&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.User{}, &model.Token{}, &model.Log{}, &model.BillingLogReceipt{},
 		&model.BillingSettlement{}, &model.BillingPreConsumeSelection{}, &model.CacheInvalidationTask{},
 		&model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{},
 	))
@@ -273,11 +273,16 @@ func TestBoundedPricingActualReservationReplaysAndSettlesFrozenPrice(t *testing.
 }
 
 func TestTypedPricingIdentityNamedFactsCompleteAndSettleOnce(t *testing.T) {
-	for _, phase := range []string{"request", "actual"} {
+	for _, phase := range []string{"request", "actual", "actual-missing-fact"} {
 		t.Run(phase, func(t *testing.T) {
+			policyPhase := phase
+			missing := phase == "actual-missing-fact"
+			if missing {
+				policyPhase = "actual"
+			}
 			f := newBoundedPricingFixtureWithContractAt(t, filepath.Join(t.TempDir(), "identity-facts.sqlite"), func(c *types.TaskFactContract) {
 				c.UsageSchema["package_digest"] = types.TaskUsageField{Type: "enum", Enum: []string{"standard"}}
-				c.FieldPolicy["package_digest"] = types.TaskFactPolicy{Phase: phase, Required: true}
+				c.FieldPolicy["package_digest"] = types.TaskFactPolicy{Phase: policyPhase, Required: true}
 			})
 			require.NoError(t, f.db.AutoMigrate(&model.TaskPluginDeletion{}))
 			if phase == "request" {
@@ -307,12 +312,22 @@ func TestTypedPricingIdentityNamedFactsCompleteAndSettleOnce(t *testing.T) {
 				Facts: types.TaskPricingFacts{"seconds": 8, "input_images": 0, "input_video_seconds": 0, "package_digest": "standard"},
 			}}
 			adaptor := &expressionPollingFixture{result: result}
+			if missing {
+				delete(result.PricingUsageEnvelope.Facts, "package_digest")
+			}
 			channel := &model.Channel{Id: 902, Type: constant.ChannelTypeMiniMax, Key: "synthetic"}
 			for attempt := 0; attempt < 2; attempt++ {
 				require.NoError(t, updateVideoSingleTask(t.Context(), adaptor, channel, loaded.GetUpstreamTaskID(), map[string]*model.Task{loaded.GetUpstreamTaskID(): &loaded}))
 				var restarted model.Task
 				require.NoError(t, f.db.First(&restarted, task.ID).Error)
 				loaded = restarted
+				if missing {
+					require.NotEqualValues(t, model.TaskStatusSuccess, loaded.Status)
+					require.Equal(t, 1500, loaded.Quota)
+					require.EqualValues(t, 1500, getUserQuota(t, 901))
+					require.Equal(t, 1500, getTokenRemainQuota(t, 903))
+					continue
+				}
 				require.EqualValues(t, model.TaskStatusSuccess, loaded.Status)
 				require.Equal(t, 800, loaded.Quota, "8 seconds * 0.1 * 1000 = 800")
 				require.EqualValues(t, 2200, getUserQuota(t, 901))
@@ -320,6 +335,13 @@ func TestTypedPricingIdentityNamedFactsCompleteAndSettleOnce(t *testing.T) {
 			}
 			var finalized model.BillingSettlement
 			require.NoError(t, f.db.Where("operation_key = ?", model.BillingTaskFinalizeOperationKey(task.ID)).First(&finalized).Error)
+			if missing {
+				require.Equal(t, model.BillingSettlementStatusManual, finalized.Status)
+				require.Zero(t, finalized.AppliedFundingDelta)
+				require.Zero(t, finalized.AppliedTokenDelta)
+				require.Zero(t, countLogs(t))
+				return
+			}
 			require.EqualValues(t, -700, finalized.AppliedFundingDelta)
 			require.Equal(t, model.BillingSettlementStatusApplied, finalized.Status)
 			require.EqualValues(t, 1, countLogs(t))

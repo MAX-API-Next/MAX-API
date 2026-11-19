@@ -72,6 +72,7 @@ type Task struct {
 	includeDataInUpdate               bool   `gorm:"-"`
 	includePrivateDataInUpdate        bool   `gorm:"-"`
 	preservePrivateDataOnStatusUpdate bool   `gorm:"-"`
+	preserveDataOnStatusUpdate        bool   `gorm:"-"`
 	privateDataUnreadable             bool   `gorm:"-"`
 	quotaWasNull                      bool   `gorm:"-"`
 	updatedAtWasNull                  bool   `gorm:"-"`
@@ -525,6 +526,7 @@ func timedOutUnfinishedTasksQuery(db *gorm.DB, usingSQLite bool, cutoffUnix int6
 		Where("status NOT IN ?", []TaskStatus{TaskStatusFailure, TaskStatusSuccess}).
 		Where("submit_time < ?", cutoffUnix).
 		Where("NOT EXISTS (?)", taskFinalizeOwned)
+	query = withoutPendingTaskSubmitFailure(query)
 	if afterID > 0 {
 		query = query.Where(
 			"(submit_time > ? OR (submit_time = ? AND id > ?))",
@@ -631,6 +633,26 @@ func GetTaskByID(id int64) (*Task, error) {
 	return &task, nil
 }
 
+// GetTaskPlaceholderByID keeps strict private decoding and the nullable version
+// in one database read. The alias is a projection, not a persisted task column.
+func GetTaskPlaceholderByID(id int64) (*Task, error) {
+	if DB == nil {
+		return nil, errors.New("database is not initialized")
+	}
+	if id <= 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var row struct {
+		Task
+		NullableUpdatedAt *int64 `gorm:"column:nullable_updated_at"`
+	}
+	if err := DB.Model(&Task{}).Select("*, updated_at AS nullable_updated_at").First(&row, id).Error; err != nil {
+		return nil, err
+	}
+	row.Task.updatedAtWasNull = row.NullableUpdatedAt == nil
+	return &row.Task, nil
+}
+
 func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
 	if len(taskIds) == 0 {
 		return nil, nil
@@ -695,7 +717,7 @@ func (t *Task) statusUpdateValues() map[string]interface{} {
 		"fail_reason": common.SanitizePersistedLogContent(t.FailReason),
 		"updated_at":  updatedAt,
 	}
-	if t.Data != nil || t.includeDataInUpdate {
+	if !t.preserveDataOnStatusUpdate && (t.Data != nil || t.includeDataInUpdate) {
 		values["data"] = t.Data
 	}
 	if !t.preservePrivateDataOnStatusUpdate && (t.PrivateData != (TaskPrivateData{}) || t.includePrivateDataInUpdate) {
@@ -724,6 +746,11 @@ func (t *Task) PreservePrivateDataOnStatusUpdate() {
 	t.preservePrivateDataOnStatusUpdate = true
 }
 
+// A timeout decides status, not a replacement for the last provider payload.
+func (t *Task) PreserveDataOnStatusUpdate() {
+	t.preserveDataOnStatusUpdate = true
+}
+
 func (t *Task) submitResultUpdateValues() map[string]interface{} {
 	updatedAt := t.UpdatedAt
 	if updatedAt <= 0 {
@@ -750,6 +777,7 @@ func (t *Task) Update() error {
 
 var ErrTaskPlaceholderConflict = errors.New("task placeholder changed before rewrite")
 var ErrTaskFinalizeOwned = errors.New("task finalize decision already owns this lifecycle")
+var ErrTaskSubmitRefundIdentityMismatch = errors.New("task submission refund identity does not match its placeholder")
 
 // RewritePlaceholder atomically claims the observed version and rewrites retry
 // metadata. A stale caller cannot overwrite a newer manual/worker decision.
@@ -843,6 +871,7 @@ func (t *Task) whereQuotaSnapshot(query *gorm.DB) *gorm.DB {
 }
 
 func (t *Task) whereTimestampSnapshot(query *gorm.DB, observed int64) *gorm.DB {
+	query = withoutPendingTaskSubmitFailure(query)
 	if t.updatedAtWasNull {
 		return query.Where("updated_at IS NULL")
 	}
@@ -984,7 +1013,7 @@ func (t *Task) UpdateWithStatusAndSettlementIntent(fromStatus TaskStatus, expect
 			"private_data": t.PrivateData,
 			"updated_at":   updatedAt,
 		}
-		if t.Data != nil || t.includeDataInUpdate {
+		if !t.preserveDataOnStatusUpdate && (t.Data != nil || t.includeDataInUpdate) {
 			updates["data"] = t.Data
 		}
 		result := tx.Model(&Task{ID: t.ID}).
@@ -1142,8 +1171,15 @@ func ClaimTaskSubmitFailure(taskID int64, reason string) (bool, error) {
 // The request-refund intent and terminal claim commit together. The caller may
 // apply the existing operation after commit; a crash leaves durable recovery.
 func ClaimTaskSubmitFailureWithSettlement(taskID int64, reason string, input *BillingSettlementInput) (bool, error) {
+	return claimTaskSubmitFailureWithSettlementDB(DB, taskID, reason, input)
+}
+
+func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason string, input *BillingSettlementInput) (bool, error) {
 	if taskID <= 0 {
 		return false, nil
+	}
+	if db == nil {
+		return false, errors.New("database is not initialized")
 	}
 	reason = common.SanitizePersistedLogContent(reason)
 	if common.UsingSQLite {
@@ -1151,7 +1187,15 @@ func ClaimTaskSubmitFailureWithSettlement(taskID int64, reason string, input *Bi
 		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 	won := false
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if tx.Dialector.Name() == "sqlite" {
+			// Reserve the WAL writer before any read establishes a snapshot.
+			// This keeps unrelated commits from making the terminal claim lose
+			// its read-to-write upgrade; no metadata version is changed here.
+			if err := tx.Model(&Task{}).Where("id = ?", taskID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
+				return err
+			}
+		}
 		var task Task
 		if err := withRowLock(tx).First(&task, taskID).Error; err != nil {
 			return err
@@ -1166,7 +1210,7 @@ func ClaimTaskSubmitFailureWithSettlement(taskID int64, reason string, input *Bi
 			if input.UserID != task.UserId || input.Source != task.PrivateData.BillingSource || input.TokenID != task.PrivateData.TokenId ||
 				input.SubscriptionID != task.PrivateData.SubscriptionId || task.PrivateData.BillingRequestId == "" ||
 				input.OperationKey != BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId) || input.TaskID != 0 && input.TaskID != taskID {
-				return errors.New("task submission refund identity does not match its placeholder")
+				return ErrTaskSubmitRefundIdentityMismatch
 			}
 		}
 		finalize := tx.Session(&gorm.Session{NewDB: true}).Model(&BillingSettlement{}).Select("1").Where("operation_key = ?", BillingTaskFinalizeOperationKey(taskID))

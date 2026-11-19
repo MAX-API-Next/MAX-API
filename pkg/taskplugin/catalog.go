@@ -59,6 +59,8 @@ func (*CatalogPricingDataError) Unwrap() error { return ErrCatalogInvalid }
 // preflight must not preserve an older Host merely because the later read timed out.
 type CatalogReadObservationError struct {
 	Revision int64
+	// Packages is independently completed evidence, even if receipts failed.
+	Packages *[]StoredPackage
 	// Snapshot is private completed data observed before the final head reread.
 	// It is evidence for suspension, never authority to publish a generation.
 	Snapshot *CatalogSnapshot
@@ -127,11 +129,12 @@ type PackageInfo struct {
 // affects admission only; revoke also invalidates already-issued sessions.
 // Refresh must be called explicitly for changes committed by another node.
 type Catalog struct {
-	mu       catalogMutex
-	store    CatalogStore
-	host     *Host
-	snapshot CatalogSnapshot
-	state    *hostState
+	mu                      catalogMutex
+	store                   CatalogStore
+	host                    *Host
+	snapshot                CatalogSnapshot
+	state                   *hostState
+	highestObservedRevision int64
 }
 
 func OpenCatalog(ctx context.Context, store CatalogStore) (*Catalog, error) {
@@ -185,6 +188,12 @@ func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
 		snapshot, err = catalog.store.Load(ctx)
+		if err != nil {
+			var observation *CatalogReadObservationError
+			if errors.As(err, &observation) {
+				catalog.observeRevision(observation.Revision)
+			}
+		}
 		if !errors.Is(err, ErrCatalogConflict) {
 			break
 		}
@@ -196,9 +205,16 @@ func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool
 		}
 	}
 	if err != nil || ctx.Err() != nil {
+		if err == nil {
+			// The store completed its authoritative read, but the caller's
+			// cancellation stopped the subsequent publication.
+			catalog.observeRevision(snapshot.Revision)
+		}
 		var observation *CatalogReadObservationError
-		changed := errors.As(err, &observation) && (observation.Revision != catalog.snapshot.Revision ||
-			observation.Snapshot != nil && !sameCatalogSnapshot(*observation.Snapshot, catalog.snapshot))
+		observed := errors.As(err, &observation)
+		changed := observed && (observation.Revision != catalog.snapshot.Revision ||
+			observation.Snapshot != nil && !sameCatalogSnapshot(*observation.Snapshot, catalog.snapshot) ||
+			observation.Packages != nil && !sameCatalogSnapshot(CatalogSnapshot{Packages: *observation.Packages}, CatalogSnapshot{Packages: catalog.snapshot.Packages}))
 		if !preflight || ctx.Err() == nil || changed || errors.Is(err, ErrCatalogInvalid) || err == nil && !sameCatalogSnapshot(snapshot, catalog.snapshot) {
 			catalog.host.state.Store(nil)
 		}
@@ -206,6 +222,10 @@ func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool
 			return ErrCatalogInvalid
 		}
 		return errors.Join(ErrCatalogUnavailable, ctx.Err())
+	}
+	if snapshot.Revision < catalog.highestObservedRevision {
+		catalog.host.state.Store(nil)
+		return ErrCatalogInvalid
 	}
 	if catalog.state != nil && catalog.host.state.Load() == catalog.state && sameCatalogSnapshot(snapshot, catalog.snapshot) {
 		return nil // Exact completed read; these immutable bytes are already validated.
@@ -263,7 +283,14 @@ func sameCatalogSnapshot(a, b CatalogSnapshot) bool {
 	return true
 }
 
+func (catalog *Catalog) observeRevision(revision int64) {
+	if revision > catalog.highestObservedRevision {
+		catalog.highestObservedRevision = revision
+	}
+}
+
 func (catalog *Catalog) publish(snapshot CatalogSnapshot, state *hostState) {
+	catalog.observeRevision(snapshot.Revision)
 	catalog.snapshot = cloneCatalogSnapshot(snapshot)
 	catalog.state = state
 	catalog.host.state.Store(state)
@@ -419,7 +446,7 @@ func (catalog *Catalog) update(ctx context.Context, change func(*CatalogSnapshot
 
 func (catalog *Catalog) updateExpected(ctx context.Context, expected *int64, change func(*CatalogSnapshot) error) error {
 	if err := catalog.acquire(ctx); err != nil {
-		return err
+		return errors.Join(ErrCatalogNotCommitted, err)
 	}
 	defer catalog.mu.Unlock()
 	if err := catalog.refreshLocked(ctx); err != nil {

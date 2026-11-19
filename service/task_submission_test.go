@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ import (
 
 func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 	for _, funding := range []string{"wallet_only", "subscription_only"} {
-		for _, outcome := range []string{"manual-first", "failure-first", "read-error", "pending-restart", "intent-write-error", "concurrent-cleanup", "identity-mismatch"} {
+		for _, outcome := range []string{"manual-first", "failure-first", "read-error", "pending-restart", "intent-write-error", "concurrent-cleanup", "identity-mismatch", "read-error-recovery", "intent-write-error-recovery"} {
 			t.Run(funding+"/"+outcome, func(t *testing.T) {
 				db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "cleanup.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 				require.NoError(t, err)
@@ -39,7 +40,7 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 						_ = pool.Close()
 					}
 				})
-				require.NoError(t, db.AutoMigrate(&model.Task{}, &model.User{}, &model.Token{}, &model.Channel{}, &model.Log{}, &model.BillingLogReceipt{}, &model.BillingSettlement{}, &model.BillingPreConsumeSelection{}, &model.CacheInvalidationTask{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}))
+				require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.User{}, &model.Token{}, &model.Channel{}, &model.Log{}, &model.BillingLogReceipt{}, &model.BillingSettlement{}, &model.BillingPreConsumeSelection{}, &model.CacheInvalidationTask{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}))
 				require.NoError(t, db.Create(&model.User{Id: 51001, Username: "cleanup-fixture", Quota: 1000}).Error)
 				require.NoError(t, db.Create(&model.Token{Id: 51002, UserId: 51001, Key: "synthetic-cleanup-key", RemainQuota: 1000}).Error)
 				if funding == "subscription_only" {
@@ -49,6 +50,7 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 				c, _ := gin.CreateTestContext(httptest.NewRecorder())
 				info := &relaycommon.RelayInfo{RequestId: "cleanup-" + funding + "-" + outcome, UserId: 51001, TokenId: 51002, TokenKey: "synthetic-cleanup-key", ForcePreConsume: true, UserSetting: dto.UserSetting{BillingPreference: funding}, PriceData: types.PriceData{ModelRatio: 1}, TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
 				require.Nil(t, PreConsumeBilling(c, 100, info))
+				originalBilling := info.Billing
 				row := &model.Task{TaskID: "cleanup-placeholder", UserId: 51001, Quota: 100, Status: model.TaskStatusSubmitted, PrivateData: model.TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: info.RequestId, BillingSource: info.BillingSource, TokenId: info.TokenId, SubscriptionId: info.SubscriptionId}}
 				require.NoError(t, db.Create(row).Error)
 				info.PersistedTaskID = row.ID
@@ -81,14 +83,14 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 					require.NoError(t, err)
 					require.True(t, won)
 				}
-				if outcome == "read-error" {
+				if strings.HasPrefix(outcome, "read-error") {
 					require.NoError(t, db.Callback().Query().Before("gorm:query").Register("fail-cleanup-read", func(tx *gorm.DB) {
 						if tx.Statement.Table == "tasks" {
 							tx.AddError(errors.New("synthetic ownership read failure"))
 						}
 					}))
 				}
-				if outcome == "intent-write-error" {
+				if strings.HasPrefix(outcome, "intent-write-error") {
 					require.NoError(t, db.Callback().Create().Before("gorm:create").Register("fail-refund-intent", func(tx *gorm.DB) {
 						if record, ok := tx.Statement.Dest.(*model.BillingSettlement); ok && record.OperationKey == model.BillingRequestFinalizeOperationKey(info.RequestId) {
 							tx.AddError(errors.New("synthetic refund intent write failure"))
@@ -112,6 +114,23 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 					require.Zero(t, pending.AppliedFundingDelta)
 					model.ProcessPendingBillingSettlementsOnce()
 					model.ProcessPendingBillingSettlementsOnce()
+					var recovered model.BillingSettlement
+					require.NoError(t, db.Where("operation_key = ?", intent.OperationKey).First(&recovered).Error)
+					require.Equal(t, model.BillingSettlementStatusApplied, recovered.Status)
+					require.EqualValues(t, -100, recovered.AppliedFundingDelta)
+					require.EqualValues(t, -100, recovered.AppliedTokenDelta)
+					var recoveredUser model.User
+					var recoveredToken model.Token
+					require.NoError(t, db.First(&recoveredUser, info.UserId).Error)
+					require.NoError(t, db.First(&recoveredToken, info.TokenId).Error)
+					require.EqualValues(t, 1000, recoveredUser.Quota)
+					require.EqualValues(t, 1000, recoveredToken.RemainQuota)
+					require.Zero(t, recoveredToken.UsedQuota)
+					if funding == "subscription_only" {
+						var recoveredSubscription model.UserSubscription
+						require.NoError(t, db.First(&recoveredSubscription, 51004).Error)
+						require.Zero(t, recoveredSubscription.AmountUsed)
+					}
 					info.Billing.Refund(c) // A delayed original session replays the same durable operation.
 				}
 				if outcome == "identity-mismatch" {
@@ -135,11 +154,17 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 				}
 				CleanupDefiniteTaskSubmitFailure(c, info, "rewrite rejected")
 				CleanupDefiniteTaskSubmitFailure(c, info, "duplicate cleanup")
-				if outcome == "read-error" {
+				if strings.HasPrefix(outcome, "read-error") {
 					require.NoError(t, db.Callback().Query().Remove("fail-cleanup-read"))
 				}
-				if outcome == "intent-write-error" {
+				if strings.HasPrefix(outcome, "intent-write-error") {
 					require.NoError(t, db.Callback().Create().Remove("fail-refund-intent"))
+				}
+				recovered := strings.HasSuffix(outcome, "-recovery")
+				if recovered {
+					info.Billing = nil // Recovery must work without the original session.
+					model.ProcessPendingBillingSettlementsOnce()
+					model.ProcessPendingBillingSettlementsOnce()
 				}
 				var task model.Task
 				require.NoError(t, db.First(&task, row.ID).Error)
@@ -155,7 +180,7 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 					require.NoError(t, db.First(&sub, 51004).Error)
 					used = sub.AmountUsed
 				}
-				if outcome == "failure-first" || outcome == "pending-restart" || outcome == "concurrent-cleanup" {
+				if outcome == "failure-first" || outcome == "pending-restart" || outcome == "concurrent-cleanup" || recovered {
 					require.Positive(t, checkedColumns.Load(), "the actual cleanup must emit only real database columns")
 					require.EqualValues(t, model.TaskStatusFailure, task.Status)
 					require.Zero(t, task.Quota)
@@ -188,6 +213,16 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 					require.Zero(t, manual.AppliedFundingDelta)
 				} else {
 					require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+				}
+				if recovered {
+					originalBilling.Refund(c)
+					require.NoError(t, db.First(&user, info.UserId).Error)
+					require.NoError(t, db.First(&token, info.TokenId).Error)
+					require.EqualValues(t, 1000, user.Quota)
+					require.EqualValues(t, 1000, token.RemainQuota)
+					require.Zero(t, token.UsedQuota)
+					require.NoError(t, db.Model(&model.BillingSettlement{}).Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(info.RequestId)).Count(&refunds).Error)
+					require.EqualValues(t, 1, refunds)
 				}
 			})
 		}

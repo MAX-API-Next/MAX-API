@@ -24,7 +24,7 @@ func deletionDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "deletion.db")+"?_pragma=busy_timeout(5000)"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
 	require.NoError(t, registerTaskPluginChannelCreateGuard(db))
-	require.NoError(t, db.AutoMigrate(&TaskPluginCatalogHead{}, &TaskPluginVersion{}, &TaskPluginDeletion{}, &Task{}, &Channel{}, &Option{}))
+	require.NoError(t, db.AutoMigrate(&TaskPluginCatalogHead{}, &TaskPluginVersion{}, &TaskPluginDeletion{}, &Task{}, &TaskSubmitFailureRecovery{}, &Channel{}, &Option{}))
 	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("guard_catalog_update_columns", func(tx *gorm.DB) {
 		if tx.Statement.Schema == nil {
 			return

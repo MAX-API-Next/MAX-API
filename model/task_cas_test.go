@@ -37,6 +37,7 @@ func TestMain(m *testing.M) {
 
 	if err := db.AutoMigrate(
 		&Task{},
+		&TaskSubmitFailureRecovery{},
 		&User{},
 		&Token{},
 		&Log{},

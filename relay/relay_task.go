@@ -77,10 +77,11 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 		return nil, service.TaskErrorWrapperLocal(errors.New("pre-consumed quota cannot be negative"), "persist_task_failed", http.StatusInternalServerError)
 	}
 	if info.PersistedTaskID > 0 {
-		var task model.Task
-		if err := model.DB.First(&task, info.PersistedTaskID).Error; err != nil {
+		loaded, err := model.GetTaskPlaceholderByID(info.PersistedTaskID)
+		if err != nil {
 			return nil, TaskPersistenceError(err, "load_persisted_task_failed", "failed to load persisted task")
 		}
+		task := *loaded
 		for attempt := 0; attempt < 3; attempt++ {
 			observed := task
 			privateSnapshot, err := common.Marshal(task.PrivateData)
@@ -100,8 +101,11 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 			task.Quota = preConsumedQuota
 			populateTaskBillingMetadata(&task, info)
 			if err := task.RewritePlaceholder(); err != nil {
-				if errors.Is(err, model.ErrTaskPlaceholderConflict) && attempt < 2 {
-					reloaded, readErr := model.GetTaskByID(task.ID)
+				if errors.Is(err, model.ErrTaskPlaceholderConflict) {
+					if attempt == 2 {
+						break
+					}
+					reloaded, readErr := model.GetTaskPlaceholderByID(task.ID)
 					if readErr == nil && taskPlaceholderClaimOnly(observed, privateSnapshot, reloaded) {
 						task = *reloaded
 						continue

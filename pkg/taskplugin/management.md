@@ -289,7 +289,8 @@ map/array checks inside the private-data object remain supported. New serialized
 non-null task writes still require an object, matching the typed task/recovery decoder;
 accepting an array at the root would create an unreadable task record.
 Before decoding, SQL selects rows containing the complete quoted package key,
-the complete quoted digest, or any JSON Unicode escape marker (`\u`). Canonical
+the complete quoted digest, their opening-quote prefixes without the closing
+quote, or any JSON Unicode escape marker (`\u`). Canonical
 identity strings must use a literal or Unicode escapes, so escaped identities,
 case variants of field names and unknown legacy containers remain candidates.
 The original typed and recursive checks then decide whether a reference exists.
@@ -399,6 +400,17 @@ or intent writes retain funds/state for reconciliation instead of guessing.
 Generic tasks and Midjourney use this same coordinator, including placeholder
 preparation failures; a failed database write never authorizes an independent
 refund. Accepted or ambiguous provider responses keep their existing handling.
+
+Deploy the `task_submit_failure_recoveries` migration before starting nodes
+that submit or poll tasks. If the task claim or refund intent cannot be saved
+after bounded retries, the coordinator records the confirmed rejection with
+its original refund identity in this table. The existing settlement worker
+retries the guarded claim and applies the original refund. Pending recovery
+prevents timeout or retry from taking over the same task. `intent_recorded`
+indicates a durable intent. Use the applied settlement and its deltas to verify
+the refund. A conflicting task assignment is held for manual reconciliation.
+If the database cannot save even the recovery record, use the original task
+and reservation records to reconcile the logged task ID after service returns.
 Historical private metadata retains unknown fields, including nested typed
 objects and arrays, through polling updates. Progress-only polls omit unchanged
 private data; edits merge the retained fields and validate their references.

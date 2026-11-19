@@ -6063,6 +6063,8 @@
     "Invalid API extension request": "Requête d’extension d’API invalide",
     "Invalid API extension response": "Réponse d’extension d’API invalide",
     "Bind API extensions": "Associer des extensions d’API",
+    "Bind task plugins": "Associer des extensions d’API",
+    "Bind registered task plugins to channels.": "Associer les extensions d’API enregistrées aux canaux.",
     "Bind registered API extensions to channels.": "Associer les extensions d’API enregistrées aux canaux.",
     "Disabling blocks new bindings while keeping installed files and historical tasks available.": "La désactivation arrête le routage de nouvelles tâches vers cette extension, tout en conservant les fichiers installés et les tâches historiques. Les références aux modèles dans les canaux restent autorisées.",
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles, audit identity and historical revocation are retained. Re-importing the same file remains blocked.": "Supprimez directement en l’absence de références de tâches, de canaux ou de tarifs. Le code installé est supprimé ; les paquets distribués, l’identité d’audit et la révocation historique sont conservés. La réimportation du même fichier reste bloquée.",

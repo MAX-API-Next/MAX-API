@@ -130,6 +130,12 @@ func TestChannelBatchValidatesReceiptUnionOncePerStatement(t *testing.T) {
 	var count int64
 	require.NoError(t, db.Model(&Channel{}).Where("name IN ?", []string{"safe-member", "deleted-member"}).Count(&count).Error)
 	require.Zero(t, count, "one invalid union member rolls back the whole statement")
+	mappingOnly := []Channel{{Name: "mapping-safe", Models: "ordinary"}, {Name: "mapping-deleted", Models: "ordinary-alias", ModelMapping: common.GetPointer(`{"ordinary-alias":"catalog-model"}`)}}
+	reads = 0
+	require.ErrorIs(t, db.Create(&mappingOnly).Error, taskplugin.ErrBindingRejected)
+	require.Equal(t, 1, reads)
+	require.NoError(t, db.Model(&Channel{}).Where("name IN ?", []string{"mapping-safe", "mapping-deleted"}).Count(&count).Error)
+	require.Zero(t, count, "a later mapping-only reference rolls back the entire batch")
 	ignored := []Channel{{Name: "omitted-a", Models: "catalog-model"}, {Name: "omitted-b", Models: "catalog-model"}}
 	require.NoError(t, db.Omit("models").Create(&ignored).Error)
 	reads = 0

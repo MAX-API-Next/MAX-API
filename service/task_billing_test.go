@@ -49,6 +49,7 @@ func TestMain(m *testing.M) {
 
 	if err := db.AutoMigrate(
 		&model.Task{},
+		&model.TaskSubmitFailureRecovery{},
 		&model.User{},
 		&model.Token{},
 		&model.Log{},
@@ -238,6 +239,51 @@ func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T)
 	var settlementCount int64
 	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Count(&settlementCount).Error)
 	require.Zero(t, settlementCount)
+}
+
+func TestTimeoutUpdatesPreserveNewerProviderPayload(t *testing.T) {
+	for _, unconfirmed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unconfirmed-%t", unconfirmed), func(t *testing.T) {
+			truncate(t)
+			resetTimedOutTaskSweepCursorForTest(t)
+			previous := constant.TaskTimeoutMinutes
+			constant.TaskTimeoutMinutes = 1
+			t.Cleanup(func() { constant.TaskTimeoutMinutes = previous })
+			seedUser(t, 741, 80)
+			seedToken(t, 742, 741, "synthetic-payload-token", 80)
+			seedChannel(t, 743)
+			task := makeTask(741, 743, 20, 742, BillingSourceWallet, 0)
+			task.Status = model.TaskStatusSubmitted
+			task.SubmitTime = time.Now().Add(-2 * time.Minute).Unix()
+			task.PrivateData.AwaitingUpstreamID = unconfirmed
+			task.Data = json.RawMessage(`{"provider_progress":"old"}`)
+			persistTask(t, task)
+			const newer = `{"provider_progress":"new"}`
+			injected := false
+			require.NoError(t, model.DB.Callback().Query().After("gorm:query").Register("publish-after-timeout-snapshot", func(tx *gorm.DB) {
+				if !injected && tx.Statement.Table == "tasks" && tx.RowsAffected > 0 {
+					injected = true
+					require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).UpdateColumn("data", []byte(newer)).Error)
+				}
+			}))
+			t.Cleanup(func() { _ = model.DB.Callback().Query().Remove("publish-after-timeout-snapshot") })
+			sweepTimedOutTasks(t.Context())
+			require.True(t, injected)
+			var stored model.Task
+			require.NoError(t, model.DB.First(&stored, task.ID).Error)
+			require.Equal(t, newer, string(stored.Data), "timeout state changes must not overwrite a newer same-version provider payload")
+			require.EqualValues(t, model.TaskStatusFailure, stored.Status)
+			if unconfirmed {
+				require.Equal(t, 20, stored.Quota)
+				require.EqualValues(t, 80, getUserQuota(t, 741))
+				require.Zero(t, countLogs(t))
+			} else {
+				require.Zero(t, stored.Quota)
+				require.EqualValues(t, 100, getUserQuota(t, 741))
+				require.EqualValues(t, 1, countLogs(t))
+			}
+		})
+	}
 }
 
 func TestSweepTimeoutSnapshotLosesToConfirmedSubmission(t *testing.T) {
@@ -515,7 +561,7 @@ func isolateTaskPluginBillingDatabase(t *testing.T) {
 	sqlDB, err := isolated.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	require.NoError(t, isolated.AutoMigrate(&model.Task{}, &model.User{}, &model.Token{}, &model.Log{}, &model.BillingLogReceipt{}, &model.Channel{}, &model.TopUp{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.BillingSettlement{}, &model.BillingPreConsumeSelection{}, &model.CacheInvalidationTask{}, &model.Midjourney{}, &model.MidjourneyBillingClaim{}, &model.Option{}, &model.TaskPluginCatalogHead{}, &model.TaskPluginVersion{}, &model.TaskPluginDeletion{}))
+	require.NoError(t, isolated.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.User{}, &model.Token{}, &model.Log{}, &model.BillingLogReceipt{}, &model.Channel{}, &model.TopUp{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.BillingSettlement{}, &model.BillingPreConsumeSelection{}, &model.CacheInvalidationTask{}, &model.Midjourney{}, &model.MidjourneyBillingClaim{}, &model.Option{}, &model.TaskPluginCatalogHead{}, &model.TaskPluginVersion{}, &model.TaskPluginDeletion{}))
 	previousDB, previousLog := model.DB, model.LOG_DB
 	model.DB, model.LOG_DB = isolated, isolated
 	t.Cleanup(func() { model.DB, model.LOG_DB = previousDB, previousLog; _ = sqlDB.Close() })
@@ -1156,6 +1202,7 @@ func resetTimedOutTaskSweepCursorForTest(t *testing.T) {
 func truncate(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
+		model.DB.Exec("DELETE FROM task_submit_failure_recoveries")
 		model.DB.Exec("DELETE FROM tasks")
 		model.DB.Exec("DELETE FROM users")
 		model.DB.Exec("DELETE FROM tokens")
