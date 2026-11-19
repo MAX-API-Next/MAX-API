@@ -25,7 +25,7 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 		value = value.Elem()
 	}
 	batch := value.IsValid() && (value.Kind() == reflect.Slice || value.Kind() == reflect.Array)
-	if checked, ok := statement.Settings.Load(channelBatchReferenceCheck); batch && ok && checked == statement {
+	if checked, ok := statement.Settings.Load(channelBatchReferenceCheck); batch && statement.CurDestIndex > 0 && ok && checked == statement {
 		return nil
 	}
 	receivers := []*Channel{channel}
@@ -61,8 +61,8 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 	if err := validateChannelReferenceSet(tx, updates); err != nil {
 		return err
 	}
-	// Only this exact statement may reuse its complete union validation. GORM
-	// clones statement settings for later statements; pointer equality forbids reuse.
+	// Later rows reuse this execution's union. GORM resets CurDestIndex before
+	// every create, including reuse of an initialized handle and its settings.
 	if batch {
 		statement.Settings.Store(channelBatchReferenceCheck, statement)
 	}

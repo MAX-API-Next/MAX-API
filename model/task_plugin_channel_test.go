@@ -114,6 +114,27 @@ func TestChannelBatchValidatesReceiptUnionOncePerStatement(t *testing.T) {
 	require.Equal(t, 2, reads, "even statements in the same transaction must not share a validation result")
 }
 
+func TestChannelBatchRevalidatesReusedInitializedHandle(t *testing.T) {
+	db := deletionDB(t)
+	catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+	require.NoError(t, err)
+	pkg, _ := catalogFixture(t, "stored", "1.0.0", "reused-query")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	require.NoError(t, catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"}))
+	err = db.Transaction(func(tx *gorm.DB) error {
+		q := tx.Omit("remark")
+		safe := []Channel{{Name: "first-safe", Models: "ordinary-a"}, {Name: "second-safe", Models: "ordinary-b"}}
+		if err := q.Create(&safe).Error; err != nil {
+			return err
+		}
+		bad := []Channel{{Name: "later-safe", Models: "ordinary"}, {Name: "later-deleted", Models: "catalog-model"}}
+		err := q.Create(&bad).Error
+		require.ErrorIs(t, err, taskplugin.ErrBindingRejected)
+		return err
+	})
+	require.ErrorIs(t, err, taskplugin.ErrBindingRejected)
+}
+
 func TestTaskPluginChannelReferencesCannotOutliveDeletion(t *testing.T) {
 	db := deletionDB(t)
 	oldDB := DB

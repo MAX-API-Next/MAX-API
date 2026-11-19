@@ -983,10 +983,18 @@ test('late validation is ignored after changing the pin', async () => {
   assert.deepEqual(f.writes, [])
 })
 
-for (const bom of [false, true])
-  test(`format-2 installation requires node acknowledgement (BOM=${bom})`, async () => {
+for (const sample of [
+  { format: 2, bom: false },
+  { format: 2, bom: true },
+  { format: 1, bom: true },
+] as const)
+  test(`format-${sample.format} installation requires node acknowledgement (BOM=${sample.bom})`, async () => {
     const f = fixture()
-    f.api.validate = async () => ({ ...entry, bom_prefixed: bom })
+    f.api.validate = async () => ({
+      ...entry,
+      format_version: sample.format,
+      bom_prefixed: sample.bom,
+    })
     const v = f.view()
     fireEvent.click(
       await v.findByRole('button', { name: 'Import API extension' })
@@ -1017,10 +1025,12 @@ for (const bom of [false, true])
     })
     assert.equal((install as HTMLButtonElement).disabled, true)
     const ready = panel.getByRole('checkbox')
-    if (bom)
+    if (sample.bom)
       assert.match(
         ready.parentElement!.textContent!,
-        /package format and UTF-8 BOM/
+        sample.format >= 2
+          ? /package format and UTF-8 BOM/
+          : /support UTF-8 BOM/
       )
     fireEvent.click(ready)
     fireEvent.click(install)
@@ -1030,32 +1040,37 @@ for (const bom of [false, true])
     if (f.writes[0].action === 'install') {
       assert.equal(f.writes[0].expected_sha256, 'b'.repeat(64))
       assert.equal(f.writes[0].format2_nodes_ready, true)
-      assert.equal(f.writes[0].bom_nodes_ready, bom ? true : undefined)
+      assert.equal(f.writes[0].bom_nodes_ready, sample.bom ? true : undefined)
     }
   })
-test('format-2 BOM activation names both reader requirements', async () => {
-  const f = fixture()
-  f.state.entries[0].active = false
-  f.state.entries[0].bom_prefixed = true
-  const v = f.view()
-  fireEvent.click(await v.findByRole('button', { name: /^Details\b/ }))
-  const panel = within(await v.findByRole('dialog'))
-  fireEvent.click(panel.getByRole('button', { name: 'Activate version' }))
-  const confirm = panel.getByRole('button', {
-    name: 'Confirm',
-  }) as HTMLButtonElement
-  assert.equal(confirm.disabled, true)
-  fireEvent.click(
-    panel.getByRole('checkbox', {
-      name: 'All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.',
-    })
-  )
-  fireEvent.click(confirm)
-  await waitFor(() => assert.equal(f.writes.length, 1))
-  assert.equal(f.writes[0].action, 'activate')
-  assert.equal(f.writes[0].format2_nodes_ready, true)
-  assert.equal(f.writes[0].bom_nodes_ready, true)
-})
+for (const format of [2, 1] as const)
+  test(`format-${format} BOM activation requires reader acknowledgement`, async () => {
+    const f = fixture()
+    f.state.entries[0].active = false
+    f.state.entries[0].format_version = format
+    f.state.entries[0].bom_prefixed = true
+    const v = f.view()
+    fireEvent.click(await v.findByRole('button', { name: /^Details\b/ }))
+    const panel = within(await v.findByRole('dialog'))
+    fireEvent.click(panel.getByRole('button', { name: 'Activate version' }))
+    const confirm = panel.getByRole('button', {
+      name: 'Confirm',
+    }) as HTMLButtonElement
+    assert.equal(confirm.disabled, true)
+    fireEvent.click(
+      panel.getByRole('checkbox', {
+        name:
+          format >= 2
+            ? 'All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.'
+            : 'All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.',
+      })
+    )
+    fireEvent.click(confirm)
+    await waitFor(() => assert.equal(f.writes.length, 1))
+    assert.equal(f.writes[0].action, 'activate')
+    assert.equal(f.writes[0].format2_nodes_ready, true)
+    assert.equal(f.writes[0].bom_nodes_ready, true)
+  })
 
 test('late official source download cannot replace a manually changed pin', async () => {
   const f = fixture(),

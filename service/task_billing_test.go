@@ -979,6 +979,55 @@ func TestSweepRecoveryBudgetReservesOrdinaryTimeouts(t *testing.T) {
 	require.EqualValues(t, 50, countLogs(t))
 }
 
+func TestLateAppliedRecoveryCannotSpendOrdinaryAllowance(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	previous := constant.TaskTimeoutMinutes
+	constant.TaskTimeoutMinutes = 1
+	t.Cleanup(func() { constant.TaskTimeoutMinutes = previous })
+	seedUser(t, 717, 1000)
+	seedToken(t, 718, 717, "synthetic-late-share", 1000)
+	now := time.Now().Unix()
+	private := model.TaskPrivateData{TokenId: 718, BillingSource: model.BillingSettlementSourceWallet, PendingTerminalStatus: model.TaskStatusSuccess, PendingTerminalProgress: "100%", PendingTerminalFinishTime: now}
+	addApplied := func(row *model.Task) {
+		require.NoError(t, model.DB.Create(&model.BillingSettlement{OperationKey: model.BillingTaskFinalizeOperationKey(row.ID), TaskID: row.ID, UserID: 717, TokenID: 718, Source: model.BillingSettlementSourceWallet, TaskQuota: 1, TaskQuotaTarget: 1, Status: model.BillingSettlementStatusApplied, EffectStatus: model.BillingSettlementEffectApplied, CreatedAt: now, UpdatedAt: now, Revision: 1}).Error)
+	}
+	for i := 0; i < 50; i++ {
+		row := &model.Task{TaskID: fmt.Sprintf("early-recovery-%d", i), UserId: 717, Quota: 1, SubmitTime: now - 120, Status: model.TaskStatusInProgress, PrivateData: private}
+		require.NoError(t, model.DB.Create(row).Error)
+		addApplied(row)
+	}
+	late := &model.Task{TaskID: "late-applied", UserId: 717, Quota: 1, SubmitTime: now - 120, Status: model.TaskStatusInProgress, PrivateData: private}
+	require.NoError(t, model.DB.Create(late).Error)
+	for i := 0; i < 50; i++ {
+		require.NoError(t, model.DB.Create(&model.Task{TaskID: fmt.Sprintf("late-ordinary-%d", i), UserId: 717, Quota: 1, SubmitTime: now - 120, Status: model.TaskStatusSubmitted, PrivateData: model.TaskPrivateData{TokenId: 718, BillingSource: model.BillingSettlementSourceWallet, UpstreamTaskID: "provider"}}).Error)
+	}
+	injected := false
+	require.NoError(t, model.DB.Callback().Query().After("gorm:query").Register("apply-after-ordinary-page", func(tx *gorm.DB) {
+		if !injected && tx.Statement.Table == "tasks" && strings.Contains(tx.Statement.SQL.String(), "NOT EXISTS") {
+			injected = true
+			addApplied(late)
+		}
+	}))
+	t.Cleanup(func() { _ = model.DB.Callback().Query().Remove("apply-after-ordinary-page") })
+	sweepTimedOutTasks(t.Context())
+	require.True(t, injected)
+	var fresh model.Task
+	require.NoError(t, model.DB.First(&fresh, late.ID).Error)
+	require.Equal(t, model.TaskStatus(model.TaskStatusInProgress), fresh.Status)
+	var ordinary int64
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("task_id LIKE ? AND status = ?", "late-ordinary-%", model.TaskStatusFailure).Count(&ordinary).Error)
+	require.EqualValues(t, 50, ordinary)
+	require.EqualValues(t, 1050, getUserQuota(t, 717))
+	require.Equal(t, 1050, getTokenRemainQuota(t, 718))
+	require.EqualValues(t, 50, countLogs(t))
+	sweepTimedOutTasks(t.Context())
+	require.NoError(t, model.DB.First(&fresh, late.ID).Error)
+	require.Equal(t, model.TaskStatus(model.TaskStatusSuccess), fresh.Status)
+	require.EqualValues(t, 1050, getUserQuota(t, 717))
+	require.EqualValues(t, 50, countLogs(t))
+}
+
 func resetTimedOutTaskSweepCursorForTest(t *testing.T) {
 	t.Helper()
 	reset := func() {

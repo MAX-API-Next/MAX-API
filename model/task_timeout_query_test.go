@@ -100,6 +100,36 @@ func TestTimeoutCASPreservesTimestampNullability(t *testing.T) {
 	}
 }
 
+func TestManualSettlementCASPreservesTimestampNullability(t *testing.T) {
+	for _, change := range []bool{false, true} {
+		t.Run(fmt.Sprint(change), func(t *testing.T) {
+			truncateTables(t)
+			row := &Task{TaskID: "nullable-manual", Status: TaskStatusSubmitted, Quota: 10, SubmitTime: 1}
+			insertTask(t, row)
+			require.NoError(t, DB.Model(row).UpdateColumn("updated_at", nil).Error)
+			rows, err := GetTimedOutUnfinishedTasksAfter(1000, 0, 0, 10)
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			observed := rows[0]
+			if change {
+				require.NoError(t, DB.Model(row).UpdateColumn("updated_at", 0).Error)
+			}
+			won, err := observed.UpdateWithStatusAndManualSettlement(TaskStatusSubmitted, 0, BillingSettlementInput{OperationKey: BillingTaskFinalizeOperationKey(row.ID), Source: BillingSettlementSourceWallet, UserID: 1, TaskID: row.ID, TaskQuota: 10, TaskQuotaTarget: 10}, "missing provider evidence")
+			require.NoError(t, err)
+			require.Equal(t, !change, won)
+			var records []BillingSettlement
+			require.NoError(t, DB.Find(&records).Error)
+			if change {
+				require.Empty(t, records)
+			} else {
+				require.Len(t, records, 1)
+				require.Equal(t, BillingSettlementStatusManual, records[0].Status)
+				require.Zero(t, records[0].AppliedFundingDelta)
+			}
+		})
+	}
+}
+
 func TestTimedOutTaskQueryUsesPortableTaskFinalizeExclusion(t *testing.T) {
 	tests := []struct {
 		name        string

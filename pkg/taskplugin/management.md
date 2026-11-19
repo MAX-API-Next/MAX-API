@@ -26,6 +26,14 @@ rollout. Applied recovery now uses at most 50 successful updates per sweep,
 reserving at least 50 of the shared 100 processing slots for ordinary timeouts.
 Idle ordinary capacity is not borrowed back, so applied-only recovery throughput
 can be lower than before. The independent 2,000-row scan caps remain unchanged.
+PostgreSQL runtime connections must also put the application schema first on
+`search_path`, matching the migration schema and the unqualified application
+queries. Current GORM table/column preflights use `CURRENT_SCHEMA()`; a table
+visible only through a later schema can fail those checks even when its DML
+grants exist. Apply this connection configuration to all catalog readers and
+writers before rollout, and verify it using the actual runtime roles. This
+change documents the required deployment contract; it does not alter roles,
+schemas or search paths on the business database.
 
 **Existing subscription refund limit:** a legacy task reserved at 20 and reduced
 to 15 by request finalization can later have its timeout refund of 15 held for
@@ -206,8 +214,9 @@ channel-write latency. A durable per-model lookup/backfill remains separate
 scalability work; the current implementation does not provide indexed lookup.
 Bulk channel statements validate the union of emitted model/mapping references
 once under the same head lock and transaction. This includes Select/Omit rules;
-an invalid member rejects the whole statement. Only that exact GORM statement
-can reuse its check. Separate statements, chunks and transactions reread the
+an invalid member rejects the whole statement. Only later row callbacks in that
+create execution can reuse its check. The first row always revalidates, including
+when the same initialized GORM handle is reused. Separate executions, chunks and transactions reread the
 history; there is no cross-transaction cache or constant-time receipt lookup.
 Any retained non-revoked declaration intentionally satisfies this metadata
 reference check, including inactive or disabled versions. This preserves channel

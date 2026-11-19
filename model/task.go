@@ -959,8 +959,7 @@ func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expect
 		if t.Data != nil || t.includeDataInUpdate {
 			updates["data"] = t.Data
 		}
-		result := tx.Model(&Task{ID: t.ID}).
-			Where("id = ? AND status = ? AND updated_at = ?", t.ID, fromStatus, expectedUpdatedAt).
+		result := t.whereTimestampSnapshot(tx.Model(&Task{ID: t.ID}).Where("id = ? AND status = ?", t.ID, fromStatus), expectedUpdatedAt).
 			Scopes(t.whereQuotaSnapshot).
 			Updates(updates)
 		if result.Error != nil {

@@ -180,6 +180,9 @@ func sweepTimedOutTasks(ctx context.Context) {
 				// legacy applied rows without evidence retain the historical timeout
 				// path so they cannot be stranded.
 				if taskFinalizeApplied {
+					if recoveryRemaining <= 0 {
+						continue // A late applied result cannot spend ordinary timeout capacity.
+					}
 					latestTask, reloadErr := model.GetTaskByID(task.ID)
 					if reloadErr != nil {
 						logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize task reload error for task %s: %v", task.TaskID, reloadErr))
@@ -202,6 +205,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 					}
 					if recoveryOutcome == appliedTaskRecoveryUpdated {
 						remaining--
+						recoveryRemaining--
 					}
 					continue
 				} else {
