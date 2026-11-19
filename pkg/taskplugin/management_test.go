@@ -655,19 +655,34 @@ func TestRefreshReusesOnlyCurrentlyPublishedIdenticalGeneration(t *testing.T) {
 			if change {
 				store.snapshot.Packages[0].Enabled = false
 			}
-			ctx := &cancelAfterCatalogRead{Context: t.Context()}
-			store.onLoad = func(int) { ctx.armed = true }
-			err = catalog.Refresh(ctx)
 			if change {
+				ctx := &cancelAfterCatalogRead{Context: t.Context()}
+				store.onLoad = func(int) { ctx.armed = true }
+				err = catalog.Refresh(ctx)
 				require.ErrorIs(t, err, context.Canceled)
 				require.Nil(t, catalog.host.state.Load())
 			} else {
-				require.NoError(t, err)
+				require.NoError(t, catalog.Refresh(t.Context()))
 				require.Same(t, published, catalog.host.state.Load())
-				require.Equal(t, 1, ctx.checks, "unchanged published generation must not reenter metadata construction")
 			}
 		})
 	}
+}
+
+func TestCatalogRefreshDoesNotReuseSnapshotWhenComparisonIsCanceled(t *testing.T) {
+	store := &memoryCatalogStore{}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	pkg := testPackage(t, validManifest(), "validated-source")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	require.NotNil(t, catalog.host.state.Load())
+	ctx := &cancelAfterCatalogRead{Context: t.Context()}
+	store.onLoad = func(int) { ctx.armed = true }
+	require.ErrorIs(t, catalog.Refresh(ctx), context.Canceled)
+	require.Nil(t, catalog.host.state.Load())
+	store.onLoad = nil
+	require.NoError(t, catalog.Refresh(t.Context()))
+	require.NotNil(t, catalog.host.state.Load())
 }
 
 func TestSuspendedCatalogRevalidatesEvenWhenSnapshotIsIdentical(t *testing.T) {

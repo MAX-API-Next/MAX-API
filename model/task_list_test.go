@@ -43,7 +43,9 @@ func TestTaskListsIsolateUnreadableMetadataAndKeepScope(t *testing.T) {
 			filtered := TaskGetAllTasks(0, 10, SyncTaskQueryParams{UserIDs: []int{11}, TaskID: "healthy-list"})
 			require.Len(t, filtered, 1)
 			require.Equal(t, healthy.ID, filtered[0].ID)
-			require.Len(t, TaskGetAllUserTask(11, 1, 1, SyncTaskQueryParams{}), 1, "pagination still happens in SQL before decoding")
+			secondPage := TaskGetAllUserTask(11, 1, 1, SyncTaskQueryParams{})
+			require.Len(t, secondPage, 1, "pagination still happens in SQL before decoding")
+			require.Equal(t, healthy.ID, secondPage[0].ID)
 			dispatchedIDs := []int64{}
 			for _, dispatched := range GetAllUnFinishSyncTasks(10) {
 				dispatchedIDs = append(dispatchedIDs, dispatched.ID)
@@ -53,6 +55,15 @@ func TestTaskListsIsolateUnreadableMetadataAndKeepScope(t *testing.T) {
 			batch, err := GetByTaskIds(11, []any{healthy.TaskID, bad.TaskID, foreign.TaskID})
 			require.NoError(t, err)
 			require.Len(t, batch, 2)
+			public, exists, err := GetUserTaskStatusByID(11, bad.TaskID)
+			require.NoError(t, err)
+			require.True(t, exists)
+			require.Equal(t, bad.ID, public.ID)
+			require.True(t, public.PrivateDataUnreadable())
+			require.Empty(t, public.GetResultURL())
+			_, exists, err = GetUserTaskStatusByID(12, bad.TaskID)
+			require.NoError(t, err)
+			require.False(t, exists)
 			ids := []int64{}
 			for _, item := range batch {
 				ids = append(ids, item.ID)

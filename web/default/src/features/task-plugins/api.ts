@@ -82,7 +82,7 @@ export class PluginError extends Error {
     public readonly kind: 'conflict' | 'rejected' | 'unknown' | 'read',
     message: string,
     public readonly repair?:
-      | { code: 'invalid_channel_mapping'; channel_id: number }
+      | { code: 'invalid_channel_mapping'; channel_id: string }
       | { code: 'invalid_task_data'; task_id: string }
       | { code: 'invalid_plugin_pricing'; option_key: string }
   ) {
@@ -123,7 +123,15 @@ function requestError(
     .discriminatedUnion('code', [
       z.object({
         code: z.literal('invalid_channel_mapping'),
-        channel_id: z.number().int().positive(),
+        channel_id: z.union([
+          z.string().regex(/^[1-9][0-9]*$/),
+          z
+            .number()
+            .int()
+            .positive()
+            .max(Number.MAX_SAFE_INTEGER)
+            .transform(String),
+        ]),
       }),
       z.object({
         code: z.literal('invalid_task_data'),

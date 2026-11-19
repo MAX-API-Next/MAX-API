@@ -85,11 +85,9 @@ func readPricingAuthority(tx *gorm.DB, lock bool) (*pricingAuthority, error) {
 		}
 		a.selfUse = defaults[0].Value == "true"
 	}
-	var err error
 	// All writers take the head before channel rows. Locking reads below also
 	// avoid reusing an older MySQL REPEATABLE READ snapshot after deletion.
-	a.plugins, a.catalogReady, err = readPricingCatalog(tx, lock)
-	if err != nil {
+	if err := a.readCatalog(tx, lock); err != nil {
 		return nil, err
 	}
 	query := tx.Model(&Channel{}).Select("id", "type", "status", "models", "group", "model_mapping", "setting", "base_url", "param_override", "header_override", "settings").Order("id")
@@ -102,13 +100,13 @@ func readPricingAuthority(tx *gorm.DB, lock bool) (*pricingAuthority, error) {
 	return a, nil
 }
 
-func readPricingCatalog(tx *gorm.DB, lock bool) ([]taskplugin.StoredPackage, bool, error) {
+func (a *pricingAuthority) readCatalog(tx *gorm.DB, lock bool) error {
 	if !tx.Migrator().HasTable(&TaskPluginCatalogHead{}) || !tx.Migrator().HasTable(&TaskPluginVersion{}) {
-		return nil, false, nil
+		return nil
 	}
 	if lock {
 		if err := lockTaskPluginCatalogHead(tx); err != nil {
-			return nil, false, err
+			return err
 		}
 	}
 	var head TaskPluginCatalogHead
@@ -118,7 +116,7 @@ func readPricingCatalog(tx *gorm.DB, lock bool) ([]taskplugin.StoredPackage, boo
 	}
 	err := q.First(&head, 1).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, false, err
+		return err
 	}
 	versionQuery := tx
 	if lock {
@@ -126,10 +124,10 @@ func readPricingCatalog(tx *gorm.DB, lock bool) ([]taskplugin.StoredPackage, boo
 	}
 	rows, _, loadErr := loadTaskPluginVersions(versionQuery)
 	if loadErr != nil {
-		return nil, false, loadErr
+		return loadErr
 	}
 	if err == nil && (head.Revision <= 0 || head.MutationID == "") {
-		return nil, false, taskplugin.ErrCatalogInvalid
+		return taskplugin.ErrCatalogInvalid
 	}
 	receiptQuery := tx.Session(&gorm.Session{NewDB: true})
 	if lock {
@@ -137,33 +135,35 @@ func readPricingCatalog(tx *gorm.DB, lock bool) ([]taskplugin.StoredPackage, boo
 	}
 	deletions, loadErr := loadTaskPluginDeletions(receiptQuery)
 	if loadErr != nil {
-		return nil, false, loadErr
+		return loadErr
 	}
 	if !lock {
 		var after TaskPluginCatalogHead
 		afterErr := tx.Session(&gorm.Session{NewDB: true}).First(&after, 1).Error
 		if afterErr != nil && !errors.Is(afterErr, gorm.ErrRecordNotFound) {
-			return nil, false, afterErr
+			return afterErr
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			if !errors.Is(afterErr, gorm.ErrRecordNotFound) {
-				return nil, false, ErrModelPricingConflict
+				return ErrModelPricingConflict
 			}
 		} else if afterErr != nil || head != after {
-			return nil, false, ErrModelPricingConflict
+			return ErrModelPricingConflict
 		}
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) && (len(rows) > 0 || len(deletions) > 0) {
-		return nil, false, taskplugin.ErrCatalogInvalid
+		return taskplugin.ErrCatalogInvalid
 	}
 	if err := validateTaskPluginDeletionHead(head, deletions); err != nil {
-		return nil, false, err
+		return err
 	}
 	snapshot := taskplugin.CatalogSnapshot{Revision: head.Revision, Packages: rows, Deletions: deletions}
-	if err := taskplugin.ValidateStoredCatalogSnapshotContext(tx.Statement.Context, snapshot); err != nil {
-		return nil, false, err
+	validated, err := taskplugin.ValidatedStoredCatalogPackagesContext(tx.Statement.Context, snapshot)
+	if err != nil {
+		return err
 	}
-	return rows, true, nil
+	a.plugins, a.validatedPackages, a.catalogReady = rows, validated, true
+	return nil
 }
 func (a *pricingAuthority) signature() string {
 	return pricingDigest(struct {
@@ -347,7 +347,11 @@ func effectiveModelPricing(values pricingMaps, name string) types.ModelPricingVa
 	return result
 }
 func buildModelPricingEntry(values pricingMaps, a *pricingAuthority, name string) (ModelPricingEntry, error) {
-	contexts, err := a.contexts(name)
+	return buildModelPricingEntryContext(context.Background(), values, a, name)
+}
+
+func buildModelPricingEntryContext(ctx context.Context, values pricingMaps, a *pricingAuthority, name string) (ModelPricingEntry, error) {
+	contexts, err := a.contextsContext(ctx, name)
 	if err != nil {
 		return ModelPricingEntry{}, err
 	}

@@ -227,8 +227,16 @@ func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool
 		catalog.host.state.Store(nil)
 		return ErrCatalogInvalid
 	}
-	if catalog.state != nil && catalog.host.state.Load() == catalog.state && sameCatalogSnapshot(snapshot, catalog.snapshot) {
-		return nil // Exact completed read; these immutable bytes are already validated.
+	if catalog.state != nil && catalog.host.state.Load() == catalog.state {
+		same := sameCatalogSnapshotContext(ctx, snapshot, catalog.snapshot)
+		if err := ctx.Err(); err != nil {
+			catalog.observeRevision(snapshot.Revision)
+			catalog.host.state.Store(nil)
+			return errors.Join(ErrCatalogUnavailable, err)
+		}
+		if same {
+			return nil // Exact completed read; these immutable bytes are already validated.
+		}
 	}
 	state, err := buildCatalogStateContext(ctx, snapshot, catalog.snapshot, catalog.state != nil)
 	if err != nil {
@@ -250,6 +258,10 @@ func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool
 }
 
 func sameCatalogSnapshot(a, b CatalogSnapshot) bool {
+	return sameCatalogSnapshotContext(context.Background(), a, b)
+}
+
+func sameCatalogSnapshotContext(ctx context.Context, a, b CatalogSnapshot) bool {
 	if a.Revision != b.Revision || len(a.Packages) != len(b.Packages) || len(a.Deletions) != len(b.Deletions) {
 		return false
 	}
@@ -257,12 +269,18 @@ func sameCatalogSnapshot(a, b CatalogSnapshot) bool {
 	// metadata on an expired context. Reject duplicate identities in either set.
 	packages := make(map[string]StoredPackage, len(a.Packages))
 	for _, entry := range a.Packages {
+		if ctx.Err() != nil {
+			return false
+		}
 		if _, duplicate := packages[entry.Digest]; duplicate {
 			return false
 		}
 		packages[entry.Digest] = entry
 	}
 	for _, entry := range b.Packages {
+		if ctx.Err() != nil {
+			return false
+		}
 		old, exists := packages[entry.Digest]
 		if !exists || old.Active != entry.Active || old.Enabled != entry.Enabled || old.Revoked != entry.Revoked || !bytes.Equal(old.Document, entry.Document) {
 			return false
@@ -272,6 +290,9 @@ func sameCatalogSnapshot(a, b CatalogSnapshot) bool {
 	type identity struct{ key, version string }
 	receipts := make(map[identity]PackageDeletion, len(a.Deletions))
 	for _, entry := range a.Deletions {
+		if ctx.Err() != nil {
+			return false
+		}
 		key := identity{entry.Key, entry.Version}
 		if _, duplicate := receipts[key]; duplicate {
 			return false
@@ -279,13 +300,16 @@ func sameCatalogSnapshot(a, b CatalogSnapshot) bool {
 		receipts[key] = entry
 	}
 	for _, entry := range b.Deletions {
+		if ctx.Err() != nil {
+			return false
+		}
 		key := identity{entry.Key, entry.Version}
 		if old, exists := receipts[key]; !exists || old != entry {
 			return false
 		}
 		delete(receipts, key)
 	}
-	return true
+	return ctx.Err() == nil
 }
 
 func (catalog *Catalog) observeRevision(revision int64) {
@@ -330,6 +354,20 @@ func ValidateCatalogTransitionContext(ctx context.Context, previous, next Catalo
 func ValidateStoredCatalogSnapshotContext(ctx context.Context, snapshot CatalogSnapshot) error {
 	_, err := buildCatalogStateContext(ctx, snapshot, CatalogSnapshot{}, false)
 	return err
+}
+
+// ValidatedStoredCatalogPackagesContext returns the validated packages for
+// one retained snapshot so consumers can reuse their compiled metadata.
+func ValidatedStoredCatalogPackagesContext(ctx context.Context, snapshot CatalogSnapshot) (map[string]*Package, error) {
+	state, err := buildCatalogStateContext(ctx, snapshot, CatalogSnapshot{}, false)
+	if err != nil {
+		return nil, err
+	}
+	packages := make(map[string]*Package, len(state.history))
+	for _, pkg := range state.history {
+		packages[pkg.digest] = pkg
+	}
+	return packages, nil
 }
 
 func buildCatalogState(snapshot, previous CatalogSnapshot, checkPrevious bool) (*hostState, error) {

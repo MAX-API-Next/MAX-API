@@ -407,7 +407,7 @@ func rejectTaskPluginDefaultRemoval(tx *gorm.DB, pkg *taskplugin.Package, remain
 		if err != nil || len(keys) == 0 {
 			continue
 		}
-		draft := effectiveModelPricing(values, model)
+		draft := modelPricingValues(values, model)
 		if before == nil {
 			before, err = readPricingAuthority(tx, false)
 			if err != nil {

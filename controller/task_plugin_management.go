@@ -50,7 +50,7 @@ func taskPluginAdminError(c *gin.Context, err error) {
 	switch {
 	case errors.As(err, &mapping):
 		status, message = http.StatusUnprocessableEntity, fmt.Sprintf("Channel %d has an invalid model mapping; repair it before deleting the API extension", mapping.ChannelID)
-		response["code"], response["channel_id"] = "invalid_channel_mapping", mapping.ChannelID
+		response["code"], response["channel_id"] = "invalid_channel_mapping", strconv.Itoa(mapping.ChannelID)
 	case errors.As(err, &taskData):
 		status, message = http.StatusUnprocessableEntity, fmt.Sprintf("Task record %d has invalid private data; repair it before deleting the API extension", taskData.TaskID)
 		response["code"], response["task_id"] = "invalid_task_data", strconv.FormatInt(taskData.TaskID, 10)

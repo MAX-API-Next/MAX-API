@@ -611,15 +611,35 @@ func GetByTaskId(userId int, taskId string) (*Task, bool, error) {
 	if taskId == "" {
 		return nil, false, nil
 	}
-	var task *Task
-	var err error
-	err = DB.Where("user_id = ? and task_id = ?", userId, taskId).
-		First(&task).Error
+	var row struct {
+		Task
+		NullableUpdatedAt *int64 `gorm:"column:nullable_updated_at"`
+		NullableQuota     *int   `gorm:"column:nullable_quota"`
+	}
+	err := DB.Model(&Task{}).Select("*, updated_at AS nullable_updated_at, quota AS nullable_quota").
+		Where("user_id = ? and task_id = ?", userId, taskId).First(&row).Error
 	exist, err := RecordExist(err)
 	if err != nil {
 		return nil, false, err
 	}
-	return task, exist, err
+	row.Task.updatedAtWasNull = row.NullableUpdatedAt == nil
+	row.Task.quotaWasNull = row.NullableQuota == nil
+	return &row.Task, exist, nil
+}
+
+// GetUserTaskStatusByID keeps public status readable when private metadata
+// needs repair. Billing and realtime callers continue to use the strict read.
+func GetUserTaskStatusByID(userId int, taskId string) (*Task, bool, error) {
+	if taskId == "" {
+		return nil, false, nil
+	}
+	var row taskWorkerRow
+	err := DB.Model(&Task{}).Where("user_id = ? and task_id = ?", userId, taskId).First(&row).Error
+	exists, err := RecordExist(err)
+	if err != nil || !exists {
+		return nil, false, err
+	}
+	return decodeTaskListRows([]taskWorkerRow{row})[0], true, nil
 }
 
 func GetTaskByID(id int64) (*Task, error) {

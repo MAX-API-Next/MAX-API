@@ -214,6 +214,22 @@ func TestTaskMapCreatesAreRejected(t *testing.T) {
 	require.NoError(t, db.Create(&Task{TaskID: "typed-task"}).Error)
 }
 
+func TestProtectedTablesRejectPartialStructCreateDestinations(t *testing.T) {
+	db := deletionDB(t)
+	type channelFields struct {
+		Name   string
+		Models string
+	}
+	type taskFields struct {
+		TaskID string
+	}
+	require.ErrorIs(t, db.Table("CHANNELS").Create(&channelFields{Name: "partial", Models: "catalog-model"}).Error, taskplugin.ErrCatalogInvalid)
+	require.ErrorIs(t, db.Table("tasks").Create(&[]taskFields{{TaskID: "partial"}}).Error, taskplugin.ErrCatalogInvalid)
+	require.ErrorIs(t, db.Model(&channelFields{}).Table("channels").Create(&Channel{Name: "wrong schema"}).Error, taskplugin.ErrCatalogInvalid)
+	require.NoError(t, db.Table("CHANNELS").Create(&[]Channel{{Name: "complete"}}).Error)
+	require.NoError(t, db.Table("tasks").Create(&[]Task{{TaskID: "complete"}}).Error)
+}
+
 func TestTypedChannelUpsertChecksConflictAssignments(t *testing.T) {
 	for _, kind := range []string{"models", "model_mapping", "expression", "metadata", "update-all", "reused-update-all"} {
 		t.Run(kind, func(t *testing.T) {

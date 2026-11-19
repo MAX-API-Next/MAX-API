@@ -61,7 +61,7 @@ func (p TaskPrivateData) MarshalJSON() ([]byte, error) {
 
 func unknownTaskPrivateFields(object map[string]any, typ reflect.Type) map[string]any {
 	unknown := make(map[string]any)
-	for key, value := range object {
+	for key, value := range canonicalTaskPrivateFields(object, typ) {
 		_, field, known := taskPrivateJSONField(typ, key)
 		if !known {
 			unknown[key] = value
@@ -110,6 +110,36 @@ func taskPrivateJSONType(typ reflect.Type) reflect.Type {
 		typ = typ.Elem()
 	}
 	return typ
+}
+
+func taskPrivateObjectFieldType(typ reflect.Type, key string) reflect.Type {
+	if container := taskPrivateJSONType(typ); container != nil && container.Kind() == reflect.Map {
+		return container.Elem()
+	}
+	_, field, _ := taskPrivateJSONField(typ, key)
+	return field
+}
+
+// Canonical typed names are preferred over their historical aliases. If
+// several aliases exist, use the same representative on every read.
+func canonicalTaskPrivateFields(object map[string]any, typ reflect.Type) map[string]any {
+	if typ = taskPrivateJSONType(typ); typ == nil || typ.Kind() != reflect.Struct {
+		return object
+	}
+	fields := make(map[string]any, len(object))
+	spelling := make(map[string]string, len(object))
+	for key, value := range object {
+		name := key
+		if canonical, _, known := taskPrivateJSONField(typ, key); known {
+			name = canonical
+		}
+		current, exists := spelling[name]
+		if exists && key != name && (current == name || current < key) {
+			continue
+		}
+		fields[name], spelling[name] = value, key
+	}
+	return fields
 }
 
 func unknownTaskPrivateValue(value any, typ reflect.Type) any {
@@ -257,10 +287,7 @@ func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 				if !ok {
 					return nil, errors.New("invalid task private JSON member")
 				}
-				_, childType, _ := taskPrivateJSONField(typ, key)
-				if container := taskPrivateJSONType(typ); container != nil && container.Kind() == reflect.Map {
-					childType = container.Elem()
-				}
+				childType := taskPrivateObjectFieldType(typ, key)
 				value, err := read(append(path, key), depth+1, childType)
 				if err != nil {
 					return nil, err
@@ -269,7 +296,7 @@ func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 				if !taskPrivateFactPath(path) {
 					canonical = taskPrivateMemberKey(typ, key)
 				}
-				if previous, exists := folded[canonical]; exists && !taskPrivateJSONValueEqual(previous, value) {
+				if previous, exists := folded[canonical]; exists && !taskPrivateJSONValueEqual(previous, value, childType) {
 					return nil, errors.New("conflicting task private JSON members")
 				}
 				folded[canonical] = value
@@ -306,7 +333,7 @@ func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 	return value, nil
 }
 
-func taskPrivateJSONValueEqual(a, b any) bool {
+func taskPrivateJSONValueEqual(a, b any, typ reflect.Type) bool {
 	switch x := a.(type) {
 	case json.Number:
 		y, ok := b.(json.Number)
@@ -318,12 +345,16 @@ func taskPrivateJSONValueEqual(a, b any) bool {
 		return xDigits == yDigits && xExponent.Cmp(yExponent) == 0
 	case map[string]any:
 		y, ok := b.(map[string]any)
-		if !ok || len(x) != len(y) {
+		if !ok {
+			return false
+		}
+		x, y = canonicalTaskPrivateFields(x, typ), canonicalTaskPrivateFields(y, typ)
+		if len(x) != len(y) {
 			return false
 		}
 		for name, value := range x {
 			other, present := y[name]
-			if !present || !taskPrivateJSONValueEqual(value, other) {
+			if !present || !taskPrivateJSONValueEqual(value, other, taskPrivateObjectFieldType(typ, name)) {
 				return false
 			}
 		}
@@ -333,8 +364,12 @@ func taskPrivateJSONValueEqual(a, b any) bool {
 		if !ok || len(x) != len(y) {
 			return false
 		}
+		var entryType reflect.Type
+		if container := taskPrivateJSONType(typ); container != nil && (container.Kind() == reflect.Slice || container.Kind() == reflect.Array) {
+			entryType = container.Elem()
+		}
 		for i := range x {
-			if !taskPrivateJSONValueEqual(x[i], y[i]) {
+			if !taskPrivateJSONValueEqual(x[i], y[i], entryType) {
 				return false
 			}
 		}

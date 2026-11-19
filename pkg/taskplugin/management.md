@@ -161,7 +161,8 @@ that earlier revision correctly conflicts rather than replacing the bootstrap.
 
 Deletion also checks malformed historical data before it can prove that no
 references remain. An unrelated channel with an invalid model mapping blocks
-deletion with HTTP 422, `code: "invalid_channel_mapping"` and `channel_id`.
+deletion with HTTP 422, `code: "invalid_channel_mapping"` and a decimal-string
+`channel_id`. The console also accepts safe numeric IDs from older servers.
 Candidate historical task JSON that is invalid, or an object that cannot be
 decoded into typed task private data, blocks it with HTTP 422,
 `code: "invalid_task_data"` and the decimal-string database row `task_id`.
@@ -412,8 +413,9 @@ Apply migrations for `tasks.submit_timeout_retained_funding` and
 `task_submit_failure_recoveries` before starting nodes that submit or poll
 tasks. If the task claim or refund intent cannot be saved after bounded retries,
 the coordinator records the confirmed rejection and original refund identity
-in the journal independently of writes to the task table. The settlement worker
-retries guarded claims with per-record deadlines and persists retry backoff.
+in the journal independently of writes to the task table. The fallback and
+guarded claims use separate deadlines. The settlement worker persists retry
+backoff and picks the oldest due entries, including rows recorded by older nodes.
 Pending recovery prevents timeout or retry from taking over the same task.
 `intent_recorded` indicates a durable intent. Use the applied settlement and its deltas to verify
 the refund. A conflicting task assignment is held for manual reconciliation.

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -220,14 +221,18 @@ func TestTaskPluginManagementDeletionRequiresRootAcknowledgementAndNoReferences(
 	require.Equal(t, 422, response.Code, response.Body.String())
 	require.NotContains(t, response.Body.String(), "private-delete-api-source")
 	require.NoError(t, db.Delete(&channel).Error)
-	legacy := model.Channel{Models: "unrelated-model"}
+	legacyID := int64(9007199254740993)
+	if strconv.IntSize == 32 {
+		legacyID = 9123
+	}
+	legacy := model.Channel{Id: int(legacyID), Models: "unrelated-model"}
 	require.NoError(t, db.Create(&legacy).Error)
 	require.NoError(t, db.Model(&legacy).UpdateColumn("model_mapping", `{"private-legacy-name":7}`).Error)
 	response = request(command, true)
 	require.Equal(t, 422, response.Code, response.Body.String())
 	require.Contains(t, response.Body.String(), fmt.Sprintf("Channel %d", legacy.Id))
 	require.Contains(t, response.Body.String(), `"code":"invalid_channel_mapping"`)
-	require.Contains(t, response.Body.String(), fmt.Sprintf(`"channel_id":%d`, legacy.Id))
+	require.Contains(t, response.Body.String(), fmt.Sprintf(`"channel_id":"%d"`, legacy.Id))
 	require.NotContains(t, response.Body.String(), "private-legacy-name")
 	require.NoError(t, db.Delete(&legacy).Error)
 	malformed := &model.Task{TaskID: "private-provider-id"}
@@ -363,8 +368,10 @@ func TestTaskPluginValidationRejectsDeletedRevocationBeforeInstallation(t *testi
 }
 
 func TestTaskPluginManagementOptionalUploadPin(t *testing.T) {
-	for _, kind := range []string{"javascript", "json", "bom-json"} {
+	for _, kind := range []string{"javascript", "bom-javascript", "json", "bom-json"} {
 		t.Run(kind, func(t *testing.T) {
+			javascript := strings.HasSuffix(kind, "javascript")
+			bom := strings.HasPrefix(kind, "bom-")
 			engine, db, root := taskPluginManagementEngine(t)
 			login := httptest.NewRecorder()
 			engine.ServeHTTP(login, httptest.NewRequest("GET", "/plugin-test-login/root", nil))
@@ -383,13 +390,18 @@ func TestTaskPluginManagementOptionalUploadPin(t *testing.T) {
 				return response
 			}
 			document := `export const meta = {apiVersion: 1, key: "custom-upload", name: "Custom Upload", version: "1.0.0", models: ["custom-model"]}; export function buildSubmitRequest(){return {}} export function parseSubmitResponse(){return {}} export function buildQueryRequest(){return {}} export function parseTaskResult(){return {}}`
-			if kind != "javascript" {
+			if !javascript {
 				data, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "private-custom-source", Manifest: taskplugin.Manifest{APIVersion: 1, Key: "custom-upload", Name: "Custom Upload", Version: "1.0.0", Models: []string{"custom-model"}}})
 				require.NoError(t, err)
 				document = string(data)
-				if kind == "bom-json" {
-					document = "\ufeff" + document
-				}
+			}
+			if kind == "bom-javascript" {
+				normalized, err := taskplugin.LoadUpload(strings.NewReader(document), "")
+				require.NoError(t, err)
+				document = string(normalized.Document())
+			}
+			if bom {
+				document = "\ufeff" + document
 			}
 			upload := map[string]any{"document": document}
 			response := request("/api/task_plugins/validate", upload)
@@ -411,7 +423,7 @@ func TestTaskPluginManagementOptionalUploadPin(t *testing.T) {
 			} else {
 				require.Equal(t, pin, validated.Data.Digest)
 			}
-			require.Equal(t, kind == "bom-json", validated.Data.BOM)
+			require.Equal(t, bom, validated.Data.BOM)
 			var count int64
 			require.NoError(t, db.Model(&model.TaskPluginVersion{}).Count(&count).Error)
 			require.Zero(t, count, "validation does not install")
@@ -423,14 +435,21 @@ func TestTaskPluginManagementOptionalUploadPin(t *testing.T) {
 			}
 			delete(upload, "expected_sha256")
 			upload["action"], upload["expected_revision"] = "install", "0"
-			if kind == "javascript" {
+			if javascript {
 				require.Equal(t, 400, request("/api/task_plugins/mutate", upload).Code, "optional SHA does not bypass format-3 compatibility acknowledgement")
 				upload["format3_nodes_ready"] = true
 			}
-			if kind == "bom-json" {
-				require.Equal(t, 400, request("/api/task_plugins/mutate", upload).Code, "old readers cannot load this otherwise format-1 package")
+			if bom {
+				require.Equal(t, 400, request("/api/task_plugins/mutate", upload).Code, "older readers must acknowledge the BOM package")
 				upload["bom_nodes_ready"] = true
+				if javascript {
+					delete(upload, "format3_nodes_ready")
+					require.Equal(t, 400, request("/api/task_plugins/mutate", upload).Code, "BOM readiness alone cannot acknowledge executable packages")
+					upload["format3_nodes_ready"] = true
+				}
 			}
+			require.NoError(t, db.Model(&model.TaskPluginVersion{}).Count(&count).Error)
+			require.Zero(t, count, "missing readiness acknowledgements cannot install")
 			require.Equal(t, 200, request("/api/task_plugins/mutate", upload).Code)
 			upload["expected_revision"] = "1"
 			upload["expected_sha256"] = strings.Repeat("0", 64)

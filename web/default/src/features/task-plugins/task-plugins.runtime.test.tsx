@@ -281,7 +281,7 @@ test('closing details after a refresh restores the same opening button', async (
 })
 
 for (const repair of [
-  { code: 'invalid_channel_mapping', channel_id: 23 },
+  { code: 'invalid_channel_mapping', channel_id: '9007199254740993' },
   { code: 'invalid_task_data', task_id: '9007199254740993' },
   {
     code: 'invalid_plugin_pricing',
@@ -339,7 +339,7 @@ for (const repair of [
       if (repair.code === 'invalid_channel_mapping') {
         translated = french.translation[
           'Channel {{id}} has an invalid model mapping; repair it before deleting the API extension'
-        ].replace('{{id}}', '23')
+        ].replace('{{id}}', repair.channel_id)
       } else if (repair.code === 'invalid_task_data') {
         translated = french.translation[
           'Task record {{id}} has invalid private data; repair it before deleting the API extension'

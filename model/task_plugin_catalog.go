@@ -231,18 +231,19 @@ func loadTaskPluginVersions(tx *gorm.DB) ([]taskplugin.StoredPackage, []string, 
 	if err := tx.Order("identity").Find(&records).Error; err != nil {
 		return nil, nil, err
 	}
-	result := make([]taskplugin.StoredPackage, 0, len(records))
+	result := make([]taskplugin.StoredPackage, len(records))
 	identities := make([]string, 0, len(records))
-	for _, record := range records {
-		entry := taskplugin.StoredPackage{Document: []byte(record.Document), Digest: record.Digest, Active: record.Active, Enabled: record.Enabled, Revoked: record.Revoked}
+	for i, record := range records {
+		result[i] = taskplugin.StoredPackage{Document: []byte(record.Document), Digest: record.Digest, Active: record.Active, Enabled: record.Enabled, Revoked: record.Revoked}
+	}
+	for i, entry := range result {
 		identity, err := taskPluginStorageIdentityContext(tx.Statement.Context, entry)
 		if tx.Statement.Context.Err() != nil {
-			return nil, nil, errors.Join(taskplugin.ErrCatalogUnavailable, tx.Statement.Context.Err())
+			return result, nil, errors.Join(taskplugin.ErrCatalogUnavailable, tx.Statement.Context.Err())
 		}
-		if err != nil || identity != record.Identity {
-			return nil, nil, taskplugin.ErrCatalogInvalid
+		if err != nil || identity != records[i].Identity {
+			return result, nil, taskplugin.ErrCatalogInvalid
 		}
-		result = append(result, entry)
 		identities = append(identities, identity)
 	}
 	return result, identities, nil
@@ -286,10 +287,12 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		observed := head.Revision
 		observedRevision = &observed
 		rows, _, err := loadTaskPluginVersions(tx)
+		if rows != nil {
+			completedPackages = &rows
+		}
 		if err != nil {
 			return err
 		}
-		completedPackages = &rows
 		deletions, err := loadTaskPluginDeletions(tx)
 		if err != nil {
 			return err
@@ -360,6 +363,8 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 		retained[identity] = true
 	}
 	mutationID := common.GetUUID()
+	_, inherited := store.db.Statement.ConnPool.(gorm.TxCommitter)
+	readyToCommit := false
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if revision == 0 {
 			head := TaskPluginCatalogHead{ID: 1, Revision: 1, MutationID: mutationID}
@@ -434,11 +439,15 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 				}
 			}
 		}
+		readyToCommit = true
 		return nil
 	})
 	if err != nil {
 		if errors.Is(err, taskplugin.ErrCatalogConflict) || errors.Is(err, taskplugin.ErrCatalogInvalid) {
 			return 0, err
+		}
+		if !inherited && !readyToCommit && ctx.Err() != nil {
+			return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, ctx.Err())
 		}
 		return 0, taskplugin.ErrCatalogUnavailable
 	}

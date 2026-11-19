@@ -23,6 +23,7 @@ const channelBatchReferenceCheck = "max:channel_batch_reference_check"
 func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 	channelTable := db.NamingStrategy.TableName("Channel")
 	taskTable := db.NamingStrategy.TableName("Task")
+	channelType, taskType := reflect.TypeFor[Channel](), reflect.TypeFor[Task]()
 	isSQLite := db.Dialector.Name() == "sqlite"
 	if isSQLite {
 		channelTable = sqliteTaskPluginTableName(channelTable)
@@ -36,7 +37,10 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 		if isSQLite {
 			table = sqliteTaskPluginTableName(table)
 		}
-		if table != channelTable && table != taskTable {
+		guardedType := channelType
+		if table == taskTable {
+			guardedType = taskType
+		} else if table != channelTable {
 			return
 		}
 		value := reflect.ValueOf(tx.Statement.Dest)
@@ -53,7 +57,7 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 				typ = typ.Elem()
 			}
 		}
-		if typ.Kind() == reflect.Map {
+		if typ != guardedType || tx.Statement.Schema == nil || tx.Statement.Schema.ModelType != guardedType {
 			tx.AddError(taskplugin.ErrCatalogInvalid)
 		}
 	})

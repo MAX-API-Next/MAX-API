@@ -2,6 +2,8 @@
 package model
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -86,4 +88,30 @@ func TestTaskPrivateDuplicateContainersUseExactNumericEquality(t *testing.T) {
 		var private TaskPrivateData
 		require.Error(t, private.Scan(raw), raw)
 	}
+}
+
+func TestNestedTypedAliasesAreEquivalentAndKeepCanonicalHistory(t *testing.T) {
+	for _, raw := range []string{
+		`{"plugin_binding":{"plugin_key":"stored"},"Plugin_Binding":{"Plugin_Key":"stored"}}`,
+		`{"billing_context":{"historical_number":1},"Billing_Context":{"historical_number":1.0}}`,
+		`{"BILLING_CONTEXT":{"historical_number":1},"Billing_Context":{"historical_number":1.0}}`,
+	} {
+		var private TaskPrivateData
+		for range 24 {
+			require.NoError(t, private.Scan(raw))
+			result, err := common.Marshal(private)
+			require.NoError(t, err)
+			if strings.Contains(raw, "historical_number") {
+				var fields map[string]any
+				require.NoError(t, common.UnmarshalUseNumber(result, &fields))
+				billing, ok := fields["billing_context"].(map[string]any)
+				require.True(t, ok)
+				require.Equal(t, json.Number("1"), billing["historical_number"])
+			} else {
+				require.Equal(t, "stored", private.PluginBinding.PluginKey)
+			}
+		}
+	}
+	var conflicting TaskPrivateData
+	require.Error(t, conflicting.Scan(`{"plugin_binding":{"plugin_key":"stored"},"Plugin_Binding":{"Plugin_Key":"other"}}`))
 }

@@ -21,7 +21,7 @@ func ReadTaskPricingPluginShadowContext(ctx context.Context, request TaskPricing
 	return readTaskPricingShadowWithPlugin(DB, ctx, request, time.Now().UTC(), &binding, registry)
 }
 
-func approvedPluginShadow(a *pricingAuthority, request TaskPricingShadowRequest, binding types.TaskPluginBinding, registry *taskpricing.PhaseRegistry) (ModelPricingContext, string, error) {
+func approvedPluginShadow(ctx context.Context, a *pricingAuthority, request TaskPricingShadowRequest, binding types.TaskPluginBinding, registry *taskpricing.PhaseRegistry) (ModelPricingContext, string, error) {
 	rejected := func() (ModelPricingContext, string, error) {
 		return ModelPricingContext{}, "", fmt.Errorf("plugin pricing has no matching configured binding and vetted package contract")
 	}
@@ -30,7 +30,7 @@ func approvedPluginShadow(a *pricingAuthority, request TaskPricingShadowRequest,
 		binding.ChannelID != request.ChannelID || binding.Model != request.ModelName || binding.SourceID != binding.PluginKey {
 		return rejected()
 	}
-	contexts, err := a.contexts(request.ModelName)
+	contexts, err := a.contextsContext(ctx, request.ModelName)
 	if err != nil {
 		return ModelPricingContext{}, "", err
 	}

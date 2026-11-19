@@ -289,18 +289,41 @@ func TestMarkTaskSubmitFailedWithSettlementRejectsUnpersistedTask(t *testing.T) 
 
 func TestMarkTaskSubmitFailedWithSettlementReportsLostClaim(t *testing.T) {
 	truncateTables(t)
-	task := &Task{TaskID: "no-submit-claim", Status: TaskStatusSuccess, Quota: 10}
+	task := &Task{TaskID: "no-submit-claim", Status: TaskStatusSuccess, Quota: 10, UserId: 1,
+		PrivateData: TaskPrivateData{BillingRequestId: "no-submit-claim", BillingSource: BillingSettlementSourceWallet}}
 	insertTask(t, task)
 	input := BillingSettlementInput{
 		OperationKey: BillingRequestFinalizeOperationKey("no-submit-claim"),
 		Source:       BillingSettlementSourceWallet, UserID: 1, FundingDelta: -10,
 	}
 
-	require.Error(t, MarkTaskSubmitFailedWithSettlement(task.ID, "late rejection", &input))
+	require.EqualError(t, MarkTaskSubmitFailedWithSettlement(task.ID, "late rejection", &input), "task submission failure did not claim the refund")
 	require.NoError(t, MarkTaskSubmitFailedWithSettlement(task.ID, "late status-only cleanup", nil))
 	var count int64
 	require.NoError(t, DB.Model(&BillingSettlement{}).Where("operation_key = ?", input.OperationKey).Count(&count).Error)
 	require.Zero(t, count)
+}
+
+func TestStrictTaskLookupRetainsNullablePollingSnapshot(t *testing.T) {
+	truncateTables(t)
+	for _, changed := range []bool{false, true} {
+		row := &Task{TaskID: fmt.Sprintf("nullable-realtime-%t", changed), UserId: 7, Status: TaskStatusInProgress}
+		insertTask(t, row)
+		selection := DB.Model(&Task{}).Where("id = ?", row.ID)
+		require.NoError(t, selection.UpdateColumns(map[string]any{"quota": nil, "updated_at": nil}).Error)
+		task, exists, err := GetByTaskId(row.UserId, row.TaskID)
+		require.NoError(t, err)
+		require.True(t, exists)
+		require.True(t, task.quotaWasNull)
+		require.True(t, task.updatedAtWasNull)
+		if changed {
+			require.NoError(t, selection.UpdateColumns(map[string]any{"quota": 0, "updated_at": 0}).Error)
+		}
+		task.Progress = "50%"
+		won, err := task.UpdatePollingProgress(row.Status)
+		require.NoError(t, err)
+		require.Equal(t, !changed, won)
+	}
 }
 
 func TestManualTaskSettlementPreservesDataOnlyWhenRequested(t *testing.T) {

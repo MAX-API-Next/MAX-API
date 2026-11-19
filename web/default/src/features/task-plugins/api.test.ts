@@ -33,31 +33,44 @@ afterEach(() => {
 })
 
 test('known mapping repair errors preserve identifiers for reactive feedback', async () => {
+  const mutate = () =>
+    taskPluginAPI.mutate({
+      action: 'delete',
+      key: 'kling',
+      version: '1.2.0',
+      expected_revision: '4',
+      deletion_nodes_ready: true,
+    })
+  for (const channelId of [23, '9007199254740993']) {
+    respond(
+      {
+        success: false,
+        code: 'invalid_channel_mapping',
+        channel_id: channelId,
+        message: 'English fallback',
+      },
+      422
+    )
+    await assert.rejects(
+      mutate,
+      (e) =>
+        e instanceof PluginError &&
+        e.kind === 'rejected' &&
+        e.message === 'English fallback' &&
+        e.repair?.code === 'invalid_channel_mapping' &&
+        e.repair.channel_id === String(channelId)
+    )
+  }
   respond(
     {
       success: false,
       code: 'invalid_channel_mapping',
-      channel_id: 23,
+      channel_id: Number.MAX_SAFE_INTEGER + 1,
       message: 'English fallback',
     },
     422
   )
-  await assert.rejects(
-    () =>
-      taskPluginAPI.mutate({
-        action: 'delete',
-        key: 'kling',
-        version: '1.2.0',
-        expected_revision: '4',
-        deletion_nodes_ready: true,
-      }),
-    (e) =>
-      e instanceof PluginError &&
-      e.kind === 'rejected' &&
-      e.message === 'English fallback' &&
-      e.repair?.code === 'invalid_channel_mapping' &&
-      e.repair.channel_id === 23
-  )
+  await assert.rejects(mutate, (e) => e instanceof PluginError && !e.repair)
 })
 function respond(data: unknown, status = 200) {
   const calls: InternalAxiosRequestConfig[] = []

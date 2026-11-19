@@ -889,7 +889,7 @@ func TestTaskPluginHeadCannotMaskOrphanedRestore(t *testing.T) {
 			if source == "channel" {
 				require.ErrorIs(t, db.Create(&Channel{Models: "ordinary-model"}).Error, taskplugin.ErrCatalogInvalid)
 			} else {
-				err = db.Transaction(func(tx *gorm.DB) error { _, _, err := readPricingCatalog(tx, true); return err })
+				err = db.Transaction(func(tx *gorm.DB) error { return (&pricingAuthority{}).readCatalog(tx, true) })
 				require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
 			}
 			var count int64
@@ -911,7 +911,7 @@ func TestTaskPluginPricingRejectsLostReceiptSet(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Where("1 = 1").Delete(&TaskPluginDeletion{}).Error)
 	for _, lock := range []bool{false, true} {
-		err = db.Transaction(func(tx *gorm.DB) error { _, _, err := readPricingCatalog(tx, lock); return err })
+		err = db.Transaction(func(tx *gorm.DB) error { return (&pricingAuthority{}).readCatalog(tx, lock) })
 		require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
 	}
 }
@@ -1013,7 +1013,7 @@ func TestTaskPluginPricingReadDetectsChangedHeadBeforeMarkerValidation(t *testin
 			tx.AddError(fresh.Create(&TaskPluginDeletion{Identity: taskPluginIdentity("stored", "1.0.0"), PluginKey: "stored", Version: "1.0.0", Digest: entry.Digest, Models: "[]"}).Error)
 		}
 	}))
-	err = db.Transaction(func(tx *gorm.DB) error { _, _, err := readPricingCatalog(tx, false); return err })
+	err = db.Transaction(func(tx *gorm.DB) error { return (&pricingAuthority{}).readCatalog(tx, false) })
 	require.ErrorIs(t, err, ErrModelPricingConflict)
 	require.True(t, interleaved, "controlled query interleaving must actually change the head")
 }
@@ -1030,7 +1030,7 @@ func TestTaskPluginPricingReadDetectsConcurrentBootstrap(t *testing.T) {
 			tx.AddError(fresh.Create(&TaskPluginVersion{Identity: taskPluginIdentity("stored", "1.0.0"), Digest: entry.Digest, Document: entry.Document, Active: true}).Error)
 		}
 	}))
-	err := db.Transaction(func(tx *gorm.DB) error { _, _, err := readPricingCatalog(tx, false); return err })
+	err := db.Transaction(func(tx *gorm.DB) error { return (&pricingAuthority{}).readCatalog(tx, false) })
 	require.True(t, interleaved)
 	require.ErrorIs(t, err, ErrModelPricingConflict)
 }
@@ -1334,6 +1334,29 @@ func TestPricingReloadFailureReturnsNoIncompleteBaseline(t *testing.T) {
 	partial, err := authority.contextsContext(t.Context(), "catalog-model")
 	require.Error(t, err, "simulate a reload failure with a live outer operation context")
 	require.Nil(t, partial)
+}
+
+func TestPricingAuthorityReusesValidatedPackageWithinSnapshot(t *testing.T) {
+	db := deletionDB(t)
+	_, entry := catalogFixture(t, "stored", "1.0.0", "pricing-cache")
+	_, err := NewTaskPluginCatalogStore(db).CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	var authority *pricingAuthority
+	require.NoError(t, db.WithContext(t.Context()).Transaction(func(tx *gorm.DB) error {
+		authority, err = readPricingAuthority(tx, false)
+		return err
+	}))
+	cached := authority.validatedPackages[entry.Digest]
+	require.NotNil(t, cached)
+	require.Equal(t, entry.Digest, cached.Digest())
+	contexts, err := authority.contextsContext(t.Context(), "catalog-model")
+	require.NoError(t, err)
+	require.NotEmpty(t, contexts)
+	require.Same(t, cached, authority.validatedPackages[entry.Digest])
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = buildModelPricingEntryContext(ctx, defaultPricingMaps(), authority, "catalog-model")
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestTaskUpsertConflictPrivateDataUsesReferenceGuard(t *testing.T) {
@@ -2337,6 +2360,78 @@ func TestInterruptedCatalogReadComparesCompletedObservedSet(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCatalogReadRetainsPackageObservationWhenMetadataValidationIsInterrupted(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(fmt.Sprint(changed), func(t *testing.T) {
+			db := deletionDB(t)
+			catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+			require.NoError(t, err)
+			pkg, _ := catalogFixture(t, "stored", "1.0.0", "completed-versions")
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			actor := taskplugin.Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "completed-versions"}
+			binding, err := catalog.Host().Bind(actor, "GET", "/stored/one", "catalog-model", taskusage.MiniMaxH3Contract())
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			observed := false
+			require.NoError(t, db.Callback().Query().After("gorm:query").Register("cancel-after-reading-package-columns", func(tx *gorm.DB) {
+				if rows, ok := tx.Statement.Dest.(*[]TaskPluginVersion); ok && tx.Error == nil && len(*rows) == 1 {
+					observed = true
+					if changed {
+						(*rows)[0].Enabled = false
+					}
+					cancel()
+				}
+			}))
+			require.ErrorIs(t, catalog.ValidateInstall(ctx, pkg), context.Canceled)
+			require.True(t, observed)
+			_, err = catalog.Host().Resolve(binding, actor)
+			if changed {
+				require.Error(t, err, "completed changed package columns suspend the previous Host")
+			} else {
+				require.NoError(t, err, "matching completed columns keep the previous Host")
+			}
+		})
+	}
+}
+
+func TestRootCatalogValidationCancellationCertifiesRollback(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	catalog, err := taskplugin.OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	pkg, _ := catalogFixture(t, "stored", "1.0.0", "provisional-head")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	actor := taskplugin.Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "provisional-head"}
+	binding, err := catalog.Host().Bind(actor, "GET", "/stored/one", "catalog-model", taskusage.MiniMaxH3Contract())
+	require.NoError(t, err)
+	before, err := store.Load(t.Context())
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	staged := false
+	headTable := db.NamingStrategy.TableName("TaskPluginCatalogHead")
+	require.NoError(t, db.Callback().Update().After("gorm:update").Register("observe-provisional-head", func(tx *gorm.DB) {
+		if tx.Statement.Table == headTable && tx.Error == nil && tx.RowsAffected == 1 {
+			staged = true
+		}
+	}))
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register("cancel-before-catalog-transition-validation", func(tx *gorm.DB) {
+		if staged && tx.Statement.Table == headTable && tx.Error == nil {
+			staged = false
+			cancel()
+		}
+	}))
+	err = catalog.SetEnabled(ctx, "stored", false)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, taskplugin.ErrCatalogNotCommitted)
+	after, err := store.Load(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	_, err = catalog.Host().Resolve(binding, actor)
+	require.NoError(t, err)
 }
 
 func TestConflictingLegacyVersionsRemainKeyOnlyReferences(t *testing.T) {

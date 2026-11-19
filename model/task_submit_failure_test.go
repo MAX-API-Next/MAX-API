@@ -81,6 +81,61 @@ func TestTaskSubmitFailureRecoveryMetadataUsesPassDeadline(t *testing.T) {
 	require.True(t, seen, "exercise the actual migrator query")
 }
 
+func TestOverdueSubmitFailureRecoveryPrecedesNewJournalPage(t *testing.T) {
+	db := deletionDB(t)
+	require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+	previous, oldSQLite := DB, common.UsingSQLite
+	DB, common.UsingSQLite = db, true
+	t.Cleanup(func() { DB, common.UsingSQLite = previous, oldSQLite })
+	now := time.Now().Unix()
+	for i := 0; i < 26; i++ {
+		request := fmt.Sprintf("eligible-rejection-%d", i)
+		task := Task{TaskID: request, Status: TaskStatusSubmitted, Quota: 10, UserId: 71,
+			PrivateData: TaskPrivateData{BillingSource: BillingSettlementSourceWallet, BillingRequestId: request}}
+		require.NoError(t, db.Create(&task).Error)
+		input := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey(request), Source: BillingSettlementSourceWallet, UserID: 71, FundingDelta: -10}
+		require.NoError(t, RecordTaskSubmitFailureRecovery(task.ID, "definite rejection", input))
+		// Rows already persisted by older nodes may still use zero as their due time.
+		if i == 0 {
+			require.NoError(t, db.Model(&TaskSubmitFailureRecovery{}).Where("task_id = ?", task.ID).
+				UpdateColumns(map[string]any{"attempts": 1, "next_attempt": now - 30, "created_at": now - 60}).Error)
+		} else {
+			require.NoError(t, db.Model(&TaskSubmitFailureRecovery{}).Where("task_id = ?", task.ID).UpdateColumn("next_attempt", 0).Error)
+		}
+	}
+	processPendingTaskSubmitFailures()
+	var overdue TaskSubmitFailureRecovery
+	require.NoError(t, db.First(&overdue, "operation_key = ?", BillingRequestFinalizeOperationKey("eligible-rejection-0")).Error)
+	require.Equal(t, TaskSubmitFailureRecoveryRecorded, overdue.Status)
+	require.Equal(t, 2, overdue.Attempts)
+	var recorded int64
+	require.NoError(t, db.Model(&TaskSubmitFailureRecovery{}).Where("status = ?", TaskSubmitFailureRecoveryRecorded).Count(&recorded).Error)
+	require.EqualValues(t, 25, recorded)
+}
+
+func TestRecordTaskSubmitFailureRecoveryUsesIndependentWriteDeadline(t *testing.T) {
+	db := deletionDB(t)
+	previous, oldSQLite := DB, common.UsingSQLite
+	DB, common.UsingSQLite = db, true
+	t.Cleanup(func() { DB, common.UsingSQLite = previous, oldSQLite })
+	seen := false
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("observe-rejection-fallback-budget", func(tx *gorm.DB) {
+		if tx.Statement.Table == "task_submit_failure_recoveries" {
+			seen = true
+			deadline, bounded := tx.Statement.Context.Deadline()
+			require.True(t, bounded)
+			require.LessOrEqual(t, time.Until(deadline), 2*time.Second)
+		}
+	}))
+	input := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey("bounded-journal"), Source: BillingSettlementSourceWallet, UserID: 71, FundingDelta: -10}
+	require.NoError(t, RecordTaskSubmitFailureRecovery(1, "definite rejection", input))
+	require.True(t, seen)
+	var record TaskSubmitFailureRecovery
+	require.NoError(t, db.First(&record, "task_id = ?", 1).Error)
+	require.Positive(t, record.NextAttempt)
+	require.LessOrEqual(t, record.NextAttempt, time.Now().Unix())
+}
+
 func TestPendingSubmitFailureRecoveryOwnsTimeoutAndRetry(t *testing.T) {
 	for _, operation := range []string{"candidate", "retry", "status", "manual"} {
 		t.Run(operation, func(t *testing.T) {

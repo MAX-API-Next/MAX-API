@@ -136,11 +136,16 @@ func RecordTaskSubmitFailureRecovery(taskID int64, reason string, input BillingS
 	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	record.NextAttempt = time.Now().Unix()
 	if common.UsingSQLite {
-		billingSettlementSQLiteWriteMu.Lock()
+		if err := billingSettlementSQLiteWriteMu.lockContext(ctx); err != nil {
+			return err
+		}
 		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+	save := func(tx *gorm.DB) error {
 		// Persist the rejection even if the task table cannot currently be
 		// updated. Replay independently verifies task and funding ownership.
 		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "task_id"}}, DoNothing: true}).Create(&record).Error; err != nil {
@@ -154,6 +159,9 @@ func RecordTaskSubmitFailureRecovery(taskID int64, reason string, input BillingS
 			return ErrBillingSettlementOperationConflict
 		}
 		return nil
+	}
+	return withTaskSubmitFailureWriteBudget(DB.WithContext(ctx), func(conn *gorm.DB) error {
+		return conn.Transaction(save)
 	})
 }
 
@@ -205,7 +213,8 @@ func processPendingTaskSubmitFailures() {
 		return
 	}
 	var records []TaskSubmitFailureRecovery
-	if err := db.Where("status = ? AND next_attempt <= ?", TaskSubmitFailureRecoveryPending, time.Now().Unix()).Order("next_attempt, task_id").Limit(25).Find(&records).Error; err != nil {
+	if err := db.Where("status = ? AND next_attempt <= ?", TaskSubmitFailureRecoveryPending, time.Now().Unix()).
+		Order("CASE WHEN next_attempt = 0 THEN created_at ELSE next_attempt END, task_id").Limit(25).Find(&records).Error; err != nil {
 		common.SysError("failed to read task submit failure recovery journal")
 		return
 	}
