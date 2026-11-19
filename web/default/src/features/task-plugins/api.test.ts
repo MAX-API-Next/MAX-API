@@ -228,3 +228,30 @@ test('mutations classify conflicts and unknown receipts without retrying', async
   )
   assert.equal(calls.length, 1)
 })
+
+test('only explicit not-committed 503 responses reject a mutation safely', async () => {
+  for (const [payload, kind] of [
+    [{ committed: false }, 'rejected'],
+    [{ committed: true }, 'unknown'],
+    [{ committed: 'false' }, 'unknown'],
+    [{}, 'unknown'],
+  ] as const) {
+    const calls = respond({ success: false, ...payload }, 503)
+    await assert.rejects(
+      () =>
+        taskPluginAPI.mutate({
+          action: 'disable',
+          key: 'kling',
+          version: '1.2.0',
+          expected_revision: '4',
+        }),
+      (e) => e instanceof PluginError && e.kind === kind
+    )
+    assert.equal(calls.length, 1)
+  }
+  respond({ success: false, committed: false }, 503)
+  await assert.rejects(
+    () => taskPluginAPI.read(),
+    (e) => e instanceof PluginError && e.kind === 'read'
+  )
+})

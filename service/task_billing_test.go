@@ -979,6 +979,51 @@ func TestSweepRecoveryBudgetReservesOrdinaryTimeouts(t *testing.T) {
 	require.EqualValues(t, 50, countLogs(t))
 }
 
+func TestAppliedRecoveryPassWrapsDespiteContinuousArrivals(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	previous := constant.TaskTimeoutMinutes
+	constant.TaskTimeoutMinutes = 1
+	t.Cleanup(func() { constant.TaskTimeoutMinutes = previous })
+	seedUser(t, 717, 70)
+	seedToken(t, 718, 717, "synthetic-bounded-pass", 70)
+	now := time.Now().Unix()
+	private := model.TaskPrivateData{TokenId: 718, BillingSource: model.BillingSettlementSourceWallet, PendingTerminalStatus: model.TaskStatusSuccess, PendingTerminalProgress: "100%", PendingTerminalFinishTime: now}
+	add := func(name string) *model.Task {
+		row := &model.Task{TaskID: name, UserId: 717, Quota: 1, SubmitTime: now - 120, Status: model.TaskStatusInProgress, PrivateData: private}
+		require.NoError(t, model.DB.Create(row).Error)
+		require.NoError(t, model.DB.Create(&model.BillingSettlement{OperationKey: model.BillingTaskFinalizeOperationKey(row.ID), TaskID: row.ID, UserID: 717, TokenID: 718, Source: model.BillingSettlementSourceWallet, TaskQuota: 1, TaskQuotaTarget: 1, Status: model.BillingSettlementStatusApplied, EffectStatus: model.BillingSettlementEffectApplied, Revision: 1}).Error)
+		return row
+	}
+	bad := add("old-repaired")
+	require.NoError(t, model.DB.Model(bad).UpdateColumn("private_data", `{"upstream_task_id":42}`).Error)
+	for i := 0; i < 50; i++ {
+		add(fmt.Sprintf("initial-%d", i))
+	}
+	sweepTimedOutTasks(t.Context())
+	raw, err := common.Marshal(private)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(bad).UpdateColumn("private_data", string(raw)).Error)
+	for i := 0; i < 50; i++ {
+		add(fmt.Sprintf("newer-%d", i))
+	}
+	var before []model.BillingSettlement
+	require.NoError(t, model.DB.Order("id").Find(&before).Error)
+	sweepTimedOutTasks(t.Context())
+	var fresh model.Task
+	require.NoError(t, model.DB.First(&fresh, bad.ID).Error)
+	require.EqualValues(t, model.TaskStatusSuccess, fresh.Status, "fixed pass bound must revisit the repaired old row despite newer arrivals")
+	var newerRecovered int64
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("task_id LIKE ? AND status = ?", "newer-%", model.TaskStatusSuccess).Count(&newerRecovered).Error)
+	require.EqualValues(t, 49, newerRecovered, "the repaired row shares the same 50-transition recovery allowance")
+	var after []model.BillingSettlement
+	require.NoError(t, model.DB.Order("id").Find(&after).Error)
+	require.Equal(t, before, after)
+	require.EqualValues(t, 70, getUserQuota(t, 717))
+	require.Equal(t, 70, getTokenRemainQuota(t, 718))
+	require.Zero(t, countLogs(t))
+}
+
 func TestLateAppliedRecoveryCannotSpendOrdinaryAllowance(t *testing.T) {
 	isolateTaskPluginBillingDatabase(t)
 	resetTimedOutTaskSweepCursorForTest(t)
@@ -1036,6 +1081,8 @@ func resetTimedOutTaskSweepCursorForTest(t *testing.T) {
 		timedOutTaskSweepCursor.afterID = 0
 		timedOutTaskSweepCursor.appliedAfterSubmitTime = 0
 		timedOutTaskSweepCursor.appliedAfterID = 0
+		timedOutTaskSweepCursor.appliedThroughTime = 0
+		timedOutTaskSweepCursor.appliedThroughID = 0
 		timedOutTaskSweepCursor.Unlock()
 	}
 	reset()

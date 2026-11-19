@@ -91,8 +91,15 @@ export class PluginError extends Error {
 }
 function classifyRequestError(
   status: number | undefined,
-  write: boolean
+  write: boolean,
+  payload: unknown
 ): PluginError['kind'] {
+  if (
+    write &&
+    status === 503 &&
+    z.object({ committed: z.literal(false) }).safeParse(payload).success
+  )
+    return 'rejected'
   if (status === 409) return 'conflict'
   if (
     status &&
@@ -163,7 +170,7 @@ async function request<T>(
     if (isAxiosError(error)) {
       const status = error.response?.status
       const message: unknown = error.response?.data?.message
-      const kind = classifyRequestError(status, write)
+      const kind = classifyRequestError(status, write, error.response?.data)
       throw requestError(
         kind,
         error.response?.data,

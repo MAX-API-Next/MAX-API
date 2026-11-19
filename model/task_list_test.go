@@ -12,7 +12,7 @@ func TestTaskListsIsolateUnreadableMetadataAndKeepScope(t *testing.T) {
 		t.Run(map[bool]string{true: "text", false: "blob"}[asText], func(t *testing.T) {
 			truncateTables(t)
 			healthy := &Task{TaskID: "healthy-list", UserId: 11, ChannelId: 77, Quota: 7, Status: TaskStatusSubmitted, PrivateData: TaskPrivateData{UpstreamTaskID: "healthy-provider"}}
-			bad := &Task{TaskID: "bad-list", UserId: 11, Status: TaskStatusSubmitted}
+			bad := &Task{TaskID: "bad-list", UserId: 11, Quota: 9, Status: TaskStatusSubmitted, FailReason: "public failure"}
 			foreign := &Task{TaskID: "foreign-list", UserId: 12, ChannelId: 78, Quota: 8}
 			for _, row := range []*Task{healthy, bad, foreign} {
 				insertTask(t, row)
@@ -23,18 +23,30 @@ func TestTaskListsIsolateUnreadableMetadataAndKeepScope(t *testing.T) {
 			}
 			require.NoError(t, DB.Model(bad).UpdateColumn("private_data", raw).Error)
 			userRows := TaskGetAllUserTask(11, 0, 10, SyncTaskQueryParams{})
-			require.Len(t, userRows, 1)
-			require.Equal(t, healthy.ID, userRows[0].ID)
-			require.Zero(t, userRows[0].ChannelId, "user list must retain its channel_id omission")
-			require.Equal(t, 7, userRows[0].Quota)
+			require.Len(t, userRows, 2)
+			require.Equal(t, bad.ID, userRows[0].ID)
+			require.True(t, userRows[0].PrivateDataUnreadable())
+			require.Equal(t, TaskPrivateData{}, userRows[0].PrivateData)
+			require.Empty(t, userRows[0].GetResultURL())
+			require.Equal(t, "public failure", userRows[0].FailReason)
+			require.Equal(t, 9, userRows[0].Quota)
+			require.Equal(t, healthy.ID, userRows[1].ID)
+			require.Zero(t, userRows[1].ChannelId, "user list must retain its channel_id omission")
+			require.Equal(t, 7, userRows[1].Quota)
 			adminRows := TaskGetAllTasks(0, 10, SyncTaskQueryParams{})
-			require.Len(t, adminRows, 2)
+			require.Len(t, adminRows, 3)
 			require.Equal(t, foreign.ID, adminRows[0].ID)
-			require.Equal(t, 77, adminRows[1].ChannelId)
+			require.Equal(t, bad.ID, adminRows[1].ID)
+			require.Equal(t, 77, adminRows[2].ChannelId)
+			require.Len(t, TaskGetAllTasks(0, 10, SyncTaskQueryParams{TaskID: "bad-list"}), 1)
+			require.Len(t, TaskGetAllUserTask(12, 0, 10, SyncTaskQueryParams{TaskID: "bad-list"}), 0)
 			filtered := TaskGetAllTasks(0, 10, SyncTaskQueryParams{UserIDs: []int{11}, TaskID: "healthy-list"})
 			require.Len(t, filtered, 1)
 			require.Equal(t, healthy.ID, filtered[0].ID)
 			require.Len(t, TaskGetAllUserTask(11, 1, 1, SyncTaskQueryParams{}), 1, "pagination still happens in SQL before decoding")
+			for _, dispatched := range GetAllUnFinishSyncTasks(10) {
+				require.NotEqual(t, bad.ID, dispatched.ID, "list visibility must not dispatch unreadable private data")
+			}
 			var strict Task
 			require.Error(t, DB.First(&strict, bad.ID).Error, "single-task financial reads remain strict")
 		})

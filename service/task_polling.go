@@ -65,6 +65,8 @@ var timedOutTaskSweepCursor struct {
 	afterID                int64
 	appliedAfterSubmitTime int64
 	appliedAfterID         int64
+	appliedThroughTime     int64
+	appliedThroughID       int64
 }
 
 type appliedTaskRecoveryOutcome uint8
@@ -97,15 +99,24 @@ func sweepTimedOutTasks(ctx context.Context) {
 	scanBudget := timedOutTaskScanBudget
 	appliedScanBudget := timedOutTaskScanBudget
 	appliedAfterTime, appliedAfterID := timedOutTaskSweepCursor.appliedAfterSubmitTime, timedOutTaskSweepCursor.appliedAfterID
-	for remaining > 0 && recoveryRemaining > 0 && appliedScanBudget > 0 {
+	appliedThroughTime, appliedThroughID := timedOutTaskSweepCursor.appliedThroughTime, timedOutTaskSweepCursor.appliedThroughID
+	if appliedThroughID == 0 {
+		var err error
+		appliedThroughTime, appliedThroughID, err = model.GetAppliedTaskFinalizeRecoveryUpperBound(cutoff)
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize upper bound error: %v", err))
+		}
+	}
+	for appliedThroughID > 0 && remaining > 0 && recoveryRemaining > 0 && appliedScanBudget > 0 {
 		queryLimit := min(100, appliedScanBudget)
-		recovered, err := model.GetAppliedTaskFinalizeRecoveryCandidatesAfter(cutoff, appliedAfterTime, appliedAfterID, queryLimit)
+		recovered, err := model.GetAppliedTaskFinalizeRecoveryCandidatesInRange(cutoff, appliedAfterTime, appliedAfterID, appliedThroughTime, appliedThroughID, queryLimit)
 		if err != nil {
 			logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize recovery query error after cursor (%d, %d): %v", appliedAfterTime, appliedAfterID, err))
 			break
 		}
 		if len(recovered) == 0 {
 			appliedAfterTime, appliedAfterID = 0, 0
+			appliedThroughTime, appliedThroughID = 0, 0
 			break
 		}
 		for _, task := range recovered {
@@ -140,8 +151,13 @@ func sweepTimedOutTasks(ctx context.Context) {
 				recoveryRemaining--
 			}
 		}
+		if appliedAfterTime == appliedThroughTime && appliedAfterID == appliedThroughID {
+			appliedAfterTime, appliedAfterID, appliedThroughTime, appliedThroughID = 0, 0, 0, 0
+			break // The next sweep revisits repaired rows, even with newer arrivals.
+		}
 	}
 	timedOutTaskSweepCursor.appliedAfterSubmitTime, timedOutTaskSweepCursor.appliedAfterID = appliedAfterTime, appliedAfterID
+	timedOutTaskSweepCursor.appliedThroughTime, timedOutTaskSweepCursor.appliedThroughID = appliedThroughTime, appliedThroughID
 	afterSubmitTime := timedOutTaskSweepCursor.afterSubmitTime
 	afterID := timedOutTaskSweepCursor.afterID
 	for remaining > 0 && scanBudget > 0 {

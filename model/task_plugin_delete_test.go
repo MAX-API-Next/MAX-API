@@ -23,6 +23,7 @@ func deletionDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "deletion.db")+"?_pragma=busy_timeout(5000)"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
+	require.NoError(t, registerTaskPluginChannelCreateGuard(db))
 	require.NoError(t, db.AutoMigrate(&TaskPluginCatalogHead{}, &TaskPluginVersion{}, &TaskPluginDeletion{}, &Task{}, &Channel{}, &Option{}))
 	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("guard_catalog_update_columns", func(tx *gorm.DB) {
 		if tx.Statement.Schema == nil {
@@ -175,6 +176,8 @@ func TestTaskPluginDeletionDoesNotRequireDisableOrRevocation(t *testing.T) {
 
 func TestTaskPluginDeletionSerializesWithNewTaskBinding(t *testing.T) {
 	db := deletionDB(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
 	pkg, entry := catalogFixture(t, "stored", "1.0.0", "source")
 	store := NewTaskPluginCatalogStore(db)
 	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
@@ -205,7 +208,11 @@ func TestTaskPluginDeletionSerializesWithNewTaskBinding(t *testing.T) {
 	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("hold_plugin_task", func(tx *gorm.DB) {
 		if tx.Statement.Table == taskTable {
 			close(locked)
-			<-release
+			select {
+			case <-release:
+			case <-ctx.Done():
+				tx.AddError(ctx.Err())
+			}
 		}
 	}))
 	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("observe_plugin_delete", func(tx *gorm.DB) {
@@ -216,21 +223,21 @@ func TestTaskPluginDeletionSerializesWithNewTaskBinding(t *testing.T) {
 	created, removed := make(chan error, 1), make(chan error, 1)
 	go func() {
 		task := Task{TaskID: "concurrent", PrivateData: TaskPrivateData{PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", Version: "1.0.0", PackageDigest: pkg.Digest()}}}
-		created <- db.WithContext(t.Context()).Create(&task).Error
+		created <- db.WithContext(ctx).Create(&task).Error
 	}()
 	select {
 	case <-locked:
 	case err := <-created:
 		t.Fatalf("task creation ended before its reference lock: %v", err)
-	case <-time.After(10 * time.Second):
+	case <-ctx.Done():
 		t.Fatal("task reference lock was not reached")
 	}
-	go func() { _, err := store.DeleteVersion(t.Context(), 1, "stored", "1.0.0"); removed <- err }()
+	go func() { _, err := store.DeleteVersion(ctx, 1, "stored", "1.0.0"); removed <- err }()
 	select {
 	case <-deleting:
 	case err := <-removed:
 		t.Fatalf("deletion ended before its writer lock: %v", err)
-	case <-time.After(10 * time.Second):
+	case <-ctx.Done():
 		t.Fatal("deletion writer lock was not reached")
 	}
 	probeErr := probe.Model(&Option{}).Where(map[string]any{"key": probeKey}).UpdateColumn("value", "blocked").Error
@@ -238,8 +245,18 @@ func TestTaskPluginDeletionSerializesWithNewTaskBinding(t *testing.T) {
 	require.ErrorAs(t, probeErr, &sqliteCode)
 	require.Equal(t, 5, sqliteCode.Code()&255, "the paused task must already hold SQLite's write lock")
 	close(release)
-	require.NoError(t, <-created)
-	require.ErrorIs(t, <-removed, taskplugin.ErrCatalogInUse, "the reference scan must reject after the concurrent binding commits")
+	select {
+	case err := <-created:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("task creation did not complete before the shared deadline")
+	}
+	select {
+	case err := <-removed:
+		require.ErrorIs(t, err, taskplugin.ErrCatalogInUse, "the reference scan must reject after the concurrent binding commits")
+	case <-ctx.Done():
+		t.Fatal("deletion did not complete before the shared deadline")
+	}
 	snapshot, err := store.Load(t.Context())
 	require.NoError(t, err)
 	require.EqualValues(t, 1, snapshot.Revision)

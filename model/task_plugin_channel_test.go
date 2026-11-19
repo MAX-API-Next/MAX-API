@@ -135,6 +135,42 @@ func TestChannelBatchRevalidatesReusedInitializedHandle(t *testing.T) {
 	require.ErrorIs(t, err, taskplugin.ErrBindingRejected)
 }
 
+func TestChannelMapCreatesAreRejected(t *testing.T) {
+	for _, batch := range []bool{false, true} {
+		t.Run(fmt.Sprint(batch), func(t *testing.T) {
+			db := deletionDB(t)
+			row := map[string]any{"name": "untyped-create", "models": "ordinary"}
+			var dest any = row
+			if batch {
+				dest = []map[string]any{row}
+			}
+			require.ErrorIs(t, db.Model(&Channel{}).Create(dest).Error, taskplugin.ErrCatalogInvalid)
+			require.ErrorIs(t, db.Table(db.NamingStrategy.TableName("Channel")).Create(dest).Error, taskplugin.ErrCatalogInvalid)
+			var count int64
+			require.NoError(t, db.Model(&Channel{}).Count(&count).Error)
+			require.Zero(t, count)
+			channel := &Channel{Name: "typed", Models: "ordinary"}
+			require.NoError(t, db.Create(channel).Error)
+			require.NoError(t, db.Model(channel).Updates(map[string]any{"models": "ordinary-updated"}).Error)
+		})
+	}
+}
+
+func TestChannelRejectsEmptyPopulatedReceiptIndex(t *testing.T) {
+	for _, index := range []string{"null", "[]"} {
+		t.Run(index, func(t *testing.T) {
+			db := deletionDB(t)
+			catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+			require.NoError(t, err)
+			pkg, _ := catalogFixture(t, "stored", "1.0.0", "empty-index")
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			require.NoError(t, catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"}))
+			require.NoError(t, db.Model(&TaskPluginDeletion{}).Where("1 = 1").UpdateColumn("models", index).Error)
+			require.ErrorIs(t, db.Create(&Channel{Name: "corrupt-index", Models: "catalog-model"}).Error, taskplugin.ErrCatalogInvalid)
+		})
+	}
+}
+
 func TestTaskPluginChannelReferencesCannotOutliveDeletion(t *testing.T) {
 	db := deletionDB(t)
 	oldDB := DB

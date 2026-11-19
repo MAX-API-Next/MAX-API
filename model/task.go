@@ -111,17 +111,16 @@ func decodeTaskWorkerRows(rows []taskWorkerRow) []*Task {
 	return tasks
 }
 
-// Lists isolate invalid metadata without making it available to billing reads.
+// Lists retain public history fields without making invalid metadata available.
 // SQL still owns filtering/pagination; count endpoints retain their row totals.
 func decodeTaskListRows(rows []taskWorkerRow) []*Task {
 	decoded := decodeTaskWorkerRows(rows)
-	result := make([]*Task, 0, len(decoded))
 	for _, task := range decoded {
-		if !task.PrivateDataUnreadable() {
-			result = append(result, task)
+		if task.PrivateDataUnreadable() {
+			task.PrivateData = TaskPrivateData{}
 		}
 	}
-	return result
+	return decoded
 }
 
 // IsMiniMaxH3Task reports whether the persisted task has an explicit,
@@ -263,6 +262,9 @@ func (t *Task) GetUpstreamTaskID() string {
 // GetResultURL 获取任务结果 URL（视频地址等）
 // 新数据存在 PrivateData.ResultURL 中；旧数据回退到 FailReason（历史兼容）
 func (t *Task) GetResultURL() string {
+	if t.PrivateDataUnreadable() {
+		return ""
+	}
 	if t.PrivateData.ResultURL != "" {
 		return t.PrivateData.ResultURL
 	}
@@ -450,22 +452,42 @@ func GetAppliedTaskFinalizeRecoveryCandidates(cutoffUnix int64, limit int) ([]*T
 	return GetAppliedTaskFinalizeRecoveryCandidatesAfter(cutoffUnix, 0, 0, limit)
 }
 
-// Recovery has its own stable cursor so unreadable applied rows cannot pin
-// every batch to the same page. Callers wrap after observing an empty page.
+// Recovery has its own stable cursor so unreadable rows cannot pin a page.
 func GetAppliedTaskFinalizeRecoveryCandidatesAfter(cutoffUnix, afterSubmitTime, afterID int64, limit int) ([]*Task, error) {
+	return GetAppliedTaskFinalizeRecoveryCandidatesInRange(cutoffUnix, afterSubmitTime, afterID, 0, 0, limit)
+}
+
+func appliedTaskFinalizeRecoveryQuery(cutoffUnix int64) *gorm.DB {
+	finalize := DB.Model(&BillingSettlement{}).Select("1").
+		Where("operation_key = "+taskFinalizeOperationKeySQL(common.UsingSQLite)).
+		Where("status = ?", BillingSettlementStatusApplied)
+	return DB.Model(&Task{}).
+		Where("status NOT IN ?", []TaskStatus{TaskStatusFailure, TaskStatusSuccess}).
+		Where("submit_time < ?", cutoffUnix).
+		Where("EXISTS (?)", finalize)
+}
+
+// Capture one pass's inclusive high cursor without decoding private metadata.
+func GetAppliedTaskFinalizeRecoveryUpperBound(cutoffUnix int64) (submitTime, id int64, err error) {
+	var row struct{ SubmitTime, ID int64 }
+	err = appliedTaskFinalizeRecoveryQuery(cutoffUnix).Select("submit_time", "id").
+		Order("submit_time DESC, id DESC").Limit(1).Find(&row).Error
+	return row.SubmitTime, row.ID, err
+}
+
+// A fixed inclusive upper bound lets the caller wrap despite later arrivals.
+// A zero upper ID retains the unbounded historical helper's contract.
+func GetAppliedTaskFinalizeRecoveryCandidatesInRange(cutoffUnix, afterSubmitTime, afterID, throughSubmitTime, throughID int64, limit int) ([]*Task, error) {
 	var rows []taskWorkerRow
 	if limit <= 0 {
 		limit = 100
 	}
-	finalize := DB.Model(&BillingSettlement{}).Select("1").
-		Where("operation_key = "+taskFinalizeOperationKeySQL(common.UsingSQLite)).
-		Where("status = ?", BillingSettlementStatusApplied)
-	query := DB.Model(&Task{}).
-		Where("status NOT IN ?", []TaskStatus{TaskStatusFailure, TaskStatusSuccess}).
-		Where("submit_time < ?", cutoffUnix).
-		Where("EXISTS (?)", finalize)
+	query := appliedTaskFinalizeRecoveryQuery(cutoffUnix)
 	if afterID > 0 {
 		query = query.Where("(submit_time > ? OR (submit_time = ? AND id > ?))", afterSubmitTime, afterSubmitTime, afterID)
+	}
+	if throughID > 0 {
+		query = query.Where("(submit_time < ? OR (submit_time = ? AND id <= ?))", throughSubmitTime, throughSubmitTime, throughID)
 	}
 	err := query.Order("submit_time ASC, id ASC").Limit(limit).Find(&rows).Error
 	if err != nil {
@@ -545,6 +567,7 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 		}
 		for _, task := range tasks {
 			task.UpdatedAt = claimedAt
+			task.updatedAtWasNull = false
 		}
 		return tx.Model(&Task{}).
 			Where("id IN ? AND status NOT IN ?", ids, []string{TaskStatusFailure, TaskStatusSuccess}).

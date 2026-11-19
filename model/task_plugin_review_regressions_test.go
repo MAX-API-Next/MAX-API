@@ -858,12 +858,15 @@ func TestTaskPluginHeadBootstrapIgnoresMatchedRowCount(t *testing.T) {
 	_, entry := catalogFixture(t, "stored", "1.0.0", "matched-row-source")
 	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
 	require.NoError(t, err)
+	injected := false
 	require.NoError(t, db.Callback().Create().After("gorm:create").Register("emulate_mysql_found_rows", func(tx *gorm.DB) {
 		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginCatalogHead") && tx.Error == nil {
 			tx.RowsAffected = 1 // MySQL clientFoundRows can report the matched existing row.
+			injected = true
 		}
 	}))
 	require.NoError(t, db.Create(&Channel{Models: "ordinary-model"}).Error)
+	require.True(t, injected, "the matched-row callback must actually run")
 	snapshot, err := store.Load(t.Context())
 	require.NoError(t, err)
 	require.EqualValues(t, 1, snapshot.Revision)
@@ -1028,6 +1031,26 @@ func TestTaskPluginHistoricalBindingInPlannedEvidenceUpdates(t *testing.T) {
 			require.Equal(t, 20, saved.Quota, "intent creation must not claim applied funding")
 			require.Equal(t, row.PrivateData.PluginBinding, saved.PrivateData.PluginBinding)
 			require.EqualValues(t, TaskStatusSuccess, saved.PrivateData.PendingTerminalStatus)
+			var record BillingSettlement
+			err = db.Where("operation_key = ?", input.OperationKey).First(&record).Error
+			if kind == "evidence" {
+				require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+			} else {
+				require.NoError(t, err)
+				expectedStatus := BillingSettlementStatusPending
+				if kind == "manual" {
+					expectedStatus = BillingSettlementStatusManual
+				}
+				require.Equal(t, expectedStatus, record.Status)
+				require.Equal(t, row.ID, record.TaskID)
+				require.Equal(t, input.UserID, record.UserID)
+				require.Equal(t, input.Source, record.Source)
+				require.Equal(t, input.TaskQuota, record.TaskQuota)
+				require.Equal(t, input.TaskQuotaTarget, record.TaskQuotaTarget)
+				require.Equal(t, input.FundingDelta, record.FundingDelta)
+				require.Zero(t, record.AppliedFundingDelta)
+				require.Zero(t, record.AppliedTokenDelta)
+			}
 		})
 	}
 }

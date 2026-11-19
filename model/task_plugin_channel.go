@@ -18,6 +18,34 @@ type channelEmittedReferences struct{ models, mapping *string }
 
 const channelBatchReferenceCheck = "max:channel_batch_reference_check"
 
+// GORM skips model hooks for map creates. Install this on the application
+// handle before channel writes; map updates continue to use model hooks.
+func registerTaskPluginChannelCreateGuard(db *gorm.DB) error {
+	channelTable := db.NamingStrategy.TableName("Channel")
+	return db.Callback().Create().Before("gorm:before_create").Register("max:channel_typed_create", func(tx *gorm.DB) {
+		if tx.Statement.SkipHooks || tx.Statement.Table != channelTable {
+			return
+		}
+		value := reflect.ValueOf(tx.Statement.Dest)
+		for value.IsValid() && value.Kind() == reflect.Pointer {
+			value = value.Elem()
+		}
+		if !value.IsValid() {
+			return
+		}
+		typ := value.Type()
+		if typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array {
+			typ = typ.Elem()
+			for typ.Kind() == reflect.Pointer {
+				typ = typ.Elem()
+			}
+		}
+		if typ.Kind() == reflect.Map {
+			tx.AddError(taskplugin.ErrCatalogInvalid)
+		}
+	})
+}
+
 func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 	statement := tx.Statement
 	value := reflect.ValueOf(statement.Dest)
@@ -132,7 +160,7 @@ func validateChannelReferenceSet(tx *gorm.DB, updates []channelEmittedReferences
 			continue
 		} // Legacy receipts predate model-name protection; see management upgrade guide.
 		var names []string
-		if len(receipt.Models) > maxTaskPluginModelIndexBytes || common.UnmarshalJsonStr(string(receipt.Models), &names) != nil {
+		if len(receipt.Models) > maxTaskPluginModelIndexBytes || common.UnmarshalJsonStr(string(receipt.Models), &names) != nil || len(names) == 0 {
 			return taskplugin.ErrCatalogInvalid
 		}
 		for _, name := range names {

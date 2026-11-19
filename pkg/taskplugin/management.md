@@ -192,7 +192,12 @@ operation-specific grants. See the [PostgreSQL INSERT privilege requirements](ht
 See the [PostgreSQL SELECT privilege requirements](https://www.postgresql.org/docs/current/sql-select.html).
 
 Channel creates and model/mapping updates acquire the same catalog-head lock as
-deletion, including batch, tag, Save and map-based writes. Deletion receipts now
+deletion, including typed batch creates, tag/Save writes and map updates. The
+application DB initializer rejects map and slice-of-map channel creates, because
+GORM skips model hooks for those destinations. Use typed `Channel` creates;
+upgrade every writer before relying on this guard. Custom DB handles must install
+the same guard; raw SQL and explicit `SkipHooks` writes remain unsupported.
+Deletion receipts now
 include a source-free JSON index of declared models (`models`: LONGTEXT on MySQL,
 TEXT on SQLite/PostgreSQL); migrate
 this column on the master and upgrade every channel writer before relying on
@@ -322,8 +327,10 @@ Workers isolate unreadable task private data, log the database row ID, and
 continue valid neighbors. Timeout cursors advance past bad rows; those rows
 retain their status, quota and original metadata without a new settlement.
 Repair their metadata from trusted evidence before expecting further processing.
-Applied-finalize recovery uses its own `(submit_time, id)` cursor, wrapping after
-an empty page so repaired earlier rows can be retried. It only publishes already
+Applied-finalize recovery uses its own `(submit_time, id)` cursor and captures a
+fixed inclusive upper cursor for each pass. It wraps after reaching that bound
+or an empty page, so a sustained newer backlog cannot starve repaired older rows.
+The per-cycle scan and recovery allowances remain unchanged. It only publishes already
 funded terminal evidence through the existing CAS, without replaying funding.
 When an applied finalize record has no recoverable pending terminal status,
 recovery can instead mark the nonterminal task `FAILURE` with a manual
@@ -354,8 +361,9 @@ this scheduling change.
 
 User/admin task lists isolate unreadable private metadata per row and retain
 healthy neighbors with the same SQL filtering, pagination and user/channel
-visibility rules. Unreadable rows are omitted; count endpoints still count the
-stored rows, so a page can contain fewer items until those records are repaired.
+visibility rules. Unreadable rows retain their public history fields and their
+place in the page, with empty private data and no derived result URL. Count
+endpoints continue to count stored rows; the list does not rewrite or repair them.
 Single-task reads used for billing remain strict. Workers also retain whether
 quota was SQL NULL or an explicit zero: timeout/manual CAS uses `IS NULL` or an
 exact value match accordingly, without normalizing stored data or inferring a
@@ -363,3 +371,5 @@ refund. Worker timestamp snapshots similarly retain SQL NULL separately from
 numeric zero; timeout CAS uses `IS NULL` only when the read observed NULL. The
 manual-settlement guard includes the observed quota so a changed
 reservation rolls back its stale manual intent.
+After a worker claim writes a numeric timestamp, the returned snapshot clears
+its NULL marker so that an immediate manual decision can match its own claim.

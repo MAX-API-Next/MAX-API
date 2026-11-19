@@ -27,6 +27,7 @@ func TestManualSettlementRejectsChangedQuotaSnapshot(t *testing.T) {
 	var fresh Task
 	require.NoError(t, DB.First(&fresh, row.ID).Error)
 	require.Equal(t, 25, fresh.Quota)
+	require.Equal(t, version, fresh.UpdatedAt, "losing attempt must not advance the stored version")
 	input.TaskQuota, input.TaskQuotaTarget = 25, 25
 	won, err = fresh.UpdateWithStatusAndManualSettlement(TaskStatusSubmitted, fresh.UpdatedAt, input, "provider usage requires review")
 	require.NoError(t, err)

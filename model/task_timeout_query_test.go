@@ -16,6 +16,24 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestClaimedNullTimestampSupportsFirstManualDecision(t *testing.T) {
+	truncateTables(t)
+	row := &Task{TaskID: "claim-null-timestamp", Status: TaskStatusSubmitted, Quota: 20}
+	insertTask(t, row)
+	require.NoError(t, DB.Model(row).UpdateColumn("updated_at", nil).Error)
+	claimed := GetAllUnFinishSyncTasks(100)
+	require.Len(t, claimed, 1)
+	input := BillingSettlementInput{OperationKey: BillingTaskFinalizeOperationKey(row.ID), Source: BillingSettlementSourceWallet, UserID: 1, TaskID: row.ID, TaskQuota: 20, TaskQuotaTarget: 20}
+	won, err := claimed[0].UpdateWithStatusAndManualSettlement(TaskStatusSubmitted, claimed[0].UpdatedAt, input, "manual evidence required")
+	require.NoError(t, err)
+	require.True(t, won)
+	var record BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", input.OperationKey).First(&record).Error)
+	require.Equal(t, BillingSettlementStatusManual, record.Status)
+	require.Zero(t, record.AppliedFundingDelta)
+	require.Zero(t, record.AppliedTokenDelta)
+}
+
 func TestTimeoutCASPreservesQuotaNullability(t *testing.T) {
 	previousSQLite := common.UsingSQLite
 	common.UsingSQLite = true
