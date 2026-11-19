@@ -91,10 +91,13 @@ func sweepTimedOutTasks(ctx context.Context) {
 	defer timedOutTaskSweepCursor.Unlock()
 
 	remaining := timedOutTaskTransitionBudget
+	// Recovery gets at most half the transition capacity. Unused slots are
+	// reserved for ordinary timeout work rather than consumed by later pages.
+	recoveryRemaining := timedOutTaskTransitionBudget / 2
 	scanBudget := timedOutTaskScanBudget
 	appliedScanBudget := timedOutTaskScanBudget
 	appliedAfterTime, appliedAfterID := timedOutTaskSweepCursor.appliedAfterSubmitTime, timedOutTaskSweepCursor.appliedAfterID
-	for remaining > 0 && appliedScanBudget > 0 {
+	for remaining > 0 && recoveryRemaining > 0 && appliedScanBudget > 0 {
 		queryLimit := min(100, appliedScanBudget)
 		recovered, err := model.GetAppliedTaskFinalizeRecoveryCandidatesAfter(cutoff, appliedAfterTime, appliedAfterID, queryLimit)
 		if err != nil {
@@ -106,7 +109,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 			break
 		}
 		for _, task := range recovered {
-			if remaining <= 0 || appliedScanBudget <= 0 {
+			if remaining <= 0 || recoveryRemaining <= 0 || appliedScanBudget <= 0 {
 				break
 			}
 			appliedAfterTime, appliedAfterID = task.SubmitTime, task.ID
@@ -134,6 +137,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 			}
 			if recoveryOutcome == appliedTaskRecoveryUpdated {
 				remaining--
+				recoveryRemaining--
 			}
 		}
 	}

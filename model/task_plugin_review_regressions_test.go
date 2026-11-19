@@ -1749,20 +1749,20 @@ func TestTaskPluginCanceledReferenceScanHasNoCommitAndKeepsHost(t *testing.T) {
 	actor := taskplugin.Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "scan-cancel"}
 	binding, err := catalog.Host().Bind(actor, "GET", "/stored/one", "catalog-model", taskusage.MiniMaxH3Contract())
 	require.NoError(t, err)
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	reached := false
 	require.NoError(t, db.Callback().Row().Before("gorm:row").Register("expire-reference-scan", func(tx *gorm.DB) {
 		if tx.Statement.Table == db.NamingStrategy.TableName("Task") {
 			reached = true
-			<-ctx.Done()
+			cancel()
 		}
 	}))
 	t.Cleanup(func() { _ = db.Callback().Row().Remove("expire-reference-scan") })
 	err = catalog.MutateExpected(ctx, 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"})
 	require.True(t, reached)
-	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	require.ErrorIs(t, err, taskplugin.ErrCatalogNotCommitted)
 	require.NotErrorIs(t, err, taskplugin.ErrCatalogUnavailable, "a known pre-write cancellation is not an unknown commit")
 	_, err = catalog.Host().Resolve(binding, actor)
@@ -1784,14 +1784,14 @@ func TestTaskPluginCanceledMutationAttemptRemainsUnknown(t *testing.T) {
 	actor := taskplugin.Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "mutation-cancel"}
 	binding, err := catalog.Host().Bind(actor, "GET", "/stored/one", "catalog-model", taskusage.MiniMaxH3Contract())
 	require.NoError(t, err)
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	reached := false
 	require.NoError(t, db.Callback().Update().After("gorm:update").Register("expire-after-head-write", func(tx *gorm.DB) {
 		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginCatalogHead") {
 			if values, ok := tx.Statement.Dest.(map[string]any); ok && values["revision"] != nil {
 				reached = true
-				<-ctx.Done()
+				cancel()
 			}
 		}
 	}))
@@ -1804,7 +1804,7 @@ func TestTaskPluginCanceledMutationAttemptRemainsUnknown(t *testing.T) {
 	require.Error(t, err, "after a mutation attempt only authoritative refresh can restore the Host")
 }
 
-func TestTaskPluginPreflightTimeoutRetainsObservedHeadEvidence(t *testing.T) {
+func TestTaskPluginPreflightCancellationRetainsObservedHeadEvidence(t *testing.T) {
 	for _, stage := range []string{"packages", "head-reread"} {
 		for _, newer := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/%t", stage, newer), func(t *testing.T) {
@@ -1823,7 +1823,7 @@ func TestTaskPluginPreflightTimeoutRetainsObservedHeadEvidence(t *testing.T) {
 					require.NoError(t, err)
 				}
 				candidate, _ := catalogFixture(t, "candidate", "1.0.0", "candidate-source")
-				ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				reached := false
 				headReads := 0
@@ -1833,13 +1833,13 @@ func TestTaskPluginPreflightTimeoutRetainsObservedHeadEvidence(t *testing.T) {
 					}
 					if stage == "packages" && tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginVersion") || stage == "head-reread" && headReads == 2 {
 						reached = true
-						<-ctx.Done()
+						cancel()
 					}
 				}))
 				t.Cleanup(func() { _ = db.Callback().Query().Remove("expire-retained-read") })
 				err = catalog.ValidateInstall(ctx, candidate)
 				require.True(t, reached)
-				require.ErrorIs(t, err, context.DeadlineExceeded)
+				require.ErrorIs(t, err, context.Canceled)
 				_, err = catalog.Host().Resolve(binding, actor)
 				if newer {
 					require.Error(t, err, "newer head observed before the interrupted package read must suspend the old Host")
@@ -1899,7 +1899,7 @@ func TestTaskPluginAmbiguousVersionsCannotPinDeletion(t *testing.T) {
 			require.NoError(t, err)
 			row := &Task{TaskID: field}
 			require.NoError(t, db.Create(row).Error)
-			raw := fmt.Sprintf(`{"legacy":{"plugin_key":"stored","version":"2.0.0",%q:"2.0.0",%q:"3.0.0"}}`, strings.ToUpper(field), strings.Title(field))
+			raw := fmt.Sprintf(`{"legacy":{"plugin_key":"stored","version":"2.0.0",%q:"2.0.0",%q:"3.0.0"}}`, strings.ToUpper(field), map[string]string{"version": "Version", "plugin_version": "Plugin_Version"}[field])
 			require.NoError(t, db.Model(row).UpdateColumn("private_data", raw).Error)
 			_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
 			require.ErrorIs(t, err, taskplugin.ErrCatalogInUse, "an ambiguous explicit version cannot fall back to another version field")

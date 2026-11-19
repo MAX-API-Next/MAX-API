@@ -2,6 +2,7 @@
 package model
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 
@@ -29,7 +30,20 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 		return err
 	}
 	if !present {
-		return nil
+		// A genuinely old schema may have no receipts. A surviving deletion
+		// marker is authoritative evidence that the whole set was lost.
+		headPresent, err := taskPluginTableAvailable(tx, &TaskPluginCatalogHead{})
+		if err != nil || !headPresent {
+			return err
+		}
+		head, err := taskPluginChannelHead(tx)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return validateTaskPluginDeletionPresence(head, false)
 	}
 	references := map[string]bool{}
 	if models != nil {
@@ -65,6 +79,13 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 	var receipts []TaskPluginDeletion
 	// Current reads avoid a stale MySQL REPEATABLE READ transaction snapshot.
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("models").Find(&receipts).Error; err != nil {
+		return err
+	}
+	head, err := taskPluginChannelHead(tx)
+	if err != nil {
+		return err
+	}
+	if err := validateTaskPluginDeletionPresence(head, len(receipts) != 0); err != nil {
 		return err
 	}
 	deletedModels := map[string]bool{}
@@ -105,6 +126,15 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 		return taskplugin.ErrBindingRejected
 	}
 	return nil
+}
+
+func taskPluginChannelHead(tx *gorm.DB) (TaskPluginCatalogHead, error) {
+	var head TaskPluginCatalogHead
+	err := tx.Session(&gorm.Session{NewDB: true}).Clauses(clause.Locking{Strength: "UPDATE"}).First(&head, 1).Error
+	if err == nil && (head.Revision <= 0 || head.MutationID == "") {
+		err = taskplugin.ErrCatalogInvalid
+	}
+	return head, err
 }
 
 func channelReferenceUpdate(tx *gorm.DB, channel *Channel) (*string, *string, error) {

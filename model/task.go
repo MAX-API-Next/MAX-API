@@ -73,6 +73,7 @@ type Task struct {
 	includePrivateDataInUpdate        bool `gorm:"-"`
 	preservePrivateDataOnStatusUpdate bool `gorm:"-"`
 	privateDataUnreadable             bool `gorm:"-"`
+	quotaWasNull                      bool `gorm:"-"`
 }
 
 // PrivateDataUnreadable marks worker-only rows whose original metadata could
@@ -84,12 +85,17 @@ func (t *Task) PrivateDataUnreadable() bool { return t.privateDataUnreadable }
 type taskWorkerRow struct {
 	Task
 	PrivateData []byte `gorm:"column:private_data;type:json"`
+	Quota       *int   `gorm:"column:quota"`
 }
 
 func decodeTaskWorkerRows(rows []taskWorkerRow) []*Task {
 	tasks := make([]*Task, 0, len(rows))
 	for i := range rows {
 		task := &rows[i].Task
+		task.quotaWasNull = rows[i].Quota == nil
+		if rows[i].Quota != nil {
+			task.Quota = *rows[i].Quota
+		}
 		if err := task.PrivateData.Scan(rows[i].PrivateData); err != nil {
 			task.privateDataUnreadable = true
 			common.SysError(fmt.Sprintf("task worker skipped unreadable private data: id=%d", task.ID))
@@ -97,6 +103,19 @@ func decodeTaskWorkerRows(rows []taskWorkerRow) []*Task {
 		tasks = append(tasks, task)
 	}
 	return tasks
+}
+
+// Lists isolate invalid metadata without making it available to billing reads.
+// SQL still owns filtering/pagination; count endpoints retain their row totals.
+func decodeTaskListRows(rows []taskWorkerRow) []*Task {
+	decoded := decodeTaskWorkerRows(rows)
+	result := make([]*Task, 0, len(decoded))
+	for _, task := range decoded {
+		if !task.PrivateDataUnreadable() {
+			result = append(result, task)
+		}
+	}
+	return result
 }
 
 // IsMiniMaxH3Task reports whether the persisted task has an explicit,
@@ -334,11 +353,11 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 }
 
 func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
-	var tasks []*Task
+	var rows []taskWorkerRow
 	var err error
 
 	// 初始化查询构建器
-	query := DB.Where("user_id = ?", userId)
+	query := DB.Model(&Task{}).Where("user_id = ?", userId)
 	query = applyQuotaFilter(query, "quota", queryParams.QuotaFilter)
 
 	if queryParams.TaskID != "" {
@@ -362,20 +381,20 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 	}
 
 	// 获取数据
-	err = query.Omit("channel_id").Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	err = query.Omit("channel_id").Order("id desc").Limit(num).Offset(startIdx).Find(&rows).Error
 	if err != nil {
 		return nil
 	}
 
-	return tasks
+	return decodeTaskListRows(rows)
 }
 
 func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
-	var tasks []*Task
+	var rows []taskWorkerRow
 	var err error
 
 	// 初始化查询构建器
-	query := DB
+	query := DB.Model(&Task{})
 	query = applyQuotaFilter(query, "quota", queryParams.QuotaFilter)
 
 	// 添加过滤条件
@@ -408,12 +427,12 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 	}
 
 	// 获取数据
-	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&rows).Error
 	if err != nil {
 		return nil
 	}
 
-	return tasks
+	return decodeTaskListRows(rows)
 }
 
 func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
@@ -712,13 +731,20 @@ func (t *Task) updateWithStatusSnapshot(fromStatus TaskStatus, expectedUpdatedAt
 	}
 	query := DB.Model(&Task{ID: t.ID}).Where("status = ?", fromStatus)
 	if expectedUpdatedAt != nil {
-		query = query.Where("updated_at = ? AND quota = ?", *expectedUpdatedAt, t.Quota)
+		query = t.whereQuotaSnapshot(query.Where("updated_at = ?", *expectedUpdatedAt))
 	}
 	result := query.Updates(t.statusUpdateValues())
 	if result.Error != nil {
 		return false, result.Error
 	}
 	return result.RowsAffected > 0, nil
+}
+
+func (t *Task) whereQuotaSnapshot(query *gorm.DB) *gorm.DB {
+	if t.quotaWasNull {
+		return query.Where("quota IS NULL")
+	}
+	return query.Where("quota = ?", t.Quota)
 }
 
 // UpdateWithStatusAndPendingTerminalEvidence durably records terminal provider
@@ -798,7 +824,7 @@ func (t *Task) updateWithStatusAndSettlementSnapshot(fromStatus TaskStatus, expe
 		}
 		query := tx.Model(&Task{ID: t.ID}).Where("status = ?", fromStatus)
 		if expectedUpdatedAt != nil {
-			query = query.Where("updated_at = ? AND quota = ?", *expectedUpdatedAt, t.Quota)
+			query = t.whereQuotaSnapshot(query.Where("updated_at = ?", *expectedUpdatedAt))
 		}
 		result := query.Updates(t.statusUpdateValues())
 		if result.Error != nil {
@@ -922,6 +948,7 @@ func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expect
 		}
 		result := tx.Model(&Task{ID: t.ID}).
 			Where("id = ? AND status = ? AND updated_at = ?", t.ID, fromStatus, expectedUpdatedAt).
+			Scopes(t.whereQuotaSnapshot).
 			Updates(updates)
 		if result.Error != nil {
 			return result.Error

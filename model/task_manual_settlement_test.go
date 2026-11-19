@@ -10,6 +10,35 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestManualSettlementRejectsChangedQuotaSnapshot(t *testing.T) {
+	truncateTables(t)
+	row := &Task{TaskID: "manual-quota-snapshot", Status: TaskStatusSubmitted, Quota: 20}
+	insertTask(t, row)
+	version := row.UpdatedAt
+	require.NoError(t, DB.Model(&Task{}).Where("id = ?", row.ID).UpdateColumn("quota", 25).Error)
+	input := BillingSettlementInput{OperationKey: BillingTaskFinalizeOperationKey(row.ID), Source: BillingSettlementSourceWallet, UserID: 1, TaskID: row.ID, TaskQuota: 20, TaskQuotaTarget: 20}
+	won, err := row.UpdateWithStatusAndManualSettlement(TaskStatusSubmitted, version, input, "provider usage requires review")
+	require.NoError(t, err)
+	require.False(t, won)
+	var count int64
+	require.NoError(t, DB.Model(&BillingSettlement{}).Count(&count).Error)
+	require.Zero(t, count)
+	require.Equal(t, version, row.UpdatedAt)
+	var fresh Task
+	require.NoError(t, DB.First(&fresh, row.ID).Error)
+	require.Equal(t, 25, fresh.Quota)
+	input.TaskQuota, input.TaskQuotaTarget = 25, 25
+	won, err = fresh.UpdateWithStatusAndManualSettlement(TaskStatusSubmitted, fresh.UpdatedAt, input, "provider usage requires review")
+	require.NoError(t, err)
+	require.True(t, won)
+	var record BillingSettlement
+	require.NoError(t, DB.First(&record).Error)
+	require.EqualValues(t, 25, record.TaskQuota)
+	require.Equal(t, BillingSettlementStatusManual, record.Status)
+	require.Zero(t, record.AppliedFundingDelta)
+	require.Zero(t, record.AppliedTokenDelta)
+}
+
 func TestUpdateWithStatusAndPendingTerminalEvidenceUsesCAS(t *testing.T) {
 	truncateTables(t)
 	task := &Task{

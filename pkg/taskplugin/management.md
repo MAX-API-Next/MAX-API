@@ -19,6 +19,14 @@ task updates now validate recursive legacy map/array references as well as typed
 bindings and frozen plans under the catalog-head lock. Unknown fields without
 references remain writable; omitted fields do not participate in the check.
 
+**Writer grant and throughput compatibility:** steady-state PostgreSQL writers
+need INSERT on the catalog head and UPDATE on its `mutation_id`, not just the
+privileges for locking reads. Provision these existing write requirements before
+rollout. Applied recovery now uses at most 50 successful updates per sweep,
+reserving at least 50 of the shared 100 processing slots for ordinary timeouts.
+Idle ordinary capacity is not borrowed back, so applied-only recovery throughput
+can be lower than before. The independent 2,000-row scan caps remain unchanged.
+
 **Existing subscription refund limit:** a legacy task reserved at 20 and reduced
 to 15 by request finalization can later have its timeout refund of 15 held for
 manual reconciliation against the original pre-consume record of 20. The legacy
@@ -157,6 +165,14 @@ requires UPDATE privilege on at least one column of each table being locked,
 even when the receipt table is empty. A SELECT-only catalog reader role is not a
 writer role. Provision the required lock/write privileges before serving writes;
 the head bootstrap/update paths also require their INSERT/UPDATE privileges.
+The current head-lock helper issues `INSERT ... ON CONFLICT DO NOTHING` on
+every call, even when the head already exists. Every PostgreSQL channel, task
+and pricing writer using that helper therefore needs INSERT on the head's
+written columns and UPDATE on `mutation_id` for its no-op write, as well as the
+SELECT/locking privileges above. INSERT is not a bootstrap-only grant. Keep
+these existing bootstrap/race/orphan checks and provision the steady-state
+writer grants before rollout; management mutations need their additional
+operation-specific grants. See the [PostgreSQL INSERT privilege requirements](https://www.postgresql.org/docs/9.6/sql-insert.html).
 See the [PostgreSQL SELECT privilege requirements](https://www.postgresql.org/docs/current/sql-select.html).
 
 Channel creates and model/mapping updates acquire the same catalog-head lock as
@@ -304,5 +320,22 @@ wall time. The quota predicate still rejects the old timeout in that case;
 zero-delta projections leave the confirmation version intact. Funding SQL and
 the original operation identities remain unchanged.
 Each recovery/timeout class scans at most 2,000 rows per invocation by default;
-both share the existing cap of 100 successful transitions. This permits up to
+both share the existing cap of 100 transition/processing slots. This permits up to
 4,000 scans when both classes contain many unreadable or otherwise skipped rows.
+Applied recovery now uses at most 50 successful updates from that shared budget,
+leaving at least 50 processing slots for ordinary timeouts in the same sweep.
+Unused ordinary slots are not donated back to recovery; an applied-only backlog
+can therefore recover at most 50 tasks per invocation instead of 100. Failed
+decoding or CAS contention can reduce committed work further. Both existing
+2,000-row scan caps and independent cursors remain; no funding is replayed by
+this scheduling change.
+
+User/admin task lists isolate unreadable private metadata per row and retain
+healthy neighbors with the same SQL filtering, pagination and user/channel
+visibility rules. Unreadable rows are omitted; count endpoints still count the
+stored rows, so a page can contain fewer items until those records are repaired.
+Single-task reads used for billing remain strict. Workers also retain whether
+quota was SQL NULL or an explicit zero: timeout/manual CAS uses `IS NULL` or an
+exact value match accordingly, without normalizing stored data or inferring a
+refund. The manual-settlement guard includes the observed quota so a changed
+reservation rolls back its stale manual intent.

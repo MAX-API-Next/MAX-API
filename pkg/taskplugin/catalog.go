@@ -26,7 +26,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"slices"
 	"sort"
 	"strings"
 
@@ -219,9 +218,42 @@ func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool
 }
 
 func sameCatalogSnapshot(a, b CatalogSnapshot) bool {
-	return a.Revision == b.Revision && slices.Equal(a.Deletions, b.Deletions) && slices.EqualFunc(a.Packages, b.Packages, func(x, y StoredPackage) bool {
-		return x.Digest == y.Digest && x.Active == y.Active && x.Enabled == y.Enabled && x.Revoked == y.Revoked && bytes.Equal(x.Document, y.Document)
-	})
+	if a.Revision != b.Revision || len(a.Packages) != len(b.Packages) || len(a.Deletions) != len(b.Deletions) {
+		return false
+	}
+	// Pinned digest identifies the immutable package bytes without executing
+	// metadata on an expired context. Reject duplicate identities in either set.
+	packages := make(map[string]StoredPackage, len(a.Packages))
+	for _, entry := range a.Packages {
+		if _, duplicate := packages[entry.Digest]; duplicate {
+			return false
+		}
+		packages[entry.Digest] = entry
+	}
+	for _, entry := range b.Packages {
+		old, exists := packages[entry.Digest]
+		if !exists || old.Active != entry.Active || old.Enabled != entry.Enabled || old.Revoked != entry.Revoked || !bytes.Equal(old.Document, entry.Document) {
+			return false
+		}
+		delete(packages, entry.Digest)
+	}
+	type identity struct{ key, version string }
+	receipts := make(map[identity]PackageDeletion, len(a.Deletions))
+	for _, entry := range a.Deletions {
+		key := identity{entry.Key, entry.Version}
+		if _, duplicate := receipts[key]; duplicate {
+			return false
+		}
+		receipts[key] = entry
+	}
+	for _, entry := range b.Deletions {
+		key := identity{entry.Key, entry.Version}
+		if old, exists := receipts[key]; !exists || old != entry {
+			return false
+		}
+		delete(receipts, key)
+	}
+	return true
 }
 
 func (catalog *Catalog) publish(snapshot CatalogSnapshot, state *hostState) {

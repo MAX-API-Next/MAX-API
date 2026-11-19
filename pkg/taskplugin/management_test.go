@@ -393,8 +393,8 @@ func TestManagementPreflightDeadlineReachesRetainedMetadata(t *testing.T) {
 	require.Less(t, time.Since(started), 2*time.Second, "metadata must stop at the request deadline, not the independent five-second call limit")
 }
 
-func TestManagementPreflightReadTimeoutPreservesOnlyUnchangedHost(t *testing.T) {
-	for _, kind := range []string{"read-timeout", "changed-generation", "invalid-generation", "conflict-then-timeout"} {
+func TestManagementPreflightReadCancellationPreservesOnlyUnchangedHost(t *testing.T) {
+	for _, kind := range []string{"read-cancel", "changed-generation", "invalid-generation", "conflict-then-cancel"} {
 		t.Run(kind, func(t *testing.T) {
 			store := &memoryCatalogStore{}
 			catalog, err := OpenCatalog(t.Context(), store)
@@ -402,27 +402,27 @@ func TestManagementPreflightReadTimeoutPreservesOnlyUnchangedHost(t *testing.T) 
 			pkg := testPackage(t, validManifest(), "source")
 			require.NoError(t, catalog.Install(t.Context(), pkg))
 			published := catalog.host.state.Load()
-			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			switch kind {
 			case "changed-generation":
 				store.snapshot.Revision++
 			case "invalid-generation":
 				store.loadErrors = []error{ErrCatalogInvalid}
-			case "conflict-then-timeout":
-				store.loadErrors = []error{ErrCatalogConflict, context.DeadlineExceeded}
+			case "conflict-then-cancel":
+				store.loadErrors = []error{ErrCatalogConflict, context.Canceled}
 			}
 			store.onLoad = func(int) {
-				if kind != "invalid-generation" && !(kind == "conflict-then-timeout" && len(store.loadErrors) == 2) {
-					<-ctx.Done()
-					if kind == "read-timeout" {
+				if kind != "invalid-generation" && !(kind == "conflict-then-cancel" && len(store.loadErrors) == 2) {
+					cancel()
+					if kind == "read-cancel" {
 						store.loadErrors = []error{ctx.Err()}
 					}
 				}
 			}
 			err = catalog.ValidateInstall(ctx, testPackage(t, validManifest(), "candidate"))
 			require.Error(t, err)
-			if kind == "read-timeout" {
+			if kind == "read-cancel" {
 				require.Same(t, published, catalog.host.state.Load())
 				_, err = catalog.Host().PricingPackage("POST", "/vendor/v1/jobs", "vendor-model")
 				require.NoError(t, err)
@@ -452,6 +452,48 @@ func TestCatalogVersionChecksHonorCancellation(t *testing.T) {
 			}
 			require.ErrorIs(t, err, context.Canceled)
 			require.Equal(t, before, snapshot)
+		})
+	}
+}
+
+func TestPreflightSnapshotOrderDoesNotSuspendUnchangedHost(t *testing.T) {
+	for _, change := range []string{"reordered", "changed-flags", "changed-bytes", "changed-receipt"} {
+		t.Run(change, func(t *testing.T) {
+			a := testPackage(t, validManifest(), "package-a")
+			manifest := validManifest()
+			manifest.Key = "vendor-b"
+			manifest.Routes[0].Path = "/vendor-b/v1/jobs"
+			manifest.Routes[1].Path = "/vendor-b/v1/jobs/:task_id"
+			b := testPackage(t, manifest, "package-b")
+			store := &memoryCatalogStore{snapshot: CatalogSnapshot{Revision: 3,
+				Packages:  []StoredPackage{{Document: a.Document(), Digest: a.Digest(), Active: true, Enabled: true}, {Document: b.Document(), Digest: b.Digest(), Active: true, Enabled: true}},
+				Deletions: []PackageDeletion{{Key: "removed-a", Version: "1.0.0", Digest: fmt.Sprintf("%064d", 1)}, {Key: "removed-b", Version: "1.0.0", Digest: fmt.Sprintf("%064d", 2)}},
+			}}
+			catalog, err := OpenCatalog(t.Context(), store)
+			require.NoError(t, err)
+			published := catalog.host.state.Load()
+			store.snapshot.Packages[0], store.snapshot.Packages[1] = store.snapshot.Packages[1], store.snapshot.Packages[0]
+			store.snapshot.Deletions[0], store.snapshot.Deletions[1] = store.snapshot.Deletions[1], store.snapshot.Deletions[0]
+			switch change {
+			case "changed-flags":
+				store.snapshot.Packages[0].Enabled = false
+			case "changed-bytes":
+				store.snapshot.Packages[0].Document = append(append([]byte(nil), store.snapshot.Packages[0].Document...), ' ')
+			case "changed-receipt":
+				store.snapshot.Deletions[0].Revoked = true
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			store.onLoad = func(int) { cancel() }
+			err = catalog.ValidateInstall(ctx, a)
+			require.ErrorIs(t, err, context.Canceled)
+			if change == "reordered" {
+				require.Same(t, published, catalog.host.state.Load())
+				_, err = catalog.Host().PricingPackage("POST", "/vendor/v1/jobs", "vendor-model")
+				require.NoError(t, err)
+			} else {
+				require.Nil(t, catalog.host.state.Load(), "content changes remain authoritative even at the same revision")
+			}
 		})
 	}
 }

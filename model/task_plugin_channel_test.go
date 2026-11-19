@@ -10,6 +10,70 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestChannelSettingsRepairDoesNotRewriteMalformedMapping(t *testing.T) {
+	for _, field := range []string{"setting", "other_settings"} {
+		t.Run(field, func(t *testing.T) {
+			db := deletionDB(t)
+			previous := DB
+			DB = db
+			t.Cleanup(func() { DB = previous })
+			bad := "{"
+			row := &Channel{Name: "legacy-settings", Models: "ordinary", Setting: &bad, OtherSettings: bad, Key: "unchanged-fixture-key"}
+			require.NoError(t, db.Create(row).Error)
+			require.NoError(t, db.Model(row).UpdateColumn("model_mapping", bad).Error)
+			var loaded Channel
+			require.NoError(t, db.First(&loaded, row.Id).Error)
+			if field == "setting" {
+				loaded.GetSetting()
+			} else {
+				loaded.GetOtherSettings()
+			}
+			var fresh Channel
+			require.NoError(t, db.First(&fresh, row.Id).Error)
+			if field == "setting" {
+				require.Nil(t, fresh.Setting)
+				require.Equal(t, bad, fresh.OtherSettings)
+			} else {
+				require.Equal(t, "{}", fresh.OtherSettings)
+				require.Equal(t, &bad, fresh.Setting)
+			}
+			require.Equal(t, &bad, fresh.ModelMapping)
+			require.Equal(t, "unchanged-fixture-key", fresh.Key)
+			require.ErrorIs(t, db.Model(&Channel{Id: row.Id}).Updates(map[string]any{"model_mapping": bad}).Error, taskplugin.ErrCatalogInvalid)
+		})
+	}
+}
+
+func TestChannelReferencesRejectLostWholeReceiptSet(t *testing.T) {
+	for _, mode := range []string{"rows-lost", "table-lost", "legacy-index"} {
+		t.Run(mode, func(t *testing.T) {
+			db := deletionDB(t)
+			previous := DB
+			DB = db
+			t.Cleanup(func() { DB = previous })
+			catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+			require.NoError(t, err)
+			pkg, _ := catalogFixture(t, "stored", "1.0.0", "receipt-loss")
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			require.NoError(t, catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"}))
+			switch mode {
+			case "rows-lost":
+				require.NoError(t, db.Where("1 = 1").Delete(&TaskPluginDeletion{}).Error)
+			case "table-lost":
+				require.NoError(t, db.Migrator().DropTable(&TaskPluginDeletion{}))
+			case "legacy-index":
+				require.NoError(t, db.Model(&TaskPluginDeletion{}).Where("1 = 1").UpdateColumn("models", "").Error)
+			}
+			err = db.Create(&Channel{Name: mode, Models: "catalog-model"}).Error
+			if mode == "legacy-index" {
+				require.NoError(t, err, "legacy receipts with unknown model names retain their documented exception")
+			} else {
+				require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+			}
+		})
+	}
+}
+
 func TestTaskPluginChannelReferencesCannotOutliveDeletion(t *testing.T) {
 	db := deletionDB(t)
 	oldDB := DB

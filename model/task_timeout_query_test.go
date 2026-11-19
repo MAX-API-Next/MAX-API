@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/glebarez/sqlite"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -13,6 +14,53 @@ import (
 	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+func TestTimeoutCASPreservesQuotaNullability(t *testing.T) {
+	previousSQLite := common.UsingSQLite
+	common.UsingSQLite = true
+	t.Cleanup(func() { common.UsingSQLite = previousSQLite })
+	for _, scenario := range []struct {
+		name                          string
+		initialNull, change, nextNull bool
+	}{
+		{name: "null-unchanged", initialNull: true},
+		{name: "zero-unchanged"},
+		{name: "null-to-zero", initialNull: true, change: true},
+		{name: "zero-to-null", change: true, nextNull: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			truncateTables(t)
+			row := &Task{TaskID: scenario.name, Status: TaskStatusSubmitted, SubmitTime: 1}
+			insertTask(t, row)
+			if scenario.initialNull {
+				require.NoError(t, DB.Model(row).UpdateColumn("quota", nil).Error)
+			}
+			rows, err := GetTimedOutUnfinishedTasksAfter(1000, 0, 0, 10)
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			observed := rows[0]
+			if scenario.change {
+				var next any = 0
+				if scenario.nextNull {
+					next = nil
+				}
+				require.NoError(t, DB.Model(row).UpdateColumn("quota", next).Error)
+			}
+			observed.Status = TaskStatusFailure
+			observed.PreservePrivateDataOnStatusUpdate()
+			won, err := observed.UpdateWithStatusSnapshot(TaskStatusSubmitted, observed.UpdatedAt)
+			require.NoError(t, err)
+			require.Equal(t, !scenario.change, won)
+			var stored sql.NullInt64
+			require.NoError(t, DB.Model(&Task{}).Select("quota").Where("id = ?", row.ID).Row().Scan(&stored))
+			expectedNull := scenario.initialNull
+			if scenario.change {
+				expectedNull = scenario.nextNull
+			}
+			require.Equal(t, expectedNull, !stored.Valid, "CAS must not normalize NULL into an explicit zero")
+		})
+	}
+}
 
 func TestTimedOutTaskQueryUsesPortableTaskFinalizeExclusion(t *testing.T) {
 	tests := []struct {

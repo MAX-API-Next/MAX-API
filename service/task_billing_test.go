@@ -338,6 +338,7 @@ func TestSweepTimeoutCannotReopenAfterConfirmedFunding(t *testing.T) {
 					seedSubscription(t, subID, userID, 1000, 100)
 				}
 				task := makeTask(userID, channelID, 20, tokenID, source, subID)
+				task.UpdatedAt = fixed.Unix()
 				task.Status = model.TaskStatusSubmitted
 				task.SubmitTime = fixed.Add(-2 * time.Minute).Unix()
 				task.PrivateData.AwaitingUpstreamID = true
@@ -361,6 +362,10 @@ func TestSweepTimeoutCannotReopenAfterConfirmedFunding(t *testing.T) {
 						require.NoError(t, err)
 						require.NoError(t, confirmed.UpdateWithSettlementIntent(input))
 						require.NoError(t, session.Settle(20+delta))
+						var projected model.Task
+						require.NoError(t, model.DB.First(&projected, task.ID).Error)
+						require.Equal(t, fixed.Unix(), projected.UpdatedAt, "quota guard must be tested while the timestamp still matches the old snapshot")
+						require.Equal(t, 20+delta, projected.Quota)
 					}
 				}))
 				t.Cleanup(func() { _ = model.DB.Callback().Query().Remove("fund-after-timeout-page") })
@@ -927,6 +932,51 @@ func TestAppliedFinalizeRecoveryCursorSkipsBadPageAndRevisitsRepairs(t *testing.
 	require.EqualValues(t, 70, getUserQuota(t, 717))
 	require.Equal(t, 70, getTokenRemainQuota(t, 718))
 	require.Zero(t, countLogs(t))
+}
+
+func TestSweepRecoveryBudgetReservesOrdinaryTimeouts(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	previous := constant.TaskTimeoutMinutes
+	constant.TaskTimeoutMinutes = 1
+	t.Cleanup(func() { constant.TaskTimeoutMinutes = previous })
+	seedUser(t, 717, 1000)
+	seedToken(t, 718, 717, "synthetic-share-token", 1000)
+	now := time.Now().Unix()
+	private := model.TaskPrivateData{TokenId: 718, BillingSource: model.BillingSettlementSourceWallet, PendingTerminalStatus: model.TaskStatusSuccess, PendingTerminalProgress: "100%", PendingTerminalFinishTime: now}
+	for i := 0; i < 110; i++ {
+		row := &model.Task{TaskID: fmt.Sprintf("applied-share-%d", i), UserId: 717, Quota: 1, SubmitTime: now - 120, Status: model.TaskStatusInProgress, PrivateData: private}
+		require.NoError(t, model.DB.Create(row).Error)
+		if i < 10 {
+			require.NoError(t, model.DB.Model(row).UpdateColumn("private_data", `{"upstream_task_id":42}`).Error)
+		}
+		require.NoError(t, model.DB.Create(&model.BillingSettlement{OperationKey: model.BillingTaskFinalizeOperationKey(row.ID), TaskID: row.ID, UserID: 717, TokenID: 718, Source: model.BillingSettlementSourceWallet, TaskQuota: 1, TaskQuotaTarget: 1, Status: model.BillingSettlementStatusApplied, EffectStatus: model.BillingSettlementEffectApplied, CreatedAt: now, UpdatedAt: now, Revision: 1}).Error)
+	}
+	for i := 0; i < 50; i++ {
+		row := &model.Task{TaskID: fmt.Sprintf("ordinary-share-%d", i), UserId: 717, Quota: 1, SubmitTime: now - 120, Status: model.TaskStatusSubmitted, PrivateData: model.TaskPrivateData{TokenId: 718, BillingSource: model.BillingSettlementSourceWallet, UpstreamTaskID: fmt.Sprintf("provider-%d", i)}}
+		require.NoError(t, model.DB.Create(row).Error)
+	}
+	var before []model.BillingSettlement
+	require.NoError(t, model.DB.Order("id").Find(&before).Error)
+	sweepTimedOutTasks(t.Context())
+	var recovered, timedOut int64
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("task_id LIKE ? AND status = ?", "applied-share-%", model.TaskStatusSuccess).Count(&recovered).Error)
+	require.EqualValues(t, 50, recovered)
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("task_id LIKE ? AND status = ?", "ordinary-share-%", model.TaskStatusFailure).Count(&timedOut).Error)
+	require.EqualValues(t, 50, timedOut)
+	require.EqualValues(t, 1050, getUserQuota(t, 717))
+	require.Equal(t, 1050, getTokenRemainQuota(t, 718))
+	require.Equal(t, 950, getTokenUsedQuota(t, 718))
+	require.EqualValues(t, 50, countLogs(t))
+	sweepTimedOutTasks(t.Context())
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("task_id LIKE ? AND status = ?", "applied-share-%", model.TaskStatusSuccess).Count(&recovered).Error)
+	require.EqualValues(t, 100, recovered)
+	var after []model.BillingSettlement
+	require.NoError(t, model.DB.Where("id <= ?", before[len(before)-1].ID).Order("id").Find(&after).Error)
+	require.Equal(t, before, after, "applied recovery must not replay or rewrite funding")
+	require.EqualValues(t, 1050, getUserQuota(t, 717))
+	require.Equal(t, 1050, getTokenRemainQuota(t, 718))
+	require.EqualValues(t, 50, countLogs(t))
 }
 
 func resetTimedOutTaskSweepCursorForTest(t *testing.T) {

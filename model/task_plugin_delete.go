@@ -48,8 +48,12 @@ func taskPluginIdentity(key, version string) string {
 }
 
 func validateTaskPluginDeletionHead(head TaskPluginCatalogHead, deletions []taskplugin.PackageDeletion) error {
+	return validateTaskPluginDeletionPresence(head, len(deletions) != 0)
+}
+
+func validateTaskPluginDeletionPresence(head TaskPluginCatalogHead, present bool) error {
 	if head.LastDeletionRevision < 0 || head.LastDeletionRevision > head.Revision ||
-		(head.LastDeletionRevision > 0) != (len(deletions) > 0) {
+		(head.LastDeletionRevision > 0) != present {
 		return taskplugin.ErrCatalogInvalid
 	}
 	return nil
@@ -730,12 +734,16 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 // PostgreSQL information_schema can hide existing tables from an unprivileged
 // writer. Only a genuinely absent optional table permits legacy bypass.
 func taskPluginDeletionTableAvailable(tx *gorm.DB) (bool, error) {
-	if tx.Migrator().HasTable(&TaskPluginDeletion{}) {
+	return taskPluginTableAvailable(tx, &TaskPluginDeletion{})
+}
+
+func taskPluginTableAvailable(tx *gorm.DB, target any) (bool, error) {
+	if tx.Migrator().HasTable(target) {
 		return true, nil
 	}
 	if tx.Dialector.Name() == "mysql" {
 		var probe int
-		err := tx.Session(&gorm.Session{NewDB: true}).Model(&TaskPluginDeletion{}).Select("1").Where("1 = 0").Scan(&probe).Error
+		err := tx.Session(&gorm.Session{NewDB: true}).Model(target).Select("1").Where("1 = 0").Scan(&probe).Error
 		if err == nil {
 			return true, nil
 		}
@@ -749,7 +757,7 @@ func taskPluginDeletionTableAvailable(tx *gorm.DB) (bool, error) {
 		return false, nil
 	}
 	statement := &gorm.Statement{DB: tx}
-	if err := statement.Parse(&TaskPluginDeletion{}); err != nil {
+	if err := statement.Parse(target); err != nil {
 		return false, err
 	}
 	var exists bool
