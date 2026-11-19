@@ -455,6 +455,9 @@ func (catalog *Catalog) updateExpected(ctx context.Context, expected *int64, cha
 	}
 	defer catalog.mu.Unlock()
 	if err := catalog.refreshLocked(ctx); err != nil {
+		if ctx.Err() != nil {
+			return errors.Join(ErrCatalogNotCommitted, err, ctx.Err())
+		}
 		return err
 	}
 	if expected != nil && catalog.snapshot.Revision != *expected {

@@ -153,3 +153,62 @@ func TestSubmitFailureClaimReservesSQLiteWriterBeforeReading(t *testing.T) {
 	require.EqualValues(t, -100, records[0].FundingDelta)
 	require.Zero(t, records[0].AppliedFundingDelta)
 }
+
+func TestSubmitFailureClaimHonorsDeadlineWhileWaitingForSQLiteWriters(t *testing.T) {
+	for _, lock := range []string{"process", "database"} {
+		t.Run(lock, func(t *testing.T) {
+			db := deletionDB(t)
+			require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+			var journal string
+			require.NoError(t, db.Raw("PRAGMA journal_mode=WAL").Scan(&journal).Error)
+			require.Equal(t, "wal", strings.ToLower(journal))
+			var location struct{ File string }
+			require.NoError(t, db.Raw("PRAGMA database_list").Scan(&location).Error)
+			previous, oldSQLite := DB, common.UsingSQLite
+			DB, common.UsingSQLite = db, true
+			t.Cleanup(func() { DB, common.UsingSQLite = previous, oldSQLite })
+			row := &Task{TaskID: "bounded-claim", Status: TaskStatusSubmitted, Quota: 100}
+			require.NoError(t, db.Create(row).Error)
+			release := billingSettlementSQLiteWriteMu.Unlock
+			if lock == "process" {
+				billingSettlementSQLiteWriteMu.Lock()
+			} else {
+				other, err := gorm.Open(sqlite.Open(location.File+"?_pragma=busy_timeout(5000)"), &gorm.Config{})
+				require.NoError(t, err)
+				pool, err := other.DB()
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = pool.Close() })
+				writer := other.Begin()
+				require.NoError(t, writer.Error)
+				require.NoError(t, writer.Model(row).UpdateColumn("updated_at", row.UpdatedAt+1).Error)
+				release = func() { _ = writer.Rollback().Error }
+			}
+			finished, released := make(chan struct{}), make(chan struct{})
+			go func() {
+				defer close(released)
+				select {
+				case <-finished:
+				case <-time.After(time.Second):
+				}
+				release()
+			}()
+			defer func() { close(finished); <-released }()
+
+			const deadline = 150 * time.Millisecond
+			ctx, cancel := context.WithTimeout(t.Context(), deadline)
+			defer cancel()
+			start := time.Now()
+			won, err := claimTaskSubmitFailureWithSettlementDB(db.WithContext(ctx), row.ID, "known rejection", nil)
+			require.Error(t, err)
+			require.False(t, won)
+			require.Less(t, time.Since(start), 500*time.Millisecond)
+			var stored Task
+			require.NoError(t, db.First(&stored, row.ID).Error)
+			require.EqualValues(t, TaskStatusSubmitted, stored.Status)
+			require.Equal(t, 100, stored.Quota)
+			var busy int
+			require.NoError(t, db.Raw("PRAGMA busy_timeout").Scan(&busy).Error)
+			require.Equal(t, 5000, busy, "ordinary pool configuration must be preserved")
+		})
+	}
+}

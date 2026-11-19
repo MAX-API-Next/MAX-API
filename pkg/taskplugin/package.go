@@ -24,6 +24,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"unicode/utf8"
@@ -84,14 +85,8 @@ func LoadPackageContext(ctx context.Context, reader io.Reader, expectedSHA256 st
 	// A UTF-8 BOM is permitted only at the start of the JSON document. Hash,
 	// size and persisted identity continue to cover the original upload bytes.
 	jsonData := bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
-	var fields map[string]any
-	if common.Unmarshal(jsonData, &fields) != nil || len(fields) != 3 {
-		return nil, errors.New("unsupported task plugin package fields")
-	}
-	for _, name := range []string{"format_version", "manifest", "source"} {
-		if _, ok := fields[name]; !ok {
-			return nil, errors.New("unsupported task plugin package fields")
-		}
+	if !validPackageFields(jsonData) {
+		return nil, errors.New("unsupported task plugin package fields or repeated JSON member")
 	}
 	var document PackageDocument
 	if err := common.Unmarshal(jsonData, &document); err != nil {
@@ -129,6 +124,51 @@ func LoadPackageContext(ctx context.Context, reader io.Reader, expectedSHA256 st
 		return nil, err
 	}
 	return &Package{manifest: cloneManifest(document.Manifest), source: document.Source, digest: hex.EncodeToString(actual[:]), size: len(data), document: data, formatVersion: document.FormatVersion, program: program}, nil
+}
+
+func validPackageFields(data []byte) bool {
+	decoder := common.NewJSONDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return false
+	}
+	fields, err := readUniquePackageFields(decoder, opening)
+	if err != nil || len(fields) != 3 || !fields["format_version"] || !fields["manifest"] || !fields["source"] {
+		return false
+	}
+	_, err = decoder.Token()
+	return err == io.EOF
+}
+
+func readUniquePackageFields(decoder *json.Decoder, opening json.Token) (map[string]bool, error) {
+	var fields map[string]bool
+	switch opening {
+	case json.Delim('{'):
+		fields = make(map[string]bool)
+	case json.Delim('['):
+	default:
+		return nil, nil
+	}
+	for decoder.More() {
+		if fields != nil {
+			token, err := decoder.Token()
+			key, ok := token.(string)
+			if err != nil || !ok || fields[key] {
+				return nil, errors.New("invalid or repeated package JSON member")
+			}
+			fields[key] = true
+		}
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := readUniquePackageFields(decoder, token); err != nil {
+			return nil, err
+		}
+	}
+	_, err := decoder.Token()
+	return fields, err
 }
 
 func (p *Package) Manifest() Manifest { return cloneManifest(p.manifest) }

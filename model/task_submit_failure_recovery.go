@@ -3,7 +3,10 @@ package model
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -76,6 +79,53 @@ func taskSubmitFailureRecoveryRecord(taskID int64, reason string, input BillingS
 	return record, nil
 }
 
+// A timeout can win before the first paid retry projects its reservation onto
+// a free placeholder. Only the original applied debit identifies that amount.
+func verifyUnprojectedTaskRetryRefund(tx *gorm.DB, requestID string, input BillingSettlementInput) error {
+	var selection BillingPreConsumeSelection
+	if err := tx.Where("request_id = ?", requestID).Take(&selection).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrTaskSubmitRefundIdentityMismatch
+		}
+		return err
+	}
+	if selection.UserID != input.UserID || selection.TokenID != input.TokenID ||
+		selection.Source != input.Source || selection.EffectiveQuota <= 0 || selection.EffectiveQuota != -input.FundingDelta {
+		return ErrTaskSubmitRefundIdentityMismatch
+	}
+	switch input.Source {
+	case BillingSettlementSourceWallet:
+		var debit BillingSettlement
+		if err := tx.Where("operation_key = ?", billingRequestOperationPrefix+requestID+":pre-consume").Take(&debit).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrTaskSubmitRefundIdentityMismatch
+			}
+			return err
+		}
+		if debit.Status == BillingSettlementStatusApplied && debit.Source == input.Source &&
+			debit.PreConsumeRequestID == requestID && debit.UserID == input.UserID && debit.TokenID == input.TokenID &&
+			debit.AppliedFundingDelta == selection.EffectiveQuota && debit.AppliedTokenDelta == -input.TokenDelta &&
+			input.SubscriptionID == 0 && input.SubscriptionPreConsumeRequestID == "" && !input.FinalizeSubscriptionPreConsume {
+			return nil
+		}
+	case BillingSettlementSourceSubscription:
+		var debit SubscriptionPreConsumeRecord
+		if err := tx.Where("request_id = ?", requestID).Take(&debit).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrTaskSubmitRefundIdentityMismatch
+			}
+			return err
+		}
+		if debit.Status == "consumed" && debit.UserId == input.UserID && debit.TokenId == input.TokenID &&
+			debit.UserSubscriptionId == input.SubscriptionID && debit.PreConsumed == selection.EffectiveQuota &&
+			input.SubscriptionPreConsumeRequestID == requestID && input.FinalizeSubscriptionPreConsume &&
+			input.TokenID > 0 && input.TokenDelta == input.FundingDelta {
+			return nil
+		}
+	}
+	return ErrTaskSubmitRefundIdentityMismatch
+}
+
 // RecordTaskSubmitFailureRecovery is a trusted-host seam. It records a definite
 // rejection for later ownership checks; it does not authorize or apply money.
 func RecordTaskSubmitFailureRecovery(taskID int64, reason string, input BillingSettlementInput) error {
@@ -112,6 +162,36 @@ func withoutPendingTaskSubmitFailure(query *gorm.DB) *gorm.DB {
 		Where(clause.Eq{Column: clause.Column{Name: "task_id"}, Value: clause.Column{Table: query.NamingStrategy.TableName("Task"), Name: "id"}}).
 		Where("status = ?", TaskSubmitFailureRecoveryPending)
 	return query.Where("NOT EXISTS (?)", pending)
+}
+
+func withTaskSubmitFailureWriteBudget(db *gorm.DB, write func(*gorm.DB) error) error {
+	ctx := db.Statement.Context
+	if db.Dialector.Name() != "sqlite" || ctx.Done() == nil {
+		return write(db)
+	}
+	// Driver cancellation cannot interrupt SQLite's busy handler. Change
+	// only this pinned connection, then restore its configured handler.
+	return db.Connection(func(conn *gorm.DB) error {
+		pinned := conn.Statement.ConnPool.(*sql.Conn)
+		var original int64
+		if err := pinned.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&original); err != nil {
+			return err
+		}
+		wait := min(original, int64(50))
+		if deadline, ok := ctx.Deadline(); ok {
+			wait = max(0, min(wait, time.Until(deadline).Milliseconds()))
+		}
+		defer func() {
+			if _, err := pinned.ExecContext(context.Background(), fmt.Sprintf("PRAGMA busy_timeout = %d", original)); err != nil {
+				_ = pinned.Raw(func(any) error { return driver.ErrBadConn })
+				common.SysError("failed to restore SQLite timeout after task submission recovery")
+			}
+		}()
+		if _, err := pinned.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout = %d", wait)); err != nil {
+			return err
+		}
+		return write(conn)
+	})
 }
 
 func processPendingTaskSubmitFailures() {
@@ -174,8 +254,11 @@ func updateTaskSubmitFailureRecovery(record TaskSubmitFailureRecovery, status st
 	if status == TaskSubmitFailureRecoveryPending {
 		next = time.Now().Add(time.Duration(1<<min(record.Attempts+1, 6)) * time.Second).Unix()
 	}
-	if err := DB.WithContext(ctx).Model(&TaskSubmitFailureRecovery{}).Where("task_id = ? AND status = ?", record.TaskID, TaskSubmitFailureRecoveryPending).
-		Updates(map[string]any{"status": status, "attempts": gorm.Expr("attempts + 1"), "last_error": message, "next_attempt": next, "updated_at": time.Now().Unix()}).Error; err != nil {
+	err := withTaskSubmitFailureWriteBudget(DB.WithContext(ctx), func(conn *gorm.DB) error {
+		return conn.Model(&TaskSubmitFailureRecovery{}).Where("task_id = ? AND status = ?", record.TaskID, TaskSubmitFailureRecoveryPending).
+			Updates(map[string]any{"status": status, "attempts": gorm.Expr("attempts + 1"), "last_error": message, "next_attempt": next, "updated_at": time.Now().Unix()}).Error
+	})
+	if err != nil {
 		common.SysError("failed to update task submit failure recovery journal")
 	}
 }

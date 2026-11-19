@@ -109,6 +109,33 @@ func TestMidjourneySubmitFailurePreservesFundingOwner(t *testing.T) {
 				} else {
 					require.EqualValues(t, token.RemainQuota, user.Quota)
 				}
+				if outcome == "persist-error" {
+					var recovery model.TaskSubmitFailureRecovery
+					require.NoError(t, db.First(&recovery, "task_id = ?", row.ID).Error)
+					require.Equal(t, model.TaskSubmitFailureRecoveryPending, recovery.Status)
+					require.Equal(t, model.BillingRequestFinalizeOperationKey(info.RequestId), recovery.OperationKey)
+					require.NoError(t, db.Callback().Update().Remove("fail-mj-task-update"))
+					model.ProcessPendingBillingSettlementsOnce()
+					model.ProcessPendingBillingSettlementsOnce()
+					require.NoError(t, db.First(&stored, row.ID).Error)
+					require.EqualValues(t, model.TaskStatusFailure, stored.Status)
+					require.Zero(t, stored.Quota)
+					var applied model.BillingSettlement
+					require.NoError(t, db.Where("operation_key = ?", recovery.OperationKey).First(&applied).Error)
+					require.Equal(t, model.BillingSettlementStatusApplied, applied.Status)
+					require.EqualValues(t, -100, applied.AppliedFundingDelta)
+					require.EqualValues(t, -100, applied.AppliedTokenDelta)
+					require.NoError(t, db.First(&token, info.TokenId).Error)
+					require.EqualValues(t, 1000, token.RemainQuota)
+					require.Zero(t, token.UsedQuota)
+					require.NoError(t, db.First(&user, info.UserId).Error)
+					require.EqualValues(t, 1000, user.Quota)
+					if funding == "subscription_only" {
+						var sub model.UserSubscription
+						require.NoError(t, db.First(&sub, 52004).Error)
+						require.Zero(t, sub.AmountUsed)
+					}
+				}
 			})
 		}
 	}

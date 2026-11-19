@@ -451,6 +451,36 @@ func TestUpdateSunoTasksReturnsErrorForUnsuccessfulResponse(t *testing.T) {
 	require.NotContains(t, err.Error(), "header-secret")
 }
 
+func TestSunoBatchSkipsDuplicateResponsesAfterStaleProgress(t *testing.T) {
+	truncate(t)
+	seedChannel(t, 7201)
+	row := &model.Task{TaskID: "stale-suno", ChannelId: 7201, Status: model.TaskStatusSubmitted, UpdatedAt: 100, Progress: "10%"}
+	neighbor := &model.Task{TaskID: "current-suno", ChannelId: 7201, Status: model.TaskStatusSubmitted, UpdatedAt: 100}
+	require.NoError(t, model.DB.Create(row).Error)
+	require.NoError(t, model.DB.Create(neighbor).Error)
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", row.ID).UpdateColumn("updated_at", 200).Error)
+	require.EqualValues(t, 100, row.UpdatedAt)
+	original := GetTaskAdaptorFunc
+	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor {
+		return &sunoPollingResponseAdaptor{responseBody: `{"code":"success","data":[
+			{"task_id":"stale-suno","status":"IN_PROGRESS","data":{"progress":50}},
+			{"task_id":"stale-suno","status":"SUCCESS","data":{"progress":100}},
+			{"task_id":"current-suno","status":"SUCCESS","data":{"progress":100}}
+		]}`}
+	}
+	t.Cleanup(func() { GetTaskAdaptorFunc = original })
+
+	tasks := map[string]*model.Task{row.TaskID: row, neighbor.TaskID: neighbor}
+	require.NoError(t, updateSunoTasks(t.Context(), 7201, []string{row.TaskID, neighbor.TaskID}, tasks))
+	require.EqualValues(t, model.TaskStatusSubmitted, row.Status)
+	require.Equal(t, "10%", row.Progress)
+	require.EqualValues(t, model.TaskStatusSuccess, neighbor.Status)
+	stored, err := model.GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, model.TaskStatusSubmitted, stored.Status)
+	require.EqualValues(t, 200, stored.UpdatedAt)
+}
+
 func TestTaskNeedsUpdateComparesPersistedFailReasonNormalization(t *testing.T) {
 	t.Run("sanitized equivalent", func(t *testing.T) {
 		rawFailReason := "upstream\r\nfailed\x00" + strings.Repeat("界", common.PersistedLogContentLimit+1)

@@ -3,6 +3,7 @@ package model
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -182,6 +183,7 @@ func TestChannelMapCreatesAreRejected(t *testing.T) {
 			}
 			require.ErrorIs(t, db.Model(&Channel{}).Create(dest).Error, taskplugin.ErrCatalogInvalid)
 			require.ErrorIs(t, db.Table(db.NamingStrategy.TableName("Channel")).Create(dest).Error, taskplugin.ErrCatalogInvalid)
+			require.ErrorIs(t, db.Table(strings.ToUpper(db.NamingStrategy.TableName("Channel"))).Create(dest).Error, taskplugin.ErrCatalogInvalid)
 			var count int64
 			require.NoError(t, db.Model(&Channel{}).Count(&count).Error)
 			require.Zero(t, count)
@@ -190,6 +192,20 @@ func TestChannelMapCreatesAreRejected(t *testing.T) {
 			require.NoError(t, db.Model(channel).Updates(map[string]any{"models": "ordinary-updated"}).Error)
 		})
 	}
+}
+
+func TestTaskMapCreatesAreRejected(t *testing.T) {
+	db := deletionDB(t)
+	row := map[string]any{"task_id": "untyped-task", "private_data": `{"legacy":{"plugin_key":"removed","version":"1.0.0"}}`}
+	for _, table := range []string{"tasks", "TASKS"} {
+		require.ErrorIs(t, db.Table(table).Create(row).Error, taskplugin.ErrCatalogInvalid)
+		require.ErrorIs(t, db.Table(table).Create([]map[string]any{row}).Error, taskplugin.ErrCatalogInvalid)
+	}
+	require.ErrorIs(t, db.Model(&Task{}).Create(row).Error, taskplugin.ErrCatalogInvalid)
+	var count int64
+	require.NoError(t, db.Model(&Task{}).Count(&count).Error)
+	require.Zero(t, count)
+	require.NoError(t, db.Create(&Task{TaskID: "typed-task"}).Error)
 }
 
 func TestTypedChannelUpsertChecksConflictAssignments(t *testing.T) {
@@ -248,8 +264,8 @@ func TestTypedChannelUpsertChecksConflictAssignments(t *testing.T) {
 	}
 }
 
-func TestChannelRejectsEmptyPopulatedReceiptIndex(t *testing.T) {
-	for _, index := range []string{"null", "[]"} {
+func TestChannelRejectsInvalidPopulatedReceiptIndex(t *testing.T) {
+	for _, index := range []string{"null", "[]", `[""]`, `[" catalog-model"]`, `["catalog-model","catalog-model"]`} {
 		t.Run(index, func(t *testing.T) {
 			db := deletionDB(t)
 			catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))

@@ -1318,7 +1318,10 @@ func TestPricingEntryDoesNotSignAnIncompleteAuthority(t *testing.T) {
 func TestPricingReloadFailureReturnsNoIncompleteBaseline(t *testing.T) {
 	_, entry := catalogFixture(t, "stored", "1.0.0", "pricing-reload")
 	entry.Document = []byte("invalid-reload-fixture")
-	authority := &pricingAuthority{plugins: []taskplugin.StoredPackage{entry}}
+	authority := &pricingAuthority{
+		channels: []pricingChannel{{ID: 1, Models: "catalog-model", Status: 1}},
+		plugins:  []taskplugin.StoredPackage{entry},
+	}
 	partial, err := authority.contextsContext(t.Context(), "catalog-model")
 	require.Error(t, err, "simulate a reload failure with a live outer operation context")
 	require.Nil(t, partial)

@@ -17,6 +17,20 @@ import (
 
 const validUploadSource = `export const meta = {apiVersion: 1, key: "custom-upload", name: "Custom", version: "1.0.0", models: ["custom-model"]}; export function buildSubmitRequest(){return {}} export function parseSubmitResponse(){return {}} export function buildQueryRequest(){return {}} export function parseTaskResult(){return {}}`
 
+func TestPinnedPackageRejectsRepeatedJSONMembers(t *testing.T) {
+	for _, prefix := range []string{"", "\xef\xbb\xbf"} {
+		for _, repeated := range []string{
+			`{"format_version":1,"manifest":{"APIVersion":1,"Key":"duplicate","Name":"Duplicate","Version":"1.0.0","Models":["model"]},"source":"first","source":"second"}`,
+			`{"format_version":1,"manifest":{"APIVersion":1,"Key":"duplicate","Name":"First","Name":"Second","Version":"1.0.0","Models":["model"]},"source":"source"}`,
+			`{"format_version":1,"manifest":{"APIVersion":1,"Key":"duplicate","Name":"Duplicate","Version":"1.0.0","Models":["model"],"unknown":[{"x":1,"x":2}]},"source":"source"}`,
+		} {
+			data := []byte(prefix + repeated)
+			_, err := LoadPackage(bytes.NewReader(data), fmt.Sprintf("%x", sha256.Sum256(data)))
+			require.ErrorContains(t, err, "repeated")
+		}
+	}
+}
+
 func TestLoadUploadContextBoundsRawAndEnvelopeMetadata(t *testing.T) {
 	source := "for(;;){};" + validUploadSource
 	document, err := common.Marshal(PackageDocument{FormatVersion: 3, Manifest: validManifest(), Source: source})

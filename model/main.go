@@ -307,7 +307,7 @@ func InitDB() (err error) {
 			db = db.Debug()
 		}
 		DB = db
-		if err := registerTaskPluginChannelCreateGuard(DB); err != nil {
+		if err := registerTaskPluginTypedCreateGuard(DB); err != nil {
 			return err
 		}
 		// MySQL charset/collation startup check: ensure Chinese-capable charset

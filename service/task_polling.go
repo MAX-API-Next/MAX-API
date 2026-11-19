@@ -257,7 +257,8 @@ func sweepTimedOutTasks(ctx context.Context) {
 			task.Status = model.TaskStatusFailure
 			task.Progress = "100%"
 			task.FinishTime = now
-			task.SubmitTimeoutRetainedFunding = !isLegacy && isUnconfirmedSubmit && !hasUpstreamID && task.Quota > 0
+			unprojectedRetry := task.Quota == 0 && task.PrivateData.BillingSource == "" && task.PrivateData.BillingRequestId != ""
+			task.SubmitTimeoutRetainedFunding = !isLegacy && isUnconfirmedSubmit && !hasUpstreamID && (task.Quota > 0 || unprojectedRetry)
 			if isLegacy {
 				task.FailReason = legacyReason
 			} else if isUnconfirmedSubmit {
@@ -420,25 +421,32 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 		)
 	}
 
+	stale := make(map[string]bool)
 	for _, responseItem := range responseItems.Data {
+		if stale[responseItem.TaskID] {
+			continue
+		}
 		task := taskM[responseItem.TaskID]
 		if task == nil {
 			logger.LogWarn(ctx, fmt.Sprintf("Suno task response ignored: unknown task_id=%s", responseItem.TaskID))
 			continue
 		}
-		processSunoTaskResponse(ctx, task, responseItem)
+		if !processSunoTaskResponse(ctx, task, responseItem) {
+			stale[responseItem.TaskID] = true
+		}
 	}
 	return nil
 }
 
-func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem dto.SunoDataResponse) {
+// A failed write makes this snapshot unsuitable for later items in the batch.
+func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem dto.SunoDataResponse) bool {
 	if !taskNeedsUpdate(task, responseItem) {
-		return
+		return true
 	}
 	mergedTask := *task
 	if err := mergedTask.CapturePrivateDataForStatusUpdate(); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("Suno task %s private history cannot be safely rewritten", task.TaskID))
-		return
+		return false
 	}
 	mergedTask.Status = lo.If(model.TaskStatus(responseItem.Status) != "", model.TaskStatus(responseItem.Status)).Else(mergedTask.Status)
 	mergedTask.FailReason = lo.If(responseItem.FailReason != "", common.SanitizePersistedLogContent(responseItem.FailReason)).Else(mergedTask.FailReason)
@@ -459,38 +467,43 @@ func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem
 	pending, settlementErr := taskTerminalSettlementPending(task, providerTerminal)
 	if settlementErr != nil {
 		logger.LogError(ctx, fmt.Sprintf("Suno task %s settlement lookup failed: %v", task.TaskID, settlementErr))
-		return
+		return false
 	}
 	if pending {
-		return
+		return true
 	}
 
 	previousStatus := task.Status
-	*task = mergedTask
 	if isFailure {
-		logger.LogInfo(ctx, task.TaskID+" 构建失败，"+task.FailReason)
+		logger.LogInfo(ctx, mergedTask.TaskID+" 构建失败，"+mergedTask.FailReason)
 	}
 
 	var settlement *model.BillingSettlementInput
 	if isFailure {
-		settlement = BuildTaskRefundSettlementInput(task, task.FailReason)
+		settlement = BuildTaskRefundSettlementInput(&mergedTask, mergedTask.FailReason)
 	}
 	var won bool
 	var err error
 	if settlement != nil {
-		won, err = task.UpdateWithStatusAndSettlement(previousStatus, *settlement)
+		won, err = mergedTask.UpdateWithStatusAndSettlement(previousStatus, *settlement)
 	} else if !providerTerminal {
-		won, err = task.UpdatePollingProgress(previousStatus)
+		won, err = mergedTask.UpdatePollingProgress(previousStatus)
 	} else {
-		won, err = task.UpdateWithStatus(previousStatus)
+		won, err = mergedTask.UpdateWithStatus(previousStatus)
 	}
 	if err != nil {
 		common.SysLog("UpdateSunoTask task error: " + err.Error())
-	} else if !won {
+		return false
+	}
+	if !won {
 		logger.LogWarn(ctx, fmt.Sprintf("Task %s CAS lost or no-op update, skip billing", task.TaskID))
-	} else if settlement != nil {
+		return false
+	}
+	*task = mergedTask
+	if settlement != nil {
 		applyTaskBillingSettlement(ctx, task, settlement)
 	}
+	return true
 }
 
 // taskNeedsUpdate 检查 Suno 任务是否需要更新

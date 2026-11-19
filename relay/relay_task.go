@@ -913,7 +913,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	// realtime fetch may report terminal data to this caller, but must not make
 	// that state durable without the matching refund/final-settlement intent.
 	if !isTerminalTaskStatus(task.Status) && !snap.Equal(task.Snapshot()) {
-		_, _ = task.UpdateWithStatus(snap.Status)
+		_, _ = task.UpdatePollingProgress(snap.Status)
 	}
 
 	// OpenAI Video API 由调用者的 ConvertToOpenAIVideo 分支处理

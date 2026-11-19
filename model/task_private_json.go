@@ -307,14 +307,41 @@ func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 }
 
 func taskPrivateJSONValueEqual(a, b any) bool {
-	x, xIsNumber := a.(json.Number)
-	y, yIsNumber := b.(json.Number)
-	if !xIsNumber || !yIsNumber || x == y {
+	switch x := a.(type) {
+	case json.Number:
+		y, ok := b.(json.Number)
+		if !ok || x == y {
+			return ok
+		}
+		xDigits, xExponent := taskPrivateNumberParts(string(x))
+		yDigits, yExponent := taskPrivateNumberParts(string(y))
+		return xDigits == yDigits && xExponent.Cmp(yExponent) == 0
+	case map[string]any:
+		y, ok := b.(map[string]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for name, value := range x {
+			other, present := y[name]
+			if !present || !taskPrivateJSONValueEqual(value, other) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		y, ok := b.([]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for i := range x {
+			if !taskPrivateJSONValueEqual(x[i], y[i]) {
+				return false
+			}
+		}
+		return true
+	default:
 		return reflect.DeepEqual(a, b)
 	}
-	xDigits, xExponent := taskPrivateNumberParts(string(x))
-	yDigits, yExponent := taskPrivateNumberParts(string(y))
-	return xDigits == yDigits && xExponent.Cmp(yExponent) == 0
 }
 
 // Separate the significand from its base-ten exponent without materializing

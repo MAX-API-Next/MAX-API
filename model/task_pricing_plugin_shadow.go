@@ -2,7 +2,6 @@
 package model
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"slices"
@@ -10,7 +9,6 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
-	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskpricing"
 	"github.com/MAX-API-Next/MAX-API/types"
 )
@@ -54,8 +52,8 @@ func approvedPluginShadow(a *pricingAuthority, request TaskPricingShadowRequest,
 		if !entry.Active || !entry.Enabled || entry.Revoked || entry.Digest != binding.PackageDigest {
 			continue
 		}
-		pkg, err := taskplugin.LoadPackage(bytes.NewReader(entry.Document), entry.Digest)
-		if err != nil {
+		pkg := a.validatedPackages[entry.Digest]
+		if pkg == nil {
 			return rejected()
 		}
 		m := pkg.Manifest()

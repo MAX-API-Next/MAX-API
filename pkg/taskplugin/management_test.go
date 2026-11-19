@@ -670,6 +670,39 @@ func TestRefreshReusesOnlyCurrentlyPublishedIdenticalGeneration(t *testing.T) {
 	}
 }
 
+func TestSuspendedCatalogRevalidatesEvenWhenSnapshotIsIdentical(t *testing.T) {
+	store := &memoryCatalogStore{}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	pkg := testPackage(t, validManifest(), "validated-source")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	catalog.host.state.Store(nil)
+	ctx := &cancelAfterCatalogRead{Context: t.Context()}
+	store.onLoad = func(int) { ctx.armed = true }
+	require.ErrorIs(t, catalog.Refresh(ctx), context.Canceled)
+	require.Nil(t, catalog.host.state.Load())
+	store.onLoad = nil
+	require.NoError(t, catalog.Refresh(t.Context()))
+	_, err = catalog.Host().PricingPackage("POST", "/vendor/v1/jobs", "vendor-model")
+	require.NoError(t, err)
+}
+
+func TestManagementRefreshCancellationCertifiesNoCommit(t *testing.T) {
+	store := &memoryCatalogStore{}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	pkg := testPackage(t, validManifest(), "installed-source")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	previous := cloneCatalogSnapshot(store.snapshot)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	store.onLoad = func(int) { cancel() }
+	err = catalog.MutateExpected(ctx, previous.Revision, ManagementMutation{Action: "disable", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version})
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, ErrCatalogNotCommitted)
+	require.Equal(t, previous, store.snapshot)
+}
+
 type noWriteCASStore struct{ memoryCatalogStore }
 
 func (store *noWriteCASStore) CompareAndSwap(context.Context, int64, []StoredPackage) (int64, error) {

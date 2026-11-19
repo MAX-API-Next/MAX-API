@@ -80,6 +80,8 @@ restored merely because the old snapshot matches.
 
 File uploads preserve a leading UTF-8 BOM and line endings. The server accepts a
 leading BOM in JSON packages while hashing and retaining the original bytes.
+JSON packages require each member name to appear once per object, including
+objects nested inside the manifest.
 Installation and activation require `bom_nodes_ready: true` for these packages,
 including format 1. Upgrade every catalog reader first: previous loaders reject
 the BOM and can suspend their entire Host. The console asks for this readiness
@@ -419,6 +421,10 @@ submission outcome and retains funds, including for H3 or expression-priced
 tasks. A later definite rejection of the same request can claim a marked
 timeout and refund its original reservation, including any retry increase
 already reserved by that request. The task keeps its original completion time.
+A retry from a free group can commit its first paid reservation before the
+placeholder records the new funding source. A confirmed rejection can recover
+that reservation only when the canonical pre-consume receipt and source
+selection agree with the task, request, token and exact refund amount.
 Pre-upgrade timeouts and existing manual settlement records retain their
 reconciliation workflow because their refund ownership cannot be inferred.
 If the database cannot save even the recovery record, use the original task

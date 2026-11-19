@@ -18,7 +18,9 @@ import (
 	"github.com/MAX-API-Next/MAX-API/relay/channel"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/doubao"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/hailuo"
+	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -29,6 +31,46 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/realtime-task.db"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	pool, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pool.Close() })
+	previous := model.DB
+	model.DB = db
+	t.Cleanup(func() { model.DB = previous })
+	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.Channel{}))
+	service.InitHttpClient()
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		_, _ = io.WriteString(w, `{"name":"models/synthetic/operations/one","done":false}`)
+	}))
+	defer provider.Close()
+	baseURL := provider.URL
+	channel := &model.Channel{Type: constant.ChannelTypeGemini, Name: "synthetic", Key: "fixture", BaseURL: &baseURL}
+	require.NoError(t, db.Create(channel).Error)
+	task := &model.Task{TaskID: "realtime-local", ChannelId: channel.Id, Status: model.TaskStatusInProgress,
+		Progress: "10%", Quota: 20, UpdatedAt: 100,
+		PrivateData: model.TaskPrivateData{UpstreamTaskID: taskcommon.EncodeLocalTaskID("models/synthetic/operations/one")}}
+	require.NoError(t, db.Create(task).Error)
+	stale := *task
+	require.NotEmpty(t, tryRealtimeFetch(task, false))
+	progress, err := model.GetTaskPlaceholderByID(task.ID)
+	require.NoError(t, err)
+	require.Equal(t, "50%", progress.Progress)
+	require.Greater(t, progress.UpdatedAt, stale.UpdatedAt)
+	progress.Progress = "80%"
+	won, err := progress.UpdatePollingProgress(progress.Status)
+	require.NoError(t, err)
+	require.True(t, won)
+
+	require.NotEmpty(t, tryRealtimeFetch(&stale, false))
+	stored, err := model.GetTaskPlaceholderByID(stale.ID)
+	require.NoError(t, err)
+	require.Equal(t, "80%", stored.Progress)
+	require.Equal(t, progress.UpdatedAt, stored.UpdatedAt)
+}
 
 func placeholderSnapshotInQuery(tx *gorm.DB) *model.Task {
 	if task, ok := tx.Statement.Dest.(*model.Task); ok {

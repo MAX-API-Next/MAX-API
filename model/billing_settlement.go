@@ -52,8 +52,26 @@ var (
 	// pending record and then racing while upgrading their deferred transaction
 	// to a write transaction. The operation key remains the durable idempotency
 	// boundary for retries from other processes or after a restart.
-	billingSettlementSQLiteWriteMu sync.Mutex
+	billingSettlementSQLiteWriteMu = make(billingSQLiteWriteGate, 1)
 )
+
+type billingSQLiteWriteGate chan struct{}
+
+func (gate billingSQLiteWriteGate) Lock()   { gate <- struct{}{} }
+func (gate billingSQLiteWriteGate) Unlock() { <-gate }
+
+func (gate billingSQLiteWriteGate) lockContext(ctx context.Context) error {
+	select {
+	case gate <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			gate.Unlock()
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 type permanentBillingSettlementError struct {
 	err error

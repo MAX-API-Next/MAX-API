@@ -70,3 +70,20 @@ func TestTaskPrivateFactMapExactNumericEquality(t *testing.T) {
 		require.Error(t, private.Scan(raw), raw)
 	}
 }
+
+func TestTaskPrivateDuplicateContainersUseExactNumericEquality(t *testing.T) {
+	for _, raw := range []string{
+		`{"billing_context":{"other_ratios":{"duration":1}},"Billing_Context":{"other_ratios":{"duration":1.0}}}`,
+		`{"history":[{"ratio":1e0}],"history":[{"ratio":1.00}]}`,
+	} {
+		var private TaskPrivateData
+		require.NoError(t, private.Scan(raw), raw)
+	}
+	for _, raw := range []string{
+		`{"history":[{"ratio":9007199254740992}],"history":[{"ratio":9007199254740993}]}`,
+		`{"history":[{"ratio":1}],"history":[{"Ratio":1}]}`,
+	} {
+		var private TaskPrivateData
+		require.Error(t, private.Scan(raw), raw)
+	}
+}

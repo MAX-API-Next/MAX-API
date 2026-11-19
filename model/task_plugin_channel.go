@@ -18,12 +18,25 @@ type channelEmittedReferences struct{ models, mapping *string }
 
 const channelBatchReferenceCheck = "max:channel_batch_reference_check"
 
-// GORM skips model hooks for map creates. Install this on the application
-// handle before channel writes; map updates continue to use model hooks.
-func registerTaskPluginChannelCreateGuard(db *gorm.DB) error {
+// GORM skips model hooks for map creates, so reference-bearing rows must be
+// inserted through their typed models.
+func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 	channelTable := db.NamingStrategy.TableName("Channel")
-	return db.Callback().Create().Before("gorm:before_create").Register("max:channel_typed_create", func(tx *gorm.DB) {
-		if tx.Statement.SkipHooks || tx.Statement.Table != channelTable {
+	taskTable := db.NamingStrategy.TableName("Task")
+	isSQLite := db.Dialector.Name() == "sqlite"
+	if isSQLite {
+		channelTable = sqliteTaskPluginTableName(channelTable)
+		taskTable = sqliteTaskPluginTableName(taskTable)
+	}
+	return db.Callback().Create().Before("gorm:before_create").Register("max:task_plugin_typed_create", func(tx *gorm.DB) {
+		if tx.Statement.SkipHooks {
+			return
+		}
+		table := tx.Statement.Table
+		if isSQLite {
+			table = sqliteTaskPluginTableName(table)
+		}
+		if table != channelTable && table != taskTable {
 			return
 		}
 		value := reflect.ValueOf(tx.Statement.Dest)
@@ -44,6 +57,15 @@ func registerTaskPluginChannelCreateGuard(db *gorm.DB) error {
 			tx.AddError(taskplugin.ErrCatalogInvalid)
 		}
 	})
+}
+
+func sqliteTaskPluginTableName(table string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + ('a' - 'A')
+		}
+		return r
+	}, table)
 }
 
 func (channel *Channel) BeforeSave(tx *gorm.DB) error {
@@ -196,10 +218,14 @@ func validateChannelReferenceSet(tx *gorm.DB, updates []channelEmittedReferences
 			continue
 		} // Legacy receipts predate model-name protection; see management upgrade guide.
 		var names []string
-		if len(receipt.Models) > maxTaskPluginModelIndexBytes || common.UnmarshalJsonStr(string(receipt.Models), &names) != nil || len(names) == 0 {
+		if len(receipt.Models) > maxTaskPluginModelIndexBytes || common.UnmarshalJsonStr(string(receipt.Models), &names) != nil {
 			return taskplugin.ErrCatalogInvalid
 		}
-		for _, name := range names {
+		modelNames, err := taskplugin.ValidateModelNames(names)
+		if err != nil {
+			return taskplugin.ErrCatalogInvalid
+		}
+		for name := range modelNames {
 			if references[name] {
 				deletedModels[name] = true
 			}

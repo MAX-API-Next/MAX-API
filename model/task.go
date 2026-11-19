@@ -1254,11 +1254,13 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 	}
 	reason = common.SanitizePersistedLogContent(reason)
 	if common.UsingSQLite {
-		billingSettlementSQLiteWriteMu.Lock()
+		if err := billingSettlementSQLiteWriteMu.lockContext(db.Statement.Context); err != nil {
+			return false, err
+		}
 		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 	won := false
-	err := db.Transaction(func(tx *gorm.DB) error {
+	claim := func(tx *gorm.DB) error {
 		if tx.Dialector.Name() == "sqlite" {
 			// Reserve the WAL writer before any read establishes a snapshot.
 			// This keeps unrelated commits from making the terminal claim lose
@@ -1271,8 +1273,10 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 		if err := withRowLock(tx).First(&task, taskID).Error; err != nil {
 			return err
 		}
+		unprojectedRetry := task.PrivateData.AwaitingUpstreamID &&
+			task.Quota == 0 && task.PrivateData.BillingSource == "" && task.PrivateData.SubscriptionId == 0
 		lateRejection := task.Status == TaskStatusFailure && task.SubmitTimeoutRetainedFunding &&
-			task.PrivateData.AwaitingUpstreamID && task.Quota > 0 && input != nil
+			task.PrivateData.AwaitingUpstreamID && (task.Quota > 0 || unprojectedRetry) && input != nil
 		if task.Status == TaskStatusSuccess || task.Status == TaskStatusFailure && !lateRejection || task.PrivateData.UpstreamTaskID != "" {
 			return nil
 		}
@@ -1280,15 +1284,22 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 			if err := validateBillingSettlementInput(*input); err != nil {
 				return err
 			}
-			if input.UserID != task.UserId || input.Source != task.PrivateData.BillingSource || input.TokenID != task.PrivateData.TokenId ||
-				input.SubscriptionID != task.PrivateData.SubscriptionId || task.PrivateData.BillingRequestId == "" ||
+			if input.UserID != task.UserId || input.TokenID != task.PrivateData.TokenId || task.PrivateData.BillingRequestId == "" ||
 				input.OperationKey != BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId) || input.TaskID != 0 && input.TaskID != taskID {
 				return ErrTaskSubmitRefundIdentityMismatch
 			}
+			if !unprojectedRetry && (input.Source != task.PrivateData.BillingSource || input.SubscriptionID != task.PrivateData.SubscriptionId) {
+				return ErrTaskSubmitRefundIdentityMismatch
+			}
 		}
-		if lateRejection {
+		if lateRejection || unprojectedRetry && input != nil {
 			if _, err := taskSubmitFailureRecoveryRecord(taskID, reason, *input); err != nil {
 				return err
+			}
+			if unprojectedRetry {
+				if err := verifyUnprojectedTaskRetryRefund(tx, task.PrivateData.BillingRequestId, *input); err != nil {
+					return err
+				}
 			}
 		}
 		finalize := tx.Session(&gorm.Session{NewDB: true}).Model(&BillingSettlement{}).Select("1").Where("operation_key = ?", BillingTaskFinalizeOperationKey(taskID))
@@ -1300,6 +1311,9 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 			result = query.Where("status = ? AND submit_timeout_retained_funding = ? AND quota = ?", TaskStatusFailure, true, task.Quota).
 				Updates(map[string]interface{}{"quota": 0, "submit_timeout_retained_funding": false, "fail_reason": reason})
 		} else {
+			if unprojectedRetry && input != nil {
+				query = query.Where("quota = ?", 0)
+			}
 			result = query.Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).Updates(map[string]interface{}{
 				"status":      TaskStatusFailure,
 				"progress":    "100%",
@@ -1319,6 +1333,9 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 			}
 		}
 		return nil
+	}
+	err := withTaskSubmitFailureWriteBudget(db, func(conn *gorm.DB) error {
+		return conn.Transaction(claim)
 	})
 	return won && err == nil, err
 }
