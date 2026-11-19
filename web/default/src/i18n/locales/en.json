@@ -6,6 +6,7 @@
     "Select an available source to quote. Preview-only plugins support configuration samples; paid task admission remains separate.": "Select an available source to quote. Preview-only plugins support configuration samples; paid task admission remains separate.",
     "The mutation result is unknown. The write was not retried. Rereading the catalog cannot prove the earlier request failed or finished.": "The mutation result is unknown. The write was not retried. Rereading the catalog cannot prove the earlier request failed or finished.",
     "Task Plugins": "API Extensions",
+    "API Extensions": "API Extensions",
     "Plugin": "Plugin",
     "Execution not ready": "Execution not ready",
     "Revoked": "Revoked",

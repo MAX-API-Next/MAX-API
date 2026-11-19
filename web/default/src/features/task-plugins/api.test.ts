@@ -255,3 +255,30 @@ test('only explicit not-committed 503 responses reject a mutation safely', async
     (e) => e instanceof PluginError && e.kind === 'read'
   )
 })
+
+test('known no-commit code maps to an established translated recovery instruction', async () => {
+  respond(
+    {
+      success: false,
+      code: 'catalog_operation_not_committed',
+      committed: false,
+      message:
+        'Task plugin catalog mutation stopped before commit; refresh and retry',
+    },
+    503
+  )
+  await assert.rejects(
+    () =>
+      taskPluginAPI.mutate({
+        action: 'disable',
+        key: 'kling',
+        version: '1.2.0',
+        expected_revision: '4',
+      }),
+    (e) =>
+      e instanceof PluginError &&
+      e.kind === 'rejected' &&
+      e.message ===
+        'Task plugin catalog unavailable; reread before another mutation'
+  )
+})

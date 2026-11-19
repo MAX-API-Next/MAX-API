@@ -468,12 +468,13 @@ func visitTaskPluginReferencePath(value any, path []string, visit func(taskPlugi
 		if keyConflict || digestConflict || selectionConflict {
 			return visit(taskPluginReferenceIdentity{ambiguous: true})
 		}
-		boundVersion, _, versionConflict := taskPluginReferenceString(v, "version")
+		boundVersion, hasVersion, versionConflict := taskPluginReferenceString(v, "version")
 		explicit, ok, explicitConflict := taskPluginReferenceString(v, "plugin_version")
-		if ok {
+		conflictingVersions := ok && hasVersion && boundVersion != explicit
+		if ok && !conflictingVersions {
 			boundVersion = explicit
 		}
-		if versionConflict || explicitConflict {
+		if versionConflict || explicitConflict || conflictingVersions {
 			boundVersion = "" // Ambiguity cannot establish a version pin.
 		}
 		if digest != "" && visit(taskPluginReferenceIdentity{digest: digest}) {

@@ -197,6 +197,11 @@ application DB initializer rejects map and slice-of-map channel creates, because
 GORM skips model hooks for those destinations. Use typed `Channel` creates;
 upgrade every writer before relying on this guard. Custom DB handles must install
 the same guard; raw SQL and explicit `SkipHooks` writes remain unsupported.
+Typed upserts also validate explicit `models` and `model_mapping` conflict
+assignments. Literal strings are supported; dynamic SQL assignments to these
+protected columns are rejected because their resulting references cannot be
+certified. Metadata-only conflict updates and ordinary typed `UpdateAll` remain
+supported using their already-validated inserted values.
 Deletion receipts now
 include a source-free JSON index of declared models (`models`: LONGTEXT on MySQL,
 TEXT on SQLite/PostgreSQL); migrate
@@ -364,6 +369,7 @@ healthy neighbors with the same SQL filtering, pagination and user/channel
 visibility rules. Unreadable rows retain their public history fields and their
 place in the page, with empty private data and no derived result URL. Count
 endpoints continue to count stored rows; the list does not rewrite or repair them.
+Public task-ID batch fetches use the same tolerant projection and user scope.
 Single-task reads used for billing remain strict. Workers also retain whether
 quota was SQL NULL or an explicit zero: timeout/manual CAS uses `IS NULL` or an
 exact value match accordingly, without normalizing stored data or inferring a
@@ -373,3 +379,7 @@ manual-settlement guard includes the observed quota so a changed
 reservation rolls back its stale manual intent.
 After a worker claim writes a numeric timestamp, the returned snapshot clears
 its NULL marker so that an immediate manual decision can match its own claim.
+Retry placeholder rewrites now advance the database timestamp version atomically
+with their metadata, even within one Unix second. Overflow or failed version
+readback rolls back the rewrite; missing or terminal tasks are not recreated.
+This prevents a timeout/manual decision from overwriting a newer retry's plan.

@@ -6,6 +6,7 @@
     "Select an available source to quote. Preview-only plugins support configuration samples; paid task admission remains separate.": "利用可能な提供元を選択して料金を計算してください。プレビュー専用プラグインは設定サンプルに対応しますが、有料タスクの受付には別途検証が必要です。",
     "The mutation result is unknown. The write was not retried. Rereading the catalog cannot prove the earlier request failed or finished.": "操作結果が不明です。書き込みは再試行していません。カタログを再読込しても、前の要求の失敗や完了は証明できません。",
     "Task Plugins": "API 拡張",
+    "API Extensions": "API 拡張",
     "Plugin": "プラグイン",
     "Execution not ready": "実行準備未完了",
     "Revoked": "失効済み",

@@ -10,6 +10,73 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestPlaceholderRewriteMakesStaleManualDecisionLose(t *testing.T) {
+	truncateTables(t)
+	previous := DB
+	const fixed int64 = 1700000000
+	DB = DB.Session(&gorm.Session{NowFunc: func() time.Time { return time.Unix(fixed, 0) }})
+	t.Cleanup(func() { DB = previous })
+	row := &Task{TaskID: "same-second-retry", Status: TaskStatusSubmitted, Quota: 20, UpdatedAt: fixed, ChannelId: 1, PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: "original"}}
+	insertTask(t, row)
+	for _, request := range []string{"retry-one", "retry-two"} {
+		var observed, retry Task
+		require.NoError(t, DB.First(&observed, row.ID).Error)
+		retry = observed
+		retry.ChannelId++
+		retry.PrivateData.BillingRequestId = request
+		require.NoError(t, retry.RewritePlaceholder(), "exercise the actual placeholder rewrite method used by ensureTaskPlaceholder")
+		input := BillingSettlementInput{OperationKey: BillingTaskFinalizeOperationKey(row.ID), Source: BillingSettlementSourceWallet, UserID: 1, TaskID: row.ID, TaskQuota: 20, TaskQuotaTarget: 20}
+		won, err := observed.UpdateWithStatusAndManualSettlement(TaskStatusSubmitted, observed.UpdatedAt, input, "old plan needs review")
+		require.NoError(t, err)
+		require.False(t, won, "a rewrite within the same Unix second must invalidate the old manual decision")
+		var fresh Task
+		require.NoError(t, DB.First(&fresh, row.ID).Error)
+		require.Greater(t, fresh.UpdatedAt, observed.UpdatedAt)
+		require.Equal(t, retry.UpdatedAt, fresh.UpdatedAt)
+		require.Equal(t, request, fresh.PrivateData.BillingRequestId)
+		require.Equal(t, retry.ChannelId, fresh.ChannelId)
+		var count int64
+		require.NoError(t, DB.Model(&BillingSettlement{}).Count(&count).Error)
+		require.Zero(t, count)
+	}
+}
+
+func TestPlaceholderRewriteRollsBackWithoutPublishedVersion(t *testing.T) {
+	for _, mode := range []string{"overflow", "readback-failure"} {
+		t.Run(mode, func(t *testing.T) {
+			truncateTables(t)
+			row := &Task{TaskID: mode, Status: TaskStatusSubmitted, Quota: 20, UpdatedAt: 100, PrivateData: TaskPrivateData{BillingRequestId: "original"}}
+			insertTask(t, row)
+			version := int64(1<<63 - 1)
+			if mode == "readback-failure" {
+				version = time.Now().Unix() + 1000
+			}
+			require.NoError(t, DB.Model(&Task{}).Where("id = ?", row.ID).UpdateColumn("updated_at", version).Error)
+			originalCallerVersion := row.UpdatedAt
+			row.PrivateData.BillingRequestId = "retry"
+			reached := false
+			if mode == "readback-failure" {
+				require.NoError(t, DB.Callback().Query().Before("gorm:query").Register("fail-rewrite-version-read", func(tx *gorm.DB) {
+					if tx.Statement.Table == "tasks" && len(tx.Statement.Selects) == 1 && tx.Statement.Selects[0] == "updated_at" {
+						reached = true
+						tx.AddError(errors.New("synthetic rewrite version read failure"))
+					}
+				}))
+				t.Cleanup(func() { _ = DB.Callback().Query().Remove("fail-rewrite-version-read") })
+			}
+			require.Error(t, row.RewritePlaceholder())
+			if mode == "readback-failure" {
+				require.True(t, reached)
+			}
+			var fresh Task
+			require.NoError(t, DB.First(&fresh, row.ID).Error)
+			require.Equal(t, "original", fresh.PrivateData.BillingRequestId)
+			require.Equal(t, version, fresh.UpdatedAt)
+			require.Equal(t, originalCallerVersion, row.UpdatedAt)
+		})
+	}
+}
+
 func TestManualSettlementRejectsChangedQuotaSnapshot(t *testing.T) {
 	truncateTables(t)
 	row := &Task{TaskID: "manual-quota-snapshot", Status: TaskStatusSubmitted, Quota: 20}

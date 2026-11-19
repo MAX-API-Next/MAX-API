@@ -9,6 +9,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func TestChannelSettingsRepairDoesNotRewriteMalformedMapping(t *testing.T) {
@@ -152,6 +153,52 @@ func TestChannelMapCreatesAreRejected(t *testing.T) {
 			channel := &Channel{Name: "typed", Models: "ordinary"}
 			require.NoError(t, db.Create(channel).Error)
 			require.NoError(t, db.Model(channel).Updates(map[string]any{"models": "ordinary-updated"}).Error)
+		})
+	}
+}
+
+func TestTypedChannelUpsertChecksConflictAssignments(t *testing.T) {
+	for _, kind := range []string{"models", "model_mapping", "expression", "metadata", "update-all", "reused-update-all"} {
+		t.Run(kind, func(t *testing.T) {
+			db := deletionDB(t)
+			catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+			require.NoError(t, err)
+			pkg, _ := catalogFixture(t, "stored", "1.0.0", "upsert-reference")
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			require.NoError(t, catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"}))
+			original := &Channel{Name: "original", Models: "ordinary"}
+			require.NoError(t, db.Create(original).Error)
+			values := map[string]any{"name": "renamed"}
+			switch kind {
+			case "models":
+				values["models"] = "catalog-model"
+			case "model_mapping":
+				values["model_mapping"] = `{"alias":"catalog-model"}`
+			case "expression":
+				values["models"] = gorm.Expr("?", "catalog-model")
+			}
+			conflict := clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.Assignments(values)}
+			if kind == "update-all" || kind == "reused-update-all" {
+				conflict = clause.OnConflict{UpdateAll: true}
+			}
+			query := db.Clauses(conflict)
+			err = query.Create(&Channel{Id: original.Id, Name: "typed", Models: "ordinary"}).Error
+			if kind == "reused-update-all" {
+				require.NoError(t, err)
+				err = query.Create(&Channel{Id: original.Id, Name: "typed-again", Models: "ordinary"}).Error
+			}
+			switch kind {
+			case "models", "model_mapping":
+				require.ErrorIs(t, err, taskplugin.ErrBindingRejected)
+			case "expression":
+				require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+			default:
+				require.NoError(t, err)
+			}
+			var fresh Channel
+			require.NoError(t, db.First(&fresh, original.Id).Error)
+			require.Equal(t, "ordinary", fresh.Models)
+			require.Nil(t, fresh.ModelMapping)
 		})
 	}
 }

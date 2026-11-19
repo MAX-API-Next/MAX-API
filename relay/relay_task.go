@@ -90,7 +90,7 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 		task.PrivateData.AwaitingUpstreamID = true
 		task.Quota = preConsumedQuota
 		populateTaskBillingMetadata(&task, info)
-		if err := task.Update(); err != nil {
+		if err := task.RewritePlaceholder(); err != nil {
 			return nil, TaskPersistenceError(err, "update_persisted_task_failed", "failed to update persisted task")
 		}
 		return &task, nil

@@ -294,6 +294,9 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		var after TaskPluginCatalogHead
 		err = tx.First(&after, 1).Error
 		if err != nil && ctx.Err() != nil {
+			if validateTaskPluginDeletionHead(head, deletions) != nil {
+				return errors.Join(taskplugin.ErrCatalogConflict, ctx.Err())
+			}
 			return err // An interrupted reread did not establish a conflicting head.
 		}
 		// Under READ COMMITTED, reject a mixed snapshot. MySQL's consistent

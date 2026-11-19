@@ -171,11 +171,16 @@ async function request<T>(
       const status = error.response?.status
       const message: unknown = error.response?.data?.message
       const kind = classifyRequestError(status, write, error.response?.data)
-      throw requestError(
-        kind,
-        error.response?.data,
-        typeof message === 'string' ? message : 'Task plugin request failed'
-      )
+      const knownNoCommit =
+        kind === 'rejected' &&
+        status === 503 &&
+        error.response?.data?.code === 'catalog_operation_not_committed'
+      let fallback = 'Task plugin request failed'
+      if (knownNoCommit)
+        fallback =
+          'Task plugin catalog unavailable; reread before another mutation'
+      else if (typeof message === 'string') fallback = message
+      throw requestError(kind, error.response?.data, fallback)
     }
     throw new PluginError(
       write ? 'unknown' : 'read',

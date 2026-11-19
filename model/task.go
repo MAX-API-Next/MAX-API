@@ -632,14 +632,13 @@ func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
 	if len(taskIds) == 0 {
 		return nil, nil
 	}
-	var task []*Task
-	var err error
-	err = DB.Where("user_id = ? and task_id in (?)", userId, taskIds).
-		Find(&task).Error
+	var rows []taskWorkerRow
+	err := DB.Model(&Task{}).Where("user_id = ? and task_id in (?)", userId, taskIds).
+		Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	return task, nil
+	return decodeTaskListRows(rows), nil
 }
 
 func (Task *Task) Insert() error {
@@ -726,10 +725,49 @@ func (t *Task) submitResultUpdateValues() map[string]interface{} {
 	return values
 }
 
-func (Task *Task) Update() error {
+func (t *Task) Update() error {
 	return DB.Transaction(func(tx *gorm.DB) error {
-		return tx.Save(Task).Error
+		return tx.Save(t).Error
 	})
+}
+
+// RewritePlaceholder rewrites a persisted placeholder and advances its version from the
+// database even when retries happen in the same second or use an older caller.
+func (t *Task) RewritePlaceholder() error {
+	if t == nil || t.ID <= 0 {
+		return errors.New("persisted task is required")
+	}
+	var updatedAt int64
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		// Keep the current DB version until the metadata write owns the row lock.
+		// Omitting it also prevents GORM's wall-time auto-update from regressing it.
+		result := tx.Model(t).Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+			Select("*").Omit("updated_at").Updates(t)
+		if result.Error != nil {
+			return result.Error
+		}
+		now := time.Now().Unix()
+		result = tx.Model(&Task{}).Where("id = ? AND status NOT IN ?", t.ID, []string{TaskStatusFailure, TaskStatusSuccess}).
+			Where("updated_at IS NULL OR updated_at < ?", int64(1<<63-1)).
+			UpdateColumn("updated_at", gorm.Expr("CASE WHEN updated_at IS NULL OR updated_at < ? THEN ? ELSE updated_at + 1 END", now, now))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return taskSubmitResultUpdateMissError(tx, t.ID)
+		}
+		var persisted struct{ UpdatedAt int64 }
+		if err := tx.Model(&Task{}).Select("updated_at").Where("id = ?", t.ID).Take(&persisted).Error; err != nil {
+			return err
+		}
+		updatedAt = persisted.UpdatedAt
+		return nil
+	})
+	if err == nil {
+		t.UpdatedAt = updatedAt
+		t.updatedAtWasNull = false
+	}
+	return err
 }
 
 func (t *Task) UpdateQuota() error {

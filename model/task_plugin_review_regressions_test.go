@@ -1891,7 +1891,7 @@ type cancelPricingTraversal struct {
 
 func (ctx *cancelPricingTraversal) Err() error {
 	ctx.checks++
-	if ctx.checks == 2 {
+	if ctx.checks == 3 {
 		ctx.cancel()
 	}
 	return ctx.Context.Err()
@@ -1899,17 +1899,18 @@ func (ctx *cancelPricingTraversal) Err() error {
 
 func TestPricingContextTraversalReturnsNoPartialResultOnCancel(t *testing.T) {
 	pkg, entry := catalogFixture(t, "stored", "1.0.0", "cached-pricing")
+	other, otherEntry := catalogFixture(t, "other", "1.0.0", "other-cached-pricing")
 	for _, kind := range []string{"channels", "cached-plugins"} {
 		t.Run(kind, func(t *testing.T) {
-			authority := &pricingAuthority{validatedPackages: map[string]*taskplugin.Package{pkg.Digest(): pkg}}
+			authority := &pricingAuthority{validatedPackages: map[string]*taskplugin.Package{pkg.Digest(): pkg, other.Digest(): other}}
 			if kind == "channels" {
 				authority.channels = []pricingChannel{{ID: 1, Models: "catalog-model"}, {ID: 2, Models: "catalog-model"}}
 			} else {
-				authority.plugins = []taskplugin.StoredPackage{entry}
+				authority.plugins = []taskplugin.StoredPackage{entry, otherEntry}
 			}
 			ordinary, err := authority.contextsContext(t.Context(), "catalog-model")
 			require.NoError(t, err)
-			require.NotEmpty(t, ordinary)
+			require.Len(t, ordinary, 2)
 			inner, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			ctx := &cancelPricingTraversal{Context: inner, cancel: cancel}
@@ -1917,6 +1918,64 @@ func TestPricingContextTraversalReturnsNoPartialResultOnCancel(t *testing.T) {
 			require.ErrorIs(t, err, context.Canceled)
 			require.Nil(t, partial)
 		})
+	}
+}
+
+func TestInterruptedCatalogRereadRetainsConflictingReceiptEvidence(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	pkg, _ := catalogFixture(t, "stored", "1.0.0", "mixed-receipt")
+	catalog, err := taskplugin.OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	actor := taskplugin.Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "mixed-receipt"}
+	binding, err := catalog.Host().Bind(actor, "GET", "/stored/one", "catalog-model", taskusage.MiniMaxH3Contract())
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	reads, injected := 0, false
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register("inject-committed-receipt", func(tx *gorm.DB) {
+		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginDeletion") && tx.Error == nil {
+			rows, ok := tx.Statement.Dest.(*[]TaskPluginDeletion)
+			require.True(t, ok)
+			*rows = []TaskPluginDeletion{{Identity: taskPluginIdentity("stored", "1.0.0"), PluginKey: "stored", Version: "1.0.0", Digest: pkg.Digest()}}
+			tx.RowsAffected = 1
+			injected = true
+		}
+	}))
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("interrupt-second-head", func(tx *gorm.DB) {
+		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginCatalogHead") {
+			reads++
+			if reads == 2 {
+				cancel()
+			}
+		}
+	}))
+	candidate, _ := catalogFixture(t, "candidate", "1.0.0", "candidate")
+	err = catalog.ValidateInstall(ctx, candidate)
+	require.True(t, injected)
+	require.Equal(t, 2, reads)
+	require.ErrorIs(t, err, taskplugin.ErrCatalogUnavailable)
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = catalog.Host().Resolve(binding, actor)
+	require.Error(t, err, "mixed receipt evidence must suspend the old Host")
+}
+
+func TestConflictingLegacyVersionsRemainKeyOnlyReferences(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	_, first := catalogFixture(t, "stored", "1.0.0", "first-version")
+	_, second := catalogFixture(t, "stored", "2.0.0", "second-version")
+	first.Active = false
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{first, second})
+	require.NoError(t, err)
+	row := &Task{TaskID: "conflicting-legacy-versions"}
+	require.NoError(t, db.Create(row).Error)
+	raw := `{"history":{"plugin_key":"stored","version":"1.0.0","plugin_version":"2.0.0"}}`
+	require.NoError(t, db.Model(row).Updates(map[string]any{"private_data": raw}).Error)
+	for _, version := range []string{"1.0.0", "2.0.0"} {
+		_, err = store.DeleteVersion(t.Context(), 1, "stored", version)
+		require.ErrorIs(t, err, taskplugin.ErrCatalogInUse)
 	}
 }
 

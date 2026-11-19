@@ -6,6 +6,7 @@
     "Select an available source to quote. Preview-only plugins support configuration samples; paid task admission remains separate.": "选择可用来源进行报价。仅预览插件支持配置样本；付费任务准入需另行验证。",
     "The mutation result is unknown. The write was not retried. Rereading the catalog cannot prove the earlier request failed or finished.": "操作结果未知，未重试写入。重新读取目录也不能证明此前请求已失败或已结束。",
     "Task Plugins": "接口扩展",
+    "API Extensions": "接口扩展",
     "Plugin": "插件",
     "Execution not ready": "执行未就绪",
     "Revoked": "已撤销",

@@ -44,9 +44,25 @@ func TestTaskListsIsolateUnreadableMetadataAndKeepScope(t *testing.T) {
 			require.Len(t, filtered, 1)
 			require.Equal(t, healthy.ID, filtered[0].ID)
 			require.Len(t, TaskGetAllUserTask(11, 1, 1, SyncTaskQueryParams{}), 1, "pagination still happens in SQL before decoding")
+			dispatchedIDs := []int64{}
 			for _, dispatched := range GetAllUnFinishSyncTasks(10) {
+				dispatchedIDs = append(dispatchedIDs, dispatched.ID)
 				require.NotEqual(t, bad.ID, dispatched.ID, "list visibility must not dispatch unreadable private data")
 			}
+			require.Contains(t, dispatchedIDs, healthy.ID, "healthy neighbors must actually be dispatched")
+			batch, err := GetByTaskIds(11, []any{healthy.TaskID, bad.TaskID, foreign.TaskID})
+			require.NoError(t, err)
+			require.Len(t, batch, 2)
+			ids := []int64{}
+			for _, item := range batch {
+				ids = append(ids, item.ID)
+				if item.ID == bad.ID {
+					require.True(t, item.PrivateDataUnreadable())
+					require.Empty(t, item.GetResultURL())
+				}
+			}
+			require.Contains(t, ids, healthy.ID)
+			require.Contains(t, ids, bad.ID)
 			var strict Task
 			require.Error(t, DB.First(&strict, bad.ID).Error, "single-task financial reads remain strict")
 		})

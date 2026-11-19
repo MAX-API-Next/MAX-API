@@ -6,6 +6,7 @@
     "Select an available source to quote. Preview-only plugins support configuration samples; paid task admission remains separate.": "Chọn nguồn khả dụng để tính giá. Plugin chỉ xem trước hỗ trợ mẫu cấu hình; việc tiếp nhận tác vụ trả phí được xác minh riêng.",
     "The mutation result is unknown. The write was not retried. Rereading the catalog cannot prove the earlier request failed or finished.": "Chưa rõ kết quả. Không thử ghi lại. Đọc lại danh mục không chứng minh yêu cầu trước đã thất bại hay kết thúc.",
     "Task Plugins": "Tiện ích mở rộng API",
+    "API Extensions": "Tiện ích mở rộng API",
     "Plugin": "Plugin",
     "Execution not ready": "Chưa sẵn sàng thực thi",
     "Revoked": "Đã thu hồi",

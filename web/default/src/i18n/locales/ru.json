@@ -6,6 +6,7 @@
     "Select an available source to quote. Preview-only plugins support configuration samples; paid task admission remains separate.": "Выберите доступный источник для расчёта цены. Плагины только для предпросмотра поддерживают примеры конфигурации; допуск платных задач проверяется отдельно.",
     "The mutation result is unknown. The write was not retried. Rereading the catalog cannot prove the earlier request failed or finished.": "Результат неизвестен. Повторной записи не было. Перечитывание каталога не доказывает сбой или завершение предыдущего запроса.",
     "Task Plugins": "Расширения API",
+    "API Extensions": "Расширения API",
     "Plugin": "Плагин",
     "Execution not ready": "Выполнение недоступно",
     "Revoked": "Отозвано",

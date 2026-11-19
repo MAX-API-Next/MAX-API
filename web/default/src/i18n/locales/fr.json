@@ -6,6 +6,7 @@
     "Select an available source to quote. Preview-only plugins support configuration samples; paid task admission remains separate.": "Sélectionnez une source disponible pour calculer un devis. Les plugins limités à l’aperçu permettent des exemples de configuration ; l’acceptation des tâches payantes reste distincte.",
     "The mutation result is unknown. The write was not retried. Rereading the catalog cannot prove the earlier request failed or finished.": "Le résultat est inconnu. L’écriture n’a pas été répétée. Relire le catalogue ne prouve ni l’échec ni la fin de la requête précédente.",
     "Task Plugins": "Extensions d’API",
+    "API Extensions": "Extensions d’API",
     "Plugin": "Plugin",
     "Execution not ready": "Exécution non disponible",
     "Revoked": "Révoqué",

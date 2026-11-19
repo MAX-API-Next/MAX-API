@@ -83,6 +83,41 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 			updates = append(updates, channelEmittedReferences{models, mapping})
 		}
 	}
+	if conflict, ok := statement.Clauses["ON CONFLICT"].Expression.(clause.OnConflict); ok {
+		for _, assignment := range conflict.DoUpdates {
+			column := assignment.Column.Name
+			if !strings.EqualFold(column, "models") && !strings.EqualFold(column, "model_mapping") {
+				continue
+			}
+			if assignment.Value == nil {
+				continue
+			}
+			var text string
+			switch value := assignment.Value.(type) {
+			case string:
+				text = value
+			case *string:
+				if value == nil {
+					continue
+				}
+				text = *value
+			case clause.Column:
+				if value.Table == "excluded" && strings.EqualFold(value.Name, column) {
+					continue // GORM UpdateAll reuses the already-validated inserted column.
+				}
+				return taskplugin.ErrCatalogInvalid
+			default:
+				return taskplugin.ErrCatalogInvalid // Expressions cannot certify the assigned reference.
+			}
+			update := channelEmittedReferences{}
+			if strings.EqualFold(column, "models") {
+				update.models = &text
+			} else {
+				update.mapping = &text
+			}
+			updates = append(updates, update)
+		}
+	}
 	if len(updates) == 0 {
 		return nil
 	}
