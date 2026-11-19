@@ -24,18 +24,29 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 	channelTable := db.NamingStrategy.TableName("Channel")
 	taskTable := db.NamingStrategy.TableName("Task")
 	channelType, taskType := reflect.TypeFor[Channel](), reflect.TypeFor[Task]()
-	isSQLite := db.Dialector.Name() == "sqlite"
-	if isSQLite {
-		channelTable = sqliteTaskPluginTableName(channelTable)
-		taskTable = sqliteTaskPluginTableName(taskTable)
+	dialect := db.Dialector.Name()
+	foldTableNames := dialect == "sqlite" || dialect == "mysql"
+	if foldTableNames {
+		channelTable = foldTaskPluginTableName(channelTable)
+		taskTable = foldTaskPluginTableName(taskTable)
 	}
 	return db.Callback().Create().Before("gorm:before_create").Register("max:task_plugin_typed_create", func(tx *gorm.DB) {
 		if tx.Statement.SkipHooks {
 			return
 		}
 		table := tx.Statement.Table
-		if isSQLite {
-			table = sqliteTaskPluginTableName(table)
+		if explicit, exists := tx.Statement.Clauses["INSERT"]; exists {
+			insert, resolved := explicit.Expression.(clause.Insert)
+			if !resolved || insert.Table.Raw || insert.Table.Alias != "" || strings.ContainsAny(insert.Table.Name, "\"`[]") {
+				tx.AddError(taskplugin.ErrCatalogInvalid)
+				return
+			}
+			if name := insert.Table.Name; name != "" && name != clause.CurrentTable {
+				table = name[strings.LastIndexByte(name, '.')+1:]
+			}
+		}
+		if foldTableNames {
+			table = foldTaskPluginTableName(table)
 		}
 		guardedType := channelType
 		if table == taskTable {
@@ -63,7 +74,7 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 	})
 }
 
-func sqliteTaskPluginTableName(table string) string {
+func foldTaskPluginTableName(table string) string {
 	return strings.Map(func(r rune) rune {
 		if r >= 'A' && r <= 'Z' {
 			return r + ('a' - 'A')

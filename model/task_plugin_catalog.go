@@ -372,7 +372,7 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 				return err
 			}
 			var claimed TaskPluginCatalogHead
-			if err := tx.First(&claimed, 1).Error; err != nil {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&claimed, 1).Error; err != nil {
 				return err
 			}
 			if claimed.MutationID != mutationID || claimed.Revision != 1 {
@@ -388,7 +388,9 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 				return taskplugin.ErrCatalogConflict
 			}
 		}
-		previousRows, previousIdentities, err := loadTaskPluginVersions(tx)
+		// The head write is a current read. MySQL can still retain a caller's
+		// earlier consistent-read snapshot for plain SELECTs in this transaction.
+		previousRows, previousIdentities, err := loadTaskPluginVersions(tx.Clauses(clause.Locking{Strength: "UPDATE"}))
 		if err != nil {
 			return err
 		}
@@ -396,12 +398,12 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 			return taskplugin.ErrCatalogInvalid
 		}
 		previous := taskplugin.CatalogSnapshot{Revision: revision, Packages: previousRows}
-		previous.Deletions, err = loadTaskPluginDeletions(tx)
+		previous.Deletions, err = loadTaskPluginDeletions(tx.Clauses(clause.Locking{Strength: "UPDATE"}))
 		if err != nil {
 			return err
 		}
 		var committedHead TaskPluginCatalogHead
-		if err := tx.First(&committedHead, 1).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&committedHead, 1).Error; err != nil {
 			return err
 		}
 		if revision > 0 {

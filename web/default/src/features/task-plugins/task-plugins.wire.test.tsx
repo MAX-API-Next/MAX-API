@@ -53,7 +53,10 @@ const { render, cleanup, fireEvent, waitFor, within, act } =
 const { TaskPlugins } = await import('./index')
 const { api } = await import('@/lib/api')
 const originalTimeout = api.defaults.timeout
-api.defaults.timeout = 3000
+const requestTimeoutMs = 3000
+const requestWait = { timeout: requestTimeoutMs + 1000 }
+const mutationAndRefreshWait = { timeout: 2 * requestTimeoutMs + 1000 }
+api.defaults.timeout = requestTimeoutMs
 const { taskPluginAPI } = await import('./api')
 const { useAuthStore } = await import('@/stores/auth-store')
 const activeFixtures = new Set<Promise<void>>()
@@ -178,7 +181,10 @@ test(
       const importButton = content.getByRole('button', {
         name: 'Import API extension',
       }) as HTMLButtonElement
-      await waitFor(() => assert.equal(importButton.disabled, false))
+      await waitFor(
+        () => assert.equal(importButton.disabled, false),
+        requestWait
+      )
       fireEvent.click(importButton)
       const importDialog = await view.findByRole('dialog')
       const install = within(importDialog)
@@ -212,7 +218,11 @@ test(
         assert.equal((validate as HTMLButtonElement).disabled, false)
       )
       fireEvent.click(validate)
-      await install.findByText(`Submitted content SHA-256: ${pin}`)
+      await install.findByText(
+        `Submitted content SHA-256: ${pin}`,
+        {},
+        requestWait
+      )
       fireEvent.click(
         install.getByRole('checkbox', {
           name: 'All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.',
@@ -221,8 +231,15 @@ test(
       fireEvent.click(
         await install.findByRole('button', { name: 'Install and activate' })
       )
-      await waitFor(() => assert.equal(importDialog.isConnected, false))
-      await content.findByText('Wire Import Fixture')
+      await content.findByText(
+        'Wire Import Fixture',
+        {},
+        mutationAndRefreshWait
+      )
+      await waitFor(
+        () => assert.equal(importDialog.isConnected, false),
+        mutationAndRefreshWait
+      )
       const stored = await taskPluginAPI.read()
       const entry = stored.entries.find((entry) => entry.key === 'wire-import')
       assert.ok(entry)
@@ -254,16 +271,24 @@ test(
       })
       const view = mount()
       const content = within(view.container)
-      const heading = await content.findByRole('heading', {
-        name: 'Wire Disable Fixture',
-      })
+      const heading = await content.findByRole(
+        'heading',
+        {
+          name: 'Wire Disable Fixture',
+        },
+        requestWait
+      )
       const card = heading.closest('article')
       assert.ok(card)
       fireEvent.click(within(card).getByRole('button', { name: /^Details\b/ }))
       const details = within(await view.findByRole('dialog'))
       fireEvent.click(await details.findByRole('button', { name: 'Disable' }))
       fireEvent.click(details.getByRole('button', { name: 'Confirm' }))
-      await details.findByRole('button', { name: 'Enable' })
+      await details.findByRole(
+        'button',
+        { name: 'Enable' },
+        mutationAndRefreshWait
+      )
       const stored = await taskPluginAPI.read()
       const entry = stored.entries.find((entry) => entry.key === 'wire-disable')
       assert.ok(entry)

@@ -231,7 +231,11 @@ func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool
 		same := sameCatalogSnapshotContext(ctx, snapshot, catalog.snapshot)
 		if err := ctx.Err(); err != nil {
 			catalog.observeRevision(snapshot.Revision)
-			catalog.host.state.Store(nil)
+			// An interrupted comparison is inconclusive. Upload preflight may
+			// recheck the already-observed bytes, without I/O or compilation.
+			if !preflight || !sameCatalogSnapshot(snapshot, catalog.snapshot) {
+				catalog.host.state.Store(nil)
+			}
 			return errors.Join(ErrCatalogUnavailable, err)
 		}
 		if same {

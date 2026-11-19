@@ -156,7 +156,8 @@ func validLegacyPackageFields(data []byte) bool {
 
 func validPackageFields(data []byte) bool {
 	decoder := common.NewJSONDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
+	// Use the same number range as pre-duplicate-check catalog readers.
+	// Token scanning never persists or round-trips the decoded number.
 	opening, err := decoder.Token()
 	if err != nil || opening != json.Delim('{') {
 		return false

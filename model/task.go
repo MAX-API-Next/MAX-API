@@ -611,20 +611,12 @@ func GetByTaskId(userId int, taskId string) (*Task, bool, error) {
 	if taskId == "" {
 		return nil, false, nil
 	}
-	var row struct {
-		Task
-		NullableUpdatedAt *int64 `gorm:"column:nullable_updated_at"`
-		NullableQuota     *int   `gorm:"column:nullable_quota"`
-	}
-	err := DB.Model(&Task{}).Select("*, updated_at AS nullable_updated_at, quota AS nullable_quota").
-		Where("user_id = ? and task_id = ?", userId, taskId).First(&row).Error
+	task, err := readTaskSnapshot(DB.Where("user_id = ? and task_id = ?", userId, taskId))
 	exist, err := RecordExist(err)
 	if err != nil {
 		return nil, false, err
 	}
-	row.Task.updatedAtWasNull = row.NullableUpdatedAt == nil
-	row.Task.quotaWasNull = row.NullableQuota == nil
-	return &row.Task, exist, nil
+	return task, exist, nil
 }
 
 // GetUserTaskStatusByID keeps public status readable when private metadata
@@ -665,15 +657,19 @@ func GetTaskPlaceholderByID(id int64) (*Task, error) {
 	if id <= 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
+	return readTaskSnapshot(DB.Where("id = ?", id))
+}
+
+func readTaskSnapshot(query *gorm.DB) (*Task, error) {
 	var row struct {
 		Task
 		NullableUpdatedAt *int64 `gorm:"column:nullable_updated_at"`
+		NullableQuota     *int   `gorm:"column:nullable_quota"`
 	}
-	if err := DB.Model(&Task{}).Select("*, updated_at AS nullable_updated_at").First(&row, id).Error; err != nil {
-		return nil, err
-	}
+	err := query.Model(&Task{}).Select("*, updated_at AS nullable_updated_at, quota AS nullable_quota").First(&row).Error
 	row.Task.updatedAtWasNull = row.NullableUpdatedAt == nil
-	return &row.Task, nil
+	row.Task.quotaWasNull = row.NullableQuota == nil
+	return &row.Task, err
 }
 
 func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
@@ -807,8 +803,8 @@ var ErrTaskSubmitRefundIdentityMismatch = errors.New("task submission refund ide
 
 // RewritePlaceholder atomically claims the observed version and rewrites retry
 // metadata. A stale caller cannot overwrite a newer manual/worker decision.
-func (t *Task) RewritePlaceholder() error {
-	if t == nil || t.ID <= 0 {
+func (t *Task) RewritePlaceholder(observed Task) error {
+	if t == nil || t.ID <= 0 || t.ID != observed.ID {
 		return errors.New("persisted task is required")
 	}
 	var updatedAt int64
@@ -821,7 +817,8 @@ func (t *Task) RewritePlaceholder() error {
 		now := time.Now().Unix()
 		finalize := tx.Session(&gorm.Session{NewDB: true}).Model(&BillingSettlement{}).Select("1").
 			Where("operation_key = ?", BillingTaskFinalizeOperationKey(t.ID))
-		result := t.whereTimestampSnapshot(tx.Model(&Task{}).Where("id = ? AND status NOT IN ?", t.ID, []string{TaskStatusFailure, TaskStatusSuccess}), t.UpdatedAt).
+		query := tx.Model(&Task{}).Where("id = ? AND status = ? AND status NOT IN ?", t.ID, observed.Status, []string{TaskStatusFailure, TaskStatusSuccess})
+		result := observed.whereQuotaSnapshot(observed.whereTimestampSnapshot(query, observed.UpdatedAt)).
 			Where("NOT EXISTS (?)", finalize).
 			Where("updated_at IS NULL OR updated_at < ?", int64(1<<63-1)).
 			UpdateColumn("updated_at", gorm.Expr("CASE WHEN updated_at IS NULL OR updated_at < ? THEN ? ELSE updated_at + 1 END", now, now))
@@ -841,6 +838,16 @@ func (t *Task) RewritePlaceholder() error {
 			}
 			return ErrTaskPlaceholderConflict
 		}
+		// The version claim owns the row now, including on SQLite. Inspect the
+		// original provider state before replacing the private JSON document.
+		var stored Task
+		if err := withRowLock(tx).Select("private_data").Take(&stored, t.ID).Error; err != nil {
+			return err
+		}
+		if stored.PrivateData.UpstreamTaskID != observed.PrivateData.UpstreamTaskID ||
+			stored.PrivateData.AwaitingUpstreamID != observed.PrivateData.AwaitingUpstreamID {
+			return ErrTaskPlaceholderConflict
+		}
 		// Claim first, then retain that row lock until metadata and readback commit.
 		// This also makes unchanged retries independent of MySQL matched-row mode.
 		if err := tx.Model(t).Select("*").Omit("updated_at").Updates(t).Error; err != nil {
@@ -856,6 +863,7 @@ func (t *Task) RewritePlaceholder() error {
 	if err == nil {
 		t.UpdatedAt = updatedAt
 		t.updatedAtWasNull = false
+		t.quotaWasNull = false
 	}
 	return err
 }
@@ -940,6 +948,10 @@ func (t *Task) whereQuotaSnapshot(query *gorm.DB) *gorm.DB {
 		return query.Where("quota IS NULL")
 	}
 	return query.Where("quota = ?", t.Quota)
+}
+
+func (t *Task) HasSameQuotaSnapshot(other *Task) bool {
+	return t.Quota == other.Quota && t.quotaWasNull == other.quotaWasNull
 }
 
 func (t *Task) whereTimestampSnapshot(query *gorm.DB, observed int64) *gorm.DB {
@@ -1289,8 +1301,8 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 				return err
 			}
 		}
-		var task Task
-		if err := withRowLock(tx).First(&task, taskID).Error; err != nil {
+		task, err := readTaskSnapshot(withRowLock(tx).Where("id = ?", taskID))
+		if err != nil {
 			return err
 		}
 		unprojectedRetry := task.PrivateData.AwaitingUpstreamID &&
@@ -1328,11 +1340,11 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 		if lateRejection {
 			// Keep the original completion time and terminal state. Replace
 			// the unknown-outcome explanation with the confirmed rejection.
-			result = query.Where("status = ? AND submit_timeout_retained_funding = ? AND quota = ?", TaskStatusFailure, true, task.Quota).
+			result = task.whereQuotaSnapshot(query.Where("status = ? AND submit_timeout_retained_funding = ?", TaskStatusFailure, true)).
 				Updates(map[string]interface{}{"quota": 0, "submit_timeout_retained_funding": false, "fail_reason": reason})
 		} else {
 			if unprojectedRetry && input != nil {
-				query = query.Where("quota = ?", 0)
+				query = task.whereQuotaSnapshot(query)
 			}
 			result = query.Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).Updates(map[string]interface{}{
 				"status":      TaskStatusFailure,

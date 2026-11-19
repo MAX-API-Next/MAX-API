@@ -333,6 +333,41 @@ func TestUpdateVideoSingleTaskUsesConfiguredParserForWrappedProviderResult(t *te
 	assert.Equal(t, 20, adaptor.adjustedTotalTokens)
 }
 
+func TestVideoTerminalPollRejectsNewerSameStatusProgress(t *testing.T) {
+	for _, withRefund := range []bool{false, true} {
+		name := "status-only"
+		if withRefund {
+			name = "with-refund"
+		}
+		t.Run(name, func(t *testing.T) {
+			truncate(t)
+			row := &model.Task{TaskID: name, UserId: 71, Status: model.TaskStatusInProgress, Progress: "10%",
+				PrivateData: model.TaskPrivateData{BillingSource: model.BillingSettlementSourceWallet, TokenId: 72}}
+			if withRefund {
+				row.Quota = 10
+			}
+			require.NoError(t, model.DB.Create(row).Error)
+			stale := *row
+			row.Progress = "60%"
+			row.Data = []byte(`{"provider":"newer"}`)
+			won, err := row.UpdatePollingProgress(model.TaskStatusInProgress)
+			require.NoError(t, err)
+			require.True(t, won)
+			adaptor := &sunoPollingResponseAdaptor{responseBody: `{"code":"success","data":{"status":"FAILURE","fail_reason":"old response","data":{"provider":"older"}}}`}
+			require.NoError(t, updateVideoSingleTask(t.Context(), adaptor, &model.Channel{Type: constant.ChannelTypeDoubaoVideo}, row.TaskID, map[string]*model.Task{row.TaskID: &stale}))
+			stored, err := model.GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, err)
+			require.Equal(t, row.Status, stored.Status)
+			require.Equal(t, row.Progress, stored.Progress)
+			require.Equal(t, row.Quota, stored.Quota)
+			require.JSONEq(t, string(row.Data), string(stored.Data))
+			_, found, err := model.GetBillingSettlementStatus(model.BillingTaskFinalizeOperationKey(row.ID))
+			require.NoError(t, err)
+			require.False(t, found)
+		})
+	}
+}
+
 func TestAppliedTaskRecoveryPreservesSnapshotOnCASLoss(t *testing.T) {
 	truncate(t)
 	task := &model.Task{

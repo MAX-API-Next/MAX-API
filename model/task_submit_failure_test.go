@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -157,7 +158,7 @@ func TestPendingSubmitFailureRecoveryOwnsTimeoutAndRetry(t *testing.T) {
 				require.Empty(t, tasks)
 			case "retry":
 				fresh.ChannelId = 99
-				require.Error(t, fresh.RewritePlaceholder())
+				require.ErrorIs(t, fresh.RewritePlaceholder(*row), ErrTaskPlaceholderConflict)
 			case "status":
 				fresh.Status = TaskStatusFailure
 				won, err := fresh.UpdateWithStatusSnapshot(TaskStatusSubmitted, fresh.UpdatedAt)
@@ -266,14 +267,21 @@ func TestSubmitFailureClaimHonorsDeadlineWhileWaitingForSQLiteWriters(t *testing
 				}
 				release()
 			}()
-			defer func() { close(finished); <-released }()
+			finish := sync.OnceFunc(func() { close(finished) })
+			defer func() { finish(); <-released }()
 
 			const deadline = 150 * time.Millisecond
 			ctx, cancel := context.WithTimeout(t.Context(), deadline)
 			defer cancel()
 			start := time.Now()
 			won, err := claimTaskSubmitFailureWithSettlementDB(db.WithContext(ctx), row.ID, "known rejection", nil)
-			require.Error(t, err)
+			if lock == "process" {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+			} else {
+				var busy interface{ Code() int }
+				require.ErrorAs(t, err, &busy)
+				require.Equal(t, 5, busy.Code()&0xff, "writer must report SQLITE_BUSY")
+			}
 			require.False(t, won)
 			require.Less(t, time.Since(start), 500*time.Millisecond)
 			var stored Task
@@ -283,6 +291,98 @@ func TestSubmitFailureClaimHonorsDeadlineWhileWaitingForSQLiteWriters(t *testing
 			var busy int
 			require.NoError(t, db.Raw("PRAGMA busy_timeout").Scan(&busy).Error)
 			require.Equal(t, 5000, busy, "ordinary pool configuration must be preserved")
+			finish()
+			<-released
+			won, err = claimTaskSubmitFailureWithSettlementDB(db.WithContext(t.Context()), row.ID, "known rejection", nil)
+			require.NoError(t, err)
+			require.True(t, won)
+			require.NoError(t, db.First(&stored, row.ID).Error)
+			require.EqualValues(t, TaskStatusFailure, stored.Status)
 		})
 	}
+}
+
+func TestSubmitFailureJournalRetriesAfterSQLiteWriterReleases(t *testing.T) {
+	db := deletionDB(t)
+	previous := DB
+	DB = db
+	t.Cleanup(func() { DB = previous })
+	var location struct{ File string }
+	require.NoError(t, db.Raw("PRAGMA database_list").Scan(&location).Error)
+	other, err := gorm.Open(sqlite.Open(location.File), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	pool, err := other.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pool.Close()) })
+	row := &Task{TaskID: "busy-journal", Status: TaskStatusSubmitted, Quota: 100}
+	require.NoError(t, db.Create(row).Error)
+	writer := other.Begin()
+	require.NoError(t, writer.Error)
+	t.Cleanup(func() { _ = writer.Rollback().Error })
+	require.NoError(t, writer.Model(row).UpdateColumn("updated_at", row.UpdatedAt+1).Error)
+	busyAttempts := 0
+	require.NoError(t, db.Callback().Create().After("gorm:create").Register("release-busy-journal-writer", func(tx *gorm.DB) {
+		if tx.Statement.Table != "task_submit_failure_recoveries" || tx.Error == nil {
+			return
+		}
+		var busy interface{ Code() int }
+		if errors.As(tx.Error, &busy) && busy.Code()&0xff == 5 {
+			busyAttempts++
+			if busyAttempts == 1 {
+				_ = writer.Rollback().Error
+			}
+		}
+	}))
+	input := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey("busy-journal"), Source: BillingSettlementSourceWallet, UserID: 71, TokenID: 72, FundingDelta: -100, TokenDelta: -100}
+	require.NoError(t, RecordTaskSubmitFailureRecovery(row.ID, "definite rejection", input))
+	require.Equal(t, 1, busyAttempts)
+	var record TaskSubmitFailureRecovery
+	require.NoError(t, db.First(&record, row.ID).Error)
+	require.Equal(t, input, record.refundInput())
+	require.Equal(t, TaskSubmitFailureRecoveryPending, record.Status)
+	var count int64
+	require.NoError(t, db.Model(&TaskSubmitFailureRecovery{}).Count(&count).Error)
+	require.EqualValues(t, 1, count)
+}
+
+func TestSubmitFailureJournalRollsBackBusySQLiteCommit(t *testing.T) {
+	db := deletionDB(t)
+	previous := DB
+	DB = db
+	t.Cleanup(func() { DB = previous })
+	pool, err := db.DB()
+	require.NoError(t, err)
+	pool.SetMaxOpenConns(1) // A retry must safely reuse the same connection.
+	var location struct{ File string }
+	require.NoError(t, db.Raw("PRAGMA database_list").Scan(&location).Error)
+	other, err := gorm.Open(sqlite.Open(location.File), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	readerPool, err := other.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, readerPool.Close()) })
+	var journal string
+	require.NoError(t, db.Raw("PRAGMA journal_mode=DELETE").Scan(&journal).Error)
+	require.Equal(t, "delete", strings.ToLower(journal))
+	reader := other.Begin()
+	require.NoError(t, reader.Error)
+	t.Cleanup(func() { _ = reader.Rollback().Error })
+	var count int64
+	require.NoError(t, reader.Model(&TaskSubmitFailureRecovery{}).Count(&count).Error)
+	attempts := 0
+	require.NoError(t, db.Callback().Create().After("gorm:create").Register("release-busy-journal-reader", func(tx *gorm.DB) {
+		if tx.Statement.Table == "task_submit_failure_recoveries" && tx.Error == nil {
+			attempts++
+			if attempts == 2 {
+				_ = reader.Rollback().Error
+			}
+		}
+	}))
+	input := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey("busy-commit"), Source: BillingSettlementSourceWallet, UserID: 71, FundingDelta: -10}
+	require.NoError(t, RecordTaskSubmitFailureRecovery(1, "definite rejection", input))
+	require.Equal(t, 2, attempts)
+	var stored TaskSubmitFailureRecovery
+	require.NoError(t, db.First(&stored, 1).Error)
+	require.Equal(t, input, stored.refundInput())
+	require.NoError(t, db.Model(&TaskSubmitFailureRecovery{}).Count(&count).Error)
+	require.EqualValues(t, 1, count)
 }

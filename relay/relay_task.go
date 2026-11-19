@@ -100,7 +100,7 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 			task.PrivateData.AwaitingUpstreamID = true
 			task.Quota = preConsumedQuota
 			populateTaskBillingMetadata(&task, info)
-			if err := task.RewritePlaceholder(); err != nil {
+			if err := task.RewritePlaceholder(observed); err != nil {
 				if errors.Is(err, model.ErrTaskPlaceholderConflict) {
 					if attempt == 2 {
 						break
@@ -135,7 +135,8 @@ func taskPlaceholderClaimOnly(before model.Task, privateSnapshot []byte, after *
 	}
 	private, err := common.Marshal(after.PrivateData)
 	return err == nil && bytes.Equal(privateSnapshot, private) && before.ID == after.ID && before.TaskID == after.TaskID &&
-		before.Status == after.Status && before.Quota == after.Quota && before.ChannelId == after.ChannelId && before.UserId == after.UserId &&
+		before.Status == after.Status && before.HasSameQuotaSnapshot(after) && before.ChannelId == after.ChannelId && before.UserId == after.UserId &&
+		before.SubmitTimeoutRetainedFunding == after.SubmitTimeoutRetainedFunding &&
 		before.Group == after.Group && before.Platform == after.Platform && before.Action == after.Action && before.Properties == after.Properties &&
 		before.CreatedAt == after.CreatedAt && before.SubmitTime == after.SubmitTime && before.StartTime == after.StartTime && before.FinishTime == after.FinishTime &&
 		before.Progress == after.Progress && before.FailReason == after.FailReason && bytes.Equal(before.Data, after.Data)

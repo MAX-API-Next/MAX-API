@@ -230,6 +230,18 @@ func TestProtectedTablesRejectPartialStructCreateDestinations(t *testing.T) {
 	require.NoError(t, db.Table("tasks").Create(&[]Task{{TaskID: "complete"}}).Error)
 }
 
+func TestTypedCreateGuardAllowsResolvedInsertTargets(t *testing.T) {
+	db := deletionDB(t)
+	protected := clause.Insert{Table: clause.Table{Name: "tasks"}}
+	require.NoError(t, db.Clauses(protected).Create(&Task{TaskID: "explicit-typed-create"}).Error)
+	require.NoError(t, db.AutoMigrate(&Option{}))
+	other := clause.Insert{Table: clause.Table{Name: "options"}}
+	require.NoError(t, db.Table("options").Clauses(other).Create(map[string]any{"key": "explicit-map-create", "value": "ok"}).Error)
+	var row Option
+	require.NoError(t, db.Where("key = ?", "explicit-map-create").Take(&row).Error)
+	require.Equal(t, "ok", row.Value)
+}
+
 func TestTypedChannelUpsertChecksConflictAssignments(t *testing.T) {
 	for _, kind := range []string{"models", "model_mapping", "expression", "metadata", "update-all", "reused-update-all"} {
 		t.Run(kind, func(t *testing.T) {

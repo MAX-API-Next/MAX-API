@@ -35,6 +35,29 @@ func TestTaskPluginManagementRejectsDuplicateMembers(t *testing.T) {
 	}
 }
 
+func TestTaskPluginManagementDecodesDocumentUnicode(t *testing.T) {
+	for _, tc := range []struct{ name, raw, document string }{
+		{"lone high surrogate", `{"document":"\uD800"}`, ""},
+		{"lone low surrogate", `{"document":"\uDC00"}`, ""},
+		{"surrogate pair", `{"document":"\uD83D\uDE00"}`, "\U0001f600"},
+		{"escaped backslash", `{"document":"\\uD800"}`, `\uD800`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.raw))
+			fields, err := taskPluginAdminFields(c, map[string]string{"document": "string"})
+			if tc.document == "" {
+				require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+				return
+			}
+			require.NoError(t, err)
+			var decoded string
+			require.NoError(t, common.Unmarshal(fields["document"], &decoded))
+			require.Equal(t, tc.document, decoded)
+		})
+	}
+}
+
 func TestTaskPluginDeletionOutcomeResponse(t *testing.T) {
 	for _, known := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unknown", true: "not-committed"}[known], func(t *testing.T) {

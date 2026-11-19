@@ -27,7 +27,7 @@ import (
 
 func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 	for _, funding := range []string{"wallet_only", "subscription_only"} {
-		for _, outcome := range []string{"manual-first", "failure-first", "read-error", "pending-restart", "intent-write-error", "concurrent-cleanup", "identity-mismatch", "read-error-recovery", "intent-write-error-recovery", "task-write-error-recovery", "timeout-before-rejection", "timeout-task-write-error-recovery", "timeout-h3-retry-reserve", "timeout-free-to-paid", "free-to-paid-task-write-error-recovery", "different-terminal-failure"} {
+		for _, outcome := range []string{"manual-first", "failure-first", "read-error", "pending-restart", "intent-write-error", "concurrent-cleanup", "identity-mismatch", "read-error-recovery", "intent-write-error-recovery", "task-write-error-recovery", "timeout-before-rejection", "timeout-task-write-error-recovery", "timeout-h3-retry-reserve", "timeout-free-to-paid", "timeout-free-to-paid-null", "free-to-paid-null", "free-to-paid-task-write-error-recovery", "different-terminal-failure"} {
 			t.Run(funding+"/"+outcome, func(t *testing.T) {
 				db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "cleanup.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 				require.NoError(t, err)
@@ -74,8 +74,13 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 					row.PrivateData.BillingContext = &model.TaskBillingContext{TaskBillingPlan: plan}
 				}
 				require.NoError(t, db.Create(row).Error)
+				if strings.HasSuffix(outcome, "-null") {
+					require.NoError(t, db.Model(row).UpdateColumn("quota", nil).Error)
+				}
 				info.PersistedTaskID = row.ID
-				originalPlaceholder := *row
+				original, err := model.GetTaskPlaceholderByID(row.ID)
+				require.NoError(t, err)
+				originalPlaceholder := *original
 				if strings.HasPrefix(outcome, "timeout-") {
 					previousTimeout := constant.TaskTimeoutMinutes
 					constant.TaskTimeoutMinutes = 1
@@ -123,13 +128,13 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 						}
 					}))
 				}
-				if freeRetry {
+				if freeRetry && (strings.HasPrefix(outcome, "timeout-") || strings.Contains(outcome, "task-write-error")) {
 					retry := originalPlaceholder
 					retry.Quota = 100
-					if outcome == "timeout-free-to-paid" {
-						require.ErrorIs(t, retry.RewritePlaceholder(), model.ErrTaskPlaceholderConflict)
+					if strings.HasPrefix(outcome, "timeout-") {
+						require.ErrorIs(t, retry.RewritePlaceholder(originalPlaceholder), model.ErrTaskPlaceholderConflict)
 					} else {
-						require.ErrorContains(t, retry.RewritePlaceholder(), "synthetic task UPDATE unavailable")
+						require.ErrorContains(t, retry.RewritePlaceholder(originalPlaceholder), "synthetic task UPDATE unavailable")
 					}
 				}
 				input := model.BillingSettlementInput{OperationKey: model.BillingTaskFinalizeOperationKey(row.ID), Source: info.BillingSource, UserID: info.UserId, TokenID: info.TokenId, TokenKey: info.TokenKey, SubscriptionID: info.SubscriptionId, TaskID: row.ID, TaskQuota: 100, TaskQuotaTarget: 100}
@@ -278,7 +283,7 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 					require.NoError(t, db.First(&sub, 51004).Error)
 					used = sub.AmountUsed
 				}
-				if outcome == "failure-first" || outcome == "pending-restart" || outcome == "concurrent-cleanup" || outcome == "timeout-before-rejection" || outcome == "timeout-h3-retry-reserve" || outcome == "timeout-free-to-paid" || recovered {
+				if outcome == "failure-first" || outcome == "pending-restart" || outcome == "concurrent-cleanup" || outcome == "timeout-before-rejection" || outcome == "timeout-h3-retry-reserve" || freeRetry || recovered {
 					require.Positive(t, checkedColumns.Load(), "the actual cleanup must emit only real database columns")
 					require.EqualValues(t, model.TaskStatusFailure, task.Status)
 					require.Zero(t, task.Quota)

@@ -1224,9 +1224,13 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 		if input.TaskID > 0 {
 			appliedTaskQuotaTarget := input.TaskQuota + appliedFundingDelta
 			if appliedTaskQuotaTarget != input.TaskQuota {
-				result := tx.Model(&Task{}).
-					Where("id = ? AND quota = ?", input.TaskID, input.TaskQuota).
-					Update("quota", appliedTaskQuotaTarget)
+				query := tx.Model(&Task{}).Where("id = ? AND quota = ?", input.TaskID, input.TaskQuota)
+				if input.OperationKey == BillingTaskFinalizeOperationKey(input.TaskID) {
+					// Provider terminal evidence already owns its version. Keep
+					// that version when the corresponding finalize projects quota.
+					query = query.Omit("updated_at")
+				}
+				result := query.Update("quota", appliedTaskQuotaTarget)
 				if result.Error != nil {
 					return result.Error
 				}

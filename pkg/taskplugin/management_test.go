@@ -613,16 +613,25 @@ func TestPreflightSnapshotOrderDoesNotSuspendUnchangedHost(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			store.onLoad = func(int) { cancel() }
-			err = catalog.ValidateInstall(ctx, a)
-			require.ErrorIs(t, err, context.Canceled)
-			if change == "reordered" {
-				require.Same(t, published, catalog.host.state.Load())
-				_, err = catalog.Host().PricingPackage("POST", "/vendor/v1/jobs", "vendor-model")
-				require.NoError(t, err)
-			} else {
-				require.Nil(t, catalog.host.state.Load(), "content changes remain authoritative even at the same revision")
+			interrupted := &cancelAfterCatalogRead{Context: t.Context()}
+			store.onLoad = func(int) { interrupted.armed = true }
+			assertCanceledPreflight := func(readCtx context.Context) {
+				require.ErrorIs(t, catalog.ValidateInstall(readCtx, a), context.Canceled)
+				if change == "reordered" {
+					require.Same(t, published, catalog.host.state.Load())
+					_, err := catalog.Host().PricingPackage("POST", "/vendor/v1/jobs", "vendor-model")
+					require.NoError(t, err)
+				} else {
+					require.Nil(t, catalog.host.state.Load(), "content changes remain authoritative even at the same revision")
+				}
 			}
+			assertCanceledPreflight(interrupted)
+			require.Greater(t, interrupted.checks, 1, "comparison must have begun before the cancellation")
+			// Repeat from the same published generation, with cancellation at
+			// the other boundary (the authoritative read has just completed).
+			catalog.host.state.Store(published)
+			store.onLoad = func(int) { cancel() }
+			assertCanceledPreflight(ctx)
 		})
 	}
 }

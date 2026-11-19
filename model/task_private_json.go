@@ -11,11 +11,16 @@ import (
 	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/types"
 )
 
 type taskPrivateUnmodeled struct{ fields map[string]any }
 type taskPrivateNested struct{ value any }
 type taskPrivateMap map[string]any
+type taskPrivateArray struct {
+	original, preserved []any
+	typ                 reflect.Type
+}
 
 // Anonymous projections must retain the same scalar scanner behavior as
 // Task.PrivateData's explicit json column tag; unknown history is not a relation.
@@ -170,7 +175,7 @@ func unknownTaskPrivateValue(value any, typ reflect.Type) any {
 			found = found || fields[i] != nil
 		}
 		if found {
-			return fields
+			return taskPrivateArray{original: array, preserved: fields, typ: typ}
 		}
 	}
 	return nil
@@ -234,25 +239,75 @@ func mergeTaskPrivateValue(unknown, current any) (any, error) {
 			return mergeTaskPrivateFields(previous, next)
 		}
 	}
-	if previous, ok := unknown.([]any); ok {
+	if previous, ok := unknown.(taskPrivateArray); ok {
 		if next, ok := current.([]any); ok {
+			before, err := previous.typed(previous.original)
+			if err != nil {
+				return nil, err
+			}
+			after, err := previous.typed(next)
+			if err != nil {
+				return nil, err
+			}
+			unchanged := reflect.DeepEqual(before, after)
+			oldComponents, isComponentList := before.([]types.TaskBillingPlanComponent)
+			newComponents, _ := after.([]types.TaskBillingPlanComponent)
 			merged := append([]any(nil), next...)
-			for i, preserved := range previous {
-				if preserved != nil {
-					if i >= len(merged) {
-						return nil, errors.New("cannot discard unmodeled task private history from a shortened array")
+			for i, preserved := range previous.preserved {
+				if preserved == nil {
+					continue
+				}
+				index := i
+				if !unchanged {
+					index = -1
+					if isComponentList {
+						component := oldComponents[i]
+						if component.Key != "" && uniqueTaskComponentIndex(oldComponents, component.Key) == i {
+							index = uniqueTaskComponentIndex(newComponents, component.Key)
+							if index >= 0 && component != newComponents[index] {
+								index = -1 // The same key can appear in a different plan.
+							}
+						}
 					}
-					var err error
-					merged[i], err = mergeTaskPrivateValue(preserved, merged[i])
-					if err != nil {
-						return nil, err
-					}
+				}
+				if index < 0 {
+					return nil, errors.New("cannot match unmodeled task private history to the rewritten array")
+				}
+				merged[index], err = mergeTaskPrivateValue(preserved, merged[index])
+				if err != nil {
+					return nil, err
 				}
 			}
 			return merged, nil
 		}
 	}
 	return nil, errors.New("cannot discard unmodeled task private history from an incompatible typed value")
+}
+
+func (history taskPrivateArray) typed(entries []any) (any, error) {
+	raw, err := common.Marshal(entries)
+	if err != nil {
+		return nil, err
+	}
+	value := reflect.New(history.typ)
+	if err := common.Unmarshal(raw, value.Interface()); err != nil {
+		return nil, err
+	}
+	return value.Elem().Interface(), nil
+}
+
+func uniqueTaskComponentIndex(components []types.TaskBillingPlanComponent, key string) int {
+	index := -1
+	for i, component := range components {
+		if component.Key != key {
+			continue
+		}
+		if index >= 0 {
+			return -1
+		}
+		index = i
+	}
+	return index
 }
 
 // Decode before a map can collapse repeated members. Conflicting duplicate

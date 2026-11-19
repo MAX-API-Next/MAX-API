@@ -31,6 +31,18 @@ func TestPinnedPackageRejectsRepeatedJSONMembers(t *testing.T) {
 	}
 }
 
+func TestFormatOneUploadUsesLegacyReaderNumberRange(t *testing.T) {
+	const document = `{"format_version":1,"manifest":{"APIVersion":1,"Key":"range-check","Name":"Range Check","Version":"1.0.0","Models":["model"],"future":[{"counter":%s}]},"source":"source"}`
+	tolerated := fmt.Sprintf(document, "1e308")
+	require.True(t, validLegacyPackageFields([]byte(tolerated)))
+	_, err := LoadUpload(strings.NewReader(tolerated), "")
+	require.NoError(t, err)
+	overflow := fmt.Sprintf(document, "1e1000")
+	require.False(t, validLegacyPackageFields([]byte(overflow)))
+	_, err = LoadUpload(strings.NewReader(overflow), "")
+	require.Error(t, err)
+}
+
 func TestLoadUploadContextBoundsRawAndEnvelopeMetadata(t *testing.T) {
 	source := "for(;;){};" + validUploadSource
 	document, err := common.Marshal(PackageDocument{FormatVersion: 3, Manifest: validManifest(), Source: source})

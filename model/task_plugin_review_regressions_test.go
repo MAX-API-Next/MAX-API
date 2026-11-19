@@ -125,8 +125,9 @@ func TestPluginPlaceholderRewriteAcquiresCatalogBeforeTaskVersion(t *testing.T) 
 			lockOrder = append(lockOrder, "task")
 		}
 	}))
+	observed := *task
 	task.ChannelId = 81
-	require.NoError(t, task.RewritePlaceholder())
+	require.NoError(t, task.RewritePlaceholder(observed))
 	require.GreaterOrEqual(t, len(lockOrder), 2)
 	require.Equal(t, []string{"catalog", "task"}, lockOrder[:2])
 }
@@ -1369,7 +1370,7 @@ func TestTaskUpsertConflictPrivateDataUsesReferenceGuard(t *testing.T) {
 			require.NoError(t, err)
 			_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
 			require.NoError(t, err)
-			row := &Task{TaskID: "upsert-task", Progress: "10%"}
+			row := &Task{TaskID: "upsert-task", Progress: "10%", PrivateData: TaskPrivateData{NodeName: "stored"}}
 			require.NoError(t, db.Create(row).Error)
 			values := map[string]any{"progress": "20%"}
 			switch kind {
@@ -1380,7 +1381,8 @@ func TestTaskUpsertConflictPrivateDataUsesReferenceGuard(t *testing.T) {
 			case "excluded":
 				values["private_data"] = clause.Column{Table: "excluded", Name: "private_data"}
 			}
-			err = db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.Assignments(values)}).Create(&Task{ID: row.ID, TaskID: row.TaskID}).Error
+			candidate := &Task{ID: row.ID, TaskID: row.TaskID, PrivateData: TaskPrivateData{NodeName: "candidate"}}
+			err = db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.Assignments(values)}).Create(candidate).Error
 			var saved Task
 			require.NoError(t, db.First(&saved, row.ID).Error)
 			if kind == "literal" {
@@ -1393,6 +1395,11 @@ func TestTaskUpsertConflictPrivateDataUsesReferenceGuard(t *testing.T) {
 			}
 			if err != nil {
 				require.Equal(t, "10%", saved.Progress)
+			}
+			if kind == "excluded" {
+				require.Equal(t, candidate.PrivateData.NodeName, saved.PrivateData.NodeName)
+			} else {
+				require.Equal(t, row.PrivateData.NodeName, saved.PrivateData.NodeName)
 			}
 		})
 	}

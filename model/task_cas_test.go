@@ -306,8 +306,8 @@ func TestMarkTaskSubmitFailedWithSettlementReportsLostClaim(t *testing.T) {
 
 func TestStrictTaskLookupRetainsNullablePollingSnapshot(t *testing.T) {
 	truncateTables(t)
-	for _, changed := range []bool{false, true} {
-		row := &Task{TaskID: fmt.Sprintf("nullable-realtime-%t", changed), UserId: 7, Status: TaskStatusInProgress}
+	for _, changed := range []string{"", "quota", "updated_at"} {
+		row := &Task{TaskID: "nullable-realtime-" + changed, UserId: 7, Status: TaskStatusInProgress}
 		insertTask(t, row)
 		selection := DB.Model(&Task{}).Where("id = ?", row.ID)
 		require.NoError(t, selection.UpdateColumns(map[string]any{"quota": nil, "updated_at": nil}).Error)
@@ -316,13 +316,13 @@ func TestStrictTaskLookupRetainsNullablePollingSnapshot(t *testing.T) {
 		require.True(t, exists)
 		require.True(t, task.quotaWasNull)
 		require.True(t, task.updatedAtWasNull)
-		if changed {
-			require.NoError(t, selection.UpdateColumns(map[string]any{"quota": 0, "updated_at": 0}).Error)
+		if changed != "" {
+			require.NoError(t, selection.UpdateColumn(changed, 0).Error)
 		}
 		task.Progress = "50%"
 		won, err := task.UpdatePollingProgress(row.Status)
 		require.NoError(t, err)
-		require.Equal(t, !changed, won)
+		require.Equal(t, changed == "", won, changed)
 	}
 }
 

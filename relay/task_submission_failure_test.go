@@ -86,6 +86,17 @@ func TestMidjourneySubmitFailurePreservesFundingOwner(t *testing.T) {
 				require.NoError(t, db.First(&token, info.TokenId).Error)
 				var refunds int64
 				require.NoError(t, db.Model(&model.BillingSettlement{}).Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(info.RequestId)).Count(&refunds).Error)
+				if outcome == "manual-reprepare" || outcome == "manual-rejection" {
+					var manual model.BillingSettlement
+					require.NoError(t, db.Where("operation_key = ?", model.BillingTaskFinalizeOperationKey(row.ID)).Take(&manual).Error)
+					require.Equal(t, model.BillingSettlementStatusManual, manual.Status)
+					require.Equal(t, row.ID, manual.TaskID)
+					require.Equal(t, info.BillingSource, manual.Source)
+					require.Equal(t, info.UserId, manual.UserID)
+					require.Equal(t, info.TokenId, manual.TokenID)
+					require.Equal(t, info.SubscriptionId, manual.SubscriptionID)
+					require.EqualValues(t, 100, manual.TaskQuota)
+				}
 				if outcome == "definite-rejection" {
 					require.EqualValues(t, model.TaskStatusFailure, stored.Status)
 					require.Zero(t, stored.Quota)

@@ -245,7 +245,11 @@ or version-pin these references; remove them before deleting the version.
 The console and management API no longer expose `revoke`; legacy requests are
 rejected without committing. Existing revocation records remain readable for
 runtime compatibility and are reported before installation. Ordinary deletion
-does not create a permanent revocation; the identical file can be reimported.
+does not create a permanent revocation. An identical file that passes current
+upload validation can be reimported. Validate the original file before deleting
+if you may need to reinstall it. Some retained legacy packages have repeated JSON
+members that current upload validation rejects. Editing those members changes
+the digest, so the edited file cannot reuse the same key and version.
 
 Disabled/retired versions remain available for valid historical sessions until
 explicitly deleted without references (historically revoked versions remain

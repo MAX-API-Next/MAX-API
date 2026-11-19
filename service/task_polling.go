@@ -707,6 +707,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 				return fmt.Errorf("recover manual task settlement for task %s: %w", task.TaskID, recoveryErr)
 			}
 			if recovered {
+				expectedUpdatedAt = task.UpdatedAt
 				pending, taskFinalizeApplied, settlementErr = taskTerminalSettlementState(task, providerTerminal)
 				if settlementErr != nil {
 					return fmt.Errorf("reload recovered task settlement for task %s: %w", task.TaskID, settlementErr)
@@ -746,6 +747,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			if !applyTaskBillingSettlement(ctx, task, terminalDecision.Settlement) {
 				return nil
 			}
+			expectedUpdatedAt = task.UpdatedAt
 			taskFinalizeApplied = true
 		}
 	}
@@ -820,9 +822,9 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		var won bool
 		var err error
 		if settlement != nil {
-			won, err = task.UpdateWithStatusAndSettlement(snap.Status, *settlement)
+			won, err = task.UpdateWithStatusAndSettlementSnapshot(snap.Status, expectedUpdatedAt, *settlement)
 		} else {
-			won, err = task.UpdateWithStatus(snap.Status)
+			won, err = task.UpdateWithStatusSnapshot(snap.Status, expectedUpdatedAt)
 		}
 		if err != nil {
 			logger.LogError(ctx, fmt.Sprintf("UpdateWithStatus failed for task %s: %s", task.TaskID, err.Error()))

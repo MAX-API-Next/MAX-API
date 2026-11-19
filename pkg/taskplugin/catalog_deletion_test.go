@@ -29,7 +29,8 @@ func TestCatalogReceiptValidationHonorsCancellation(t *testing.T) {
 	ctx := &cancelDuringReceiptScan{Context: base, cancel: cancel}
 	next := CatalogSnapshot{Revision: 1, Deletions: []PackageDeletion{{Key: "old", Version: "1.0.0", Digest: strings.Repeat("a", 64)}, {Key: "another", Version: "1.0.0", Digest: strings.Repeat("b", 64)}}}
 	require.NoError(t, ValidateCatalogTransition(CatalogSnapshot{}, next))
-	require.ErrorIs(t, ValidateCatalogTransitionContext(ctx, CatalogSnapshot{}, next), context.Canceled)
+	_, err := buildCatalogStateContext(ctx, next, CatalogSnapshot{}, false)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestCatalogReceiptDigestMustBeCanonical(t *testing.T) {

@@ -115,3 +115,31 @@ func TestNestedTypedAliasesAreEquivalentAndKeepCanonicalHistory(t *testing.T) {
 	var conflicting TaskPrivateData
 	require.Error(t, conflicting.Scan(`{"plugin_binding":{"plugin_key":"stored"},"Plugin_Binding":{"Plugin_Key":"other"}}`))
 }
+
+func TestTaskPrivateHistoryFollowsUnchangedBillingComponent(t *testing.T) {
+	const history = `{"billing_context":{"task_billing_plan":{"components":[{"Key":"alpha","unit":"second","legacy":18446744073709551617},{"key":"beta","unit":"file"}]}}}`
+	var private TaskPrivateData
+	require.NoError(t, private.Scan(history))
+	private.ResultURL = "updated-result"
+	components := private.BillingContext.TaskBillingPlan.Components
+	components[0], components[1] = components[1], components[0]
+	raw, err := common.Marshal(private)
+	require.NoError(t, err)
+	var read struct {
+		ResultURL      string `json:"result_url"`
+		BillingContext struct {
+			Plan struct {
+				Components []map[string]any `json:"components"`
+			} `json:"task_billing_plan"`
+		} `json:"billing_context"`
+	}
+	require.NoError(t, common.UnmarshalUseNumber(raw, &read))
+	require.Equal(t, "updated-result", read.ResultURL)
+	require.Equal(t, "beta", read.BillingContext.Plan.Components[0]["key"])
+	require.NotContains(t, read.BillingContext.Plan.Components[0], "legacy")
+	require.Equal(t, "alpha", read.BillingContext.Plan.Components[1]["key"])
+	require.Equal(t, json.Number("18446744073709551617"), read.BillingContext.Plan.Components[1]["legacy"])
+	components[1].Unit = "frame"
+	_, err = common.Marshal(private)
+	require.ErrorContains(t, err, "cannot match unmodeled task private history")
+}

@@ -77,6 +77,10 @@ func TestTimeoutCASPreservesQuotaNullability(t *testing.T) {
 				expectedNull = scenario.nextNull
 			}
 			require.Equal(t, expectedNull, !stored.Valid, "CAS must not normalize NULL into an explicit zero")
+			if stored.Valid {
+				require.Zero(t, stored.Int64)
+			}
+			assertStoredTimeoutStatus(t, row.ID, won)
 		})
 	}
 }
@@ -106,6 +110,7 @@ func TestTimeoutCASPreservesTimestampNullability(t *testing.T) {
 				}
 				require.NoError(t, err)
 				require.Equal(t, !change, won)
+				assertStoredTimeoutStatus(t, row.ID, won)
 				var intents int64
 				require.NoError(t, DB.Model(&BillingSettlement{}).Count(&intents).Error)
 				if withSettlement && !change {
@@ -115,6 +120,17 @@ func TestTimeoutCASPreservesTimestampNullability(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func assertStoredTimeoutStatus(t *testing.T, id int64, won bool) {
+	t.Helper()
+	var stored Task
+	require.NoError(t, DB.First(&stored, id).Error)
+	if won {
+		require.EqualValues(t, TaskStatusFailure, stored.Status)
+	} else {
+		require.EqualValues(t, TaskStatusSubmitted, stored.Status)
 	}
 }
 

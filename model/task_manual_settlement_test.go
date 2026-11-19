@@ -22,7 +22,7 @@ func TestPlaceholderRewriteMakesStaleManualDecisionLose(t *testing.T) {
 		retry = observed
 		retry.ChannelId++
 		retry.PrivateData.BillingRequestId = request
-		require.NoError(t, retry.RewritePlaceholder(), "exercise the actual placeholder rewrite method used by ensureTaskPlaceholder")
+		require.NoError(t, retry.RewritePlaceholder(observed), "exercise the actual placeholder rewrite method used by ensureTaskPlaceholder")
 		input := BillingSettlementInput{OperationKey: BillingTaskFinalizeOperationKey(row.ID), Source: BillingSettlementSourceWallet, UserID: 1, TaskID: row.ID, TaskQuota: 20, TaskQuotaTarget: 20}
 		won, err := observed.UpdateWithStatusAndManualSettlement(TaskStatusSubmitted, observed.UpdatedAt, input, "old plan needs review")
 		require.NoError(t, err)
@@ -45,22 +45,23 @@ func TestPlaceholderRewriteLosesAfterNewerManualDecision(t *testing.T) {
 	insertTask(t, row)
 	var retry Task
 	require.NoError(t, DB.First(&retry, row.ID).Error)
-	observedVersion := retry.UpdatedAt
+	observed := retry
 	input := BillingSettlementInput{OperationKey: BillingTaskFinalizeOperationKey(row.ID), Source: BillingSettlementSourceWallet, UserID: 1, TaskID: row.ID, TaskQuota: 20, TaskQuotaTarget: 20}
 	won, err := row.UpdateWithStatusAndManualSettlement(TaskStatusSubmitted, row.UpdatedAt, input, "requires reconciliation")
 	require.NoError(t, err)
 	require.True(t, won)
 	retry.ChannelId = 99
 	retry.PrivateData.BillingRequestId = "stale-retry"
-	require.Error(t, retry.RewritePlaceholder())
-	require.Equal(t, observedVersion, retry.UpdatedAt)
+	require.ErrorIs(t, retry.RewritePlaceholder(observed), ErrTaskFinalizeOwned)
+	require.Equal(t, observed.UpdatedAt, retry.UpdatedAt)
 	var fresh Task
 	require.NoError(t, DB.First(&fresh, row.ID).Error)
 	require.Equal(t, "original", fresh.PrivateData.BillingRequestId)
 	require.Equal(t, row.UpdatedAt, fresh.UpdatedAt)
 	require.Equal(t, row.ChannelId, fresh.ChannelId)
+	reloaded := fresh
 	fresh.PrivateData.BillingRequestId = "reloaded-retry"
-	require.Error(t, fresh.RewritePlaceholder(), "reloading does not authorize replacing an owned finalize decision")
+	require.ErrorIs(t, fresh.RewritePlaceholder(reloaded), ErrTaskFinalizeOwned, "reloading does not authorize replacing an owned finalize decision")
 	var afterReloadedAttempt Task
 	require.NoError(t, DB.First(&afterReloadedAttempt, row.ID).Error)
 	require.Equal(t, "original", afterReloadedAttempt.PrivateData.BillingRequestId)
@@ -70,6 +71,51 @@ func TestPlaceholderRewriteLosesAfterNewerManualDecision(t *testing.T) {
 	require.NoError(t, DB.Where("operation_key = ?", input.OperationKey).First(&record).Error)
 	require.Equal(t, BillingSettlementStatusManual, record.Status)
 	require.Zero(t, record.AppliedFundingDelta)
+}
+
+func TestPlaceholderRewriteRejectsSameVersionLifecycleChanges(t *testing.T) {
+	for _, change := range []string{"none", "quota", "quota-nullness", "upstream", "awaiting"} {
+		t.Run(change, func(t *testing.T) {
+			truncateTables(t)
+			row := &Task{TaskID: "same-version-" + change, Status: TaskStatusSubmitted, UpdatedAt: 100, ChannelId: 1,
+				PrivateData: TaskPrivateData{AwaitingUpstreamID: true}}
+			insertTask(t, row)
+			observed, err := GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, err)
+			wantPrivate := row.PrivateData
+			var wantQuota any = 0
+			switch change {
+			case "quota":
+				wantQuota = 20
+			case "quota-nullness":
+				wantQuota = nil
+			case "upstream":
+				wantPrivate.UpstreamTaskID = "confirmed"
+			case "awaiting":
+				wantPrivate.AwaitingUpstreamID = false
+			}
+			require.NoError(t, DB.Model(row).UpdateColumns(map[string]any{"quota": wantQuota, "private_data": wantPrivate}).Error)
+			committed, err := GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, err)
+			candidate := *observed
+			candidate.Quota, candidate.ChannelId = 10, 2
+			err = candidate.RewritePlaceholder(*observed)
+			fresh, readErr := GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, readErr)
+			if change == "none" {
+				require.NoError(t, err)
+				require.Equal(t, candidate.Quota, fresh.Quota)
+				require.Equal(t, candidate.ChannelId, fresh.ChannelId)
+				require.Equal(t, candidate.UpdatedAt, fresh.UpdatedAt)
+				return
+			}
+			require.ErrorIs(t, err, ErrTaskPlaceholderConflict)
+			require.True(t, fresh.HasSameQuotaSnapshot(committed))
+			require.Equal(t, wantPrivate, fresh.PrivateData)
+			require.Equal(t, observed.ChannelId, fresh.ChannelId)
+			require.Equal(t, observed.UpdatedAt, fresh.UpdatedAt)
+		})
+	}
 }
 
 func TestSubmitFailurePreservesOpenTaskFinalizeDecision(t *testing.T) {
@@ -156,7 +202,7 @@ func TestPlaceholderRewriteRollsBackWithoutPublishedVersion(t *testing.T) {
 			}
 			require.NoError(t, DB.Model(&Task{}).Where("id = ?", row.ID).UpdateColumn("updated_at", version).Error)
 			require.NoError(t, DB.First(row, row.ID).Error)
-			originalCallerVersion := row.UpdatedAt
+			observed := *row
 			row.PrivateData.BillingRequestId = "retry"
 			reached := false
 			if mode == "readback-failure" {
@@ -168,7 +214,7 @@ func TestPlaceholderRewriteRollsBackWithoutPublishedVersion(t *testing.T) {
 				}))
 				t.Cleanup(func() { _ = DB.Callback().Query().Remove("fail-rewrite-version-read") })
 			}
-			require.Error(t, row.RewritePlaceholder())
+			require.Error(t, row.RewritePlaceholder(observed))
 			if mode == "readback-failure" {
 				require.True(t, reached)
 			}
@@ -176,7 +222,7 @@ func TestPlaceholderRewriteRollsBackWithoutPublishedVersion(t *testing.T) {
 			require.NoError(t, DB.First(&fresh, row.ID).Error)
 			require.Equal(t, "original", fresh.PrivateData.BillingRequestId)
 			require.Equal(t, version, fresh.UpdatedAt)
-			require.Equal(t, originalCallerVersion, row.UpdatedAt)
+			require.Equal(t, observed.UpdatedAt, row.UpdatedAt)
 		})
 	}
 }
