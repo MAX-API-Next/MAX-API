@@ -454,31 +454,48 @@ func TestUpdateSunoTasksReturnsErrorForUnsuccessfulResponse(t *testing.T) {
 func TestSunoBatchSkipsDuplicateResponsesAfterStaleProgress(t *testing.T) {
 	truncate(t)
 	seedChannel(t, 7201)
+	seedUser(t, 7220, 80)
+	seedToken(t, 7221, 7220, "synthetic-suno-stale", 80)
 	row := &model.Task{TaskID: "stale-suno", ChannelId: 7201, Status: model.TaskStatusSubmitted, UpdatedAt: 100, Progress: "10%"}
+	staleSuccess := &model.Task{TaskID: "stale-success", ChannelId: 7201, Status: model.TaskStatusSubmitted, UpdatedAt: 100}
+	staleFailure := makeTask(7220, 7201, 20, 7221, BillingSourceWallet, 0)
+	staleFailure.TaskID, staleFailure.Status, staleFailure.UpdatedAt = "stale-failure", model.TaskStatusSubmitted, 100
 	neighbor := &model.Task{TaskID: "current-suno", ChannelId: 7201, Status: model.TaskStatusSubmitted, UpdatedAt: 100}
-	require.NoError(t, model.DB.Create(row).Error)
 	require.NoError(t, model.DB.Create(neighbor).Error)
-	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", row.ID).UpdateColumn("updated_at", 200).Error)
-	require.EqualValues(t, 100, row.UpdatedAt)
+	for _, stale := range []*model.Task{row, staleSuccess, staleFailure} {
+		require.NoError(t, model.DB.Create(stale).Error)
+		require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", stale.ID).UpdateColumn("updated_at", 200).Error)
+		require.EqualValues(t, 100, stale.UpdatedAt)
+	}
 	original := GetTaskAdaptorFunc
 	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor {
 		return &sunoPollingResponseAdaptor{responseBody: `{"code":"success","data":[
 			{"task_id":"stale-suno","status":"IN_PROGRESS","data":{"progress":50}},
 			{"task_id":"stale-suno","status":"SUCCESS","data":{"progress":100}},
+			{"task_id":"stale-success","status":"SUCCESS","data":{"progress":100}},
+			{"task_id":"stale-failure","status":"FAILURE","fail_reason":"rejected"},
 			{"task_id":"current-suno","status":"SUCCESS","data":{"progress":100}}
 		]}`}
 	}
 	t.Cleanup(func() { GetTaskAdaptorFunc = original })
 
-	tasks := map[string]*model.Task{row.TaskID: row, neighbor.TaskID: neighbor}
-	require.NoError(t, updateSunoTasks(t.Context(), 7201, []string{row.TaskID, neighbor.TaskID}, tasks))
-	require.EqualValues(t, model.TaskStatusSubmitted, row.Status)
+	taskIDs := []string{row.TaskID, staleSuccess.TaskID, staleFailure.TaskID, neighbor.TaskID}
+	tasks := map[string]*model.Task{row.TaskID: row, staleSuccess.TaskID: staleSuccess, staleFailure.TaskID: staleFailure, neighbor.TaskID: neighbor}
+	require.NoError(t, updateSunoTasks(t.Context(), 7201, taskIDs, tasks))
 	require.Equal(t, "10%", row.Progress)
 	require.EqualValues(t, model.TaskStatusSuccess, neighbor.Status)
-	stored, err := model.GetTaskPlaceholderByID(row.ID)
-	require.NoError(t, err)
-	require.EqualValues(t, model.TaskStatusSubmitted, stored.Status)
-	require.EqualValues(t, 200, stored.UpdatedAt)
+	for _, stale := range []*model.Task{row, staleSuccess, staleFailure} {
+		require.EqualValues(t, model.TaskStatusSubmitted, stale.Status)
+		stored, err := model.GetTaskPlaceholderByID(stale.ID)
+		require.NoError(t, err)
+		require.EqualValues(t, model.TaskStatusSubmitted, stored.Status)
+		require.EqualValues(t, 200, stored.UpdatedAt)
+	}
+	require.EqualValues(t, 80, getUserQuota(t, 7220))
+	require.EqualValues(t, 80, getTokenRemainQuota(t, 7221))
+	var receipts int64
+	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Count(&receipts).Error)
+	require.Zero(t, receipts)
 }
 
 func TestTaskNeedsUpdateComparesPersistedFailReasonNormalization(t *testing.T) {

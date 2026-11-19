@@ -54,6 +54,46 @@ func catalogFixture(t *testing.T, key, version, source string) (*taskplugin.Pack
 	return p, taskplugin.StoredPackage{Document: document, Digest: p.Digest(), Active: true, Enabled: true}
 }
 
+func TestStoredCatalogLegacyDuplicatesDoNotBlockUpgrade(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	_, old := catalogFixture(t, "legacy-repeat", "1.0.0", "legacy-source")
+	old.Document = bytes.Replace(old.Document, []byte(`"source":"legacy-source"`), []byte(`"source":"discarded","source":"legacy-source"`), 1)
+	old.Document = append([]byte{0xef, 0xbb, 0xbf}, old.Document...)
+	old.Digest = fmt.Sprintf("%x", sha256.Sum256(old.Document))
+	_, err := taskplugin.LoadUpload(bytes.NewReader(old.Document), "")
+	require.ErrorContains(t, err, "repeated")
+	_, err = store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{old})
+	require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid, "a new store write cannot use retained-package compatibility")
+	empty, err := store.Load(t.Context())
+	require.NoError(t, err)
+	require.Zero(t, empty.Revision)
+
+	err = db.Create(&TaskPluginCatalogHead{ID: 1, Revision: 1, MutationID: "before-strict-uploads"}).Error
+	require.NoError(t, err)
+	identity := taskPluginIdentity("legacy-repeat", "1.0.0")
+	err = db.Create(&TaskPluginVersion{Identity: identity, Digest: old.Digest, Document: taskPluginDocument(old.Document), Active: true, Enabled: true}).Error
+	require.NoError(t, err)
+
+	catalog, err := taskplugin.OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	newPackage, _ := catalogFixture(t, "new-clean", "1.0.0", "clean-source")
+	require.NoError(t, catalog.Install(t.Context(), newPackage))
+	snapshot, err := store.Load(t.Context())
+	require.NoError(t, err)
+	require.Len(t, snapshot.Packages, 2)
+	var row TaskPluginVersion
+	require.NoError(t, db.First(&row, "identity = ?", identity).Error)
+	require.Equal(t, old.Document, []byte(row.Document))
+	require.Equal(t, old.Digest, row.Digest)
+	require.NoError(t, catalog.MutateExpected(t.Context(), snapshot.Revision, taskplugin.ManagementMutation{Action: "delete", Key: "legacy-repeat", Version: "1.0.0"}))
+	snapshot, err = store.Load(t.Context())
+	require.NoError(t, err)
+	require.Len(t, snapshot.Packages, 1)
+	require.Len(t, snapshot.Deletions, 1)
+	require.Equal(t, old.Digest, snapshot.Deletions[0].Digest)
+}
+
 func runTaskPluginCatalogStoreContract(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	ctx := context.Background()

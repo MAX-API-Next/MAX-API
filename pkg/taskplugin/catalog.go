@@ -309,7 +309,26 @@ func ValidateCatalogTransition(previous, next CatalogSnapshot) error {
 
 // ValidateCatalogTransitionContext keeps metadata checks within the caller's budget.
 func ValidateCatalogTransitionContext(ctx context.Context, previous, next CatalogSnapshot) error {
-	_, err := buildCatalogStateContext(ctx, next, previous, true)
+	state, err := buildCatalogStateContext(ctx, next, previous, true)
+	if err != nil {
+		return err
+	}
+	previousDigests := make(map[string]bool, len(previous.Packages))
+	for _, pkg := range previous.Packages {
+		previousDigests[pkg.Digest] = true
+	}
+	for _, pkg := range state.history {
+		if pkg.legacyRepeatedMembers && !previousDigests[pkg.digest] {
+			return ErrCatalogInvalid
+		}
+	}
+	return ctx.Err()
+}
+
+// ValidateStoredCatalogSnapshotContext checks retained bytes without treating
+// them as fresh imports. A write must still validate against its actual base.
+func ValidateStoredCatalogSnapshotContext(ctx context.Context, snapshot CatalogSnapshot) error {
+	_, err := buildCatalogStateContext(ctx, snapshot, CatalogSnapshot{}, false)
 	return err
 }
 
@@ -335,7 +354,7 @@ func buildCatalogStateContext(ctx context.Context, snapshot, previous CatalogSna
 			return nil, ErrCatalogInvalid
 		}
 		total += len(entry.Document)
-		p, err := LoadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest)
+		p, err := entry.LoadRetainedPackage(ctx)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -393,7 +412,7 @@ func buildCatalogStateContext(ctx context.Context, snapshot, previous CatalogSna
 			return nil, ErrCatalogInvalid
 		}
 		for _, old := range previous.Packages {
-			p, err := LoadPackageContext(ctx, bytes.NewReader(old.Document), old.Digest)
+			p, err := old.LoadRetainedPackage(ctx)
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
@@ -511,7 +530,7 @@ func installCatalogPackagesContext(ctx context.Context, next *CatalogSnapshot, p
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if p == nil || seen[p.manifest.Key] {
+		if p == nil || p.legacyRepeatedMembers || seen[p.manifest.Key] {
 			return ErrCatalogInvalid
 		}
 		seen[p.manifest.Key] = true
@@ -531,7 +550,7 @@ func installCatalogPackagesContext(ctx context.Context, next *CatalogSnapshot, p
 		}
 		index := -1
 		for i := range next.Packages {
-			old, err := LoadPackageContext(ctx, bytes.NewReader(next.Packages[i].Document), next.Packages[i].Digest)
+			old, err := next.Packages[i].LoadRetainedPackage(ctx)
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -566,7 +585,7 @@ func installCatalogPackagesContext(ctx context.Context, next *CatalogSnapshot, p
 
 func catalogVersion(ctx context.Context, snapshot *CatalogSnapshot, key, version string, activeOnly bool) (int, error) {
 	for i, entry := range snapshot.Packages {
-		p, err := LoadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest)
+		p, err := entry.LoadRetainedPackage(ctx)
 		if ctx.Err() != nil {
 			return -1, ctx.Err()
 		}
@@ -593,7 +612,7 @@ func activateCatalogVersion(ctx context.Context, next *CatalogSnapshot, key, ver
 		return ErrBindingRejected
 	}
 	for i, entry := range next.Packages {
-		p, err := LoadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest)
+		p, err := entry.LoadRetainedPackage(ctx)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

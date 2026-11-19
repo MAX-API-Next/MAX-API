@@ -195,12 +195,15 @@ func withTaskSubmitFailureWriteBudget(db *gorm.DB, write func(*gorm.DB) error) e
 }
 
 func processPendingTaskSubmitFailures() {
-	if DB == nil || !DB.Migrator().HasTable(&TaskSubmitFailureRecovery{}) {
+	if DB == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	db := DB.WithContext(ctx)
+	if !db.Migrator().HasTable(&TaskSubmitFailureRecovery{}) {
+		return
+	}
 	var records []TaskSubmitFailureRecovery
 	if err := db.Where("status = ? AND next_attempt <= ?", TaskSubmitFailureRecoveryPending, time.Now().Unix()).Order("next_attempt, task_id").Limit(25).Find(&records).Error; err != nil {
 		common.SysError("failed to read task submit failure recovery journal")

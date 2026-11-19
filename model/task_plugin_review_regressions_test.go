@@ -596,9 +596,10 @@ func TestTaskPluginSelectedPlanKeyPersistence(t *testing.T) {
 }
 
 func TestTaskPluginDeletionUsesTypedJSONReferences(t *testing.T) {
-	for _, shape := range []string{"binding", "plan", "envelope", "legacy array"} {
+	for _, shape := range []string{"binding", "plan", "envelope", "legacy array", "legacy array billing-shaped reference"} {
 		for _, upper := range []bool{false, true} {
-			if shape == "legacy array" && upper {
+			isLegacy := strings.HasPrefix(shape, "legacy array")
+			if isLegacy && upper {
 				continue
 			}
 			t.Run(fmt.Sprintf("%s/uppercase=%t", shape, upper), func(t *testing.T) {
@@ -625,8 +626,13 @@ func TestTaskPluginDeletionUsesTypedJSONReferences(t *testing.T) {
 				}
 				task := Task{TaskID: "json-reference"}
 				require.NoError(t, db.Create(&task).Error)
-				if shape == "legacy array" {
-					raw = []byte(`[{"historical":{"plugin_key":"stored","version":"1.0.0"}}]`)
+				if isLegacy {
+					switch shape {
+					case "legacy array":
+						raw = []byte(`[{"historical":{"plugin_key":"stored","version":"1.0.0"}}]`)
+					default:
+						raw = []byte(`[{"billing_context":{"pricing_usage_envelope":{"facts":{"plugin_key":"stored","version":"1.0.0"}}}}]`)
+					}
 					require.NoError(t, db.Model(&Task{}).Where("id = ?", task.ID).UpdateColumn("private_data", string(raw)).Error)
 				} else {
 					require.NoError(t, db.Model(&Task{}).Where("id = ?", task.ID).Updates(map[string]any{"private_data": string(raw)}).Error, "exercise the actual typed write guard without canonicalizing stored keys")
@@ -1133,6 +1139,9 @@ func TestTaskPluginHistoricalBindingInPlannedEvidenceUpdates(t *testing.T) {
 			require.Equal(t, 20, saved.Quota, "intent creation must not claim applied funding")
 			require.Equal(t, row.PrivateData.PluginBinding, saved.PrivateData.PluginBinding)
 			require.EqualValues(t, TaskStatusSuccess, saved.PrivateData.PendingTerminalStatus)
+			if kind == "submit" {
+				require.Equal(t, "accepted-provider-id", saved.PrivateData.UpstreamTaskID)
+			}
 			var record BillingSettlement
 			err = db.Where("operation_key = ?", input.OperationKey).First(&record).Error
 			if kind == "evidence" {

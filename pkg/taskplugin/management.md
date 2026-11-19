@@ -80,8 +80,9 @@ restored merely because the old snapshot matches.
 
 File uploads preserve a leading UTF-8 BOM and line endings. The server accepts a
 leading BOM in JSON packages while hashing and retaining the original bytes.
-JSON packages require each member name to appear once per object, including
-objects nested inside the manifest.
+New JSON imports require each member name to appear once per object, including
+objects nested inside the manifest. Packages already recorded in a catalog keep
+their legacy JSON interpretation, original bytes and digest across upgrades.
 Installation and activation require `bom_nodes_ready: true` for these packages,
 including format 1. Upgrade every catalog reader first: previous loaders reject
 the BOM and can suspend their entire Host. The console asks for this readiness

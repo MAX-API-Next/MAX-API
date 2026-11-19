@@ -253,7 +253,7 @@ func taskPluginStorageIdentity(entry taskplugin.StoredPackage) (string, error) {
 }
 
 func taskPluginStorageIdentityContext(ctx context.Context, entry taskplugin.StoredPackage) (string, error) {
-	p, err := taskplugin.LoadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest)
+	p, err := entry.LoadRetainedPackage(ctx)
 	if ctx.Err() != nil {
 		return "", errors.Join(taskplugin.ErrCatalogUnavailable, ctx.Err())
 	}
@@ -344,7 +344,7 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 		return 0, taskplugin.ErrCatalogInvalid
 	}
 	next := taskplugin.CatalogSnapshot{Revision: revision + 1, Packages: packages}
-	if err := taskplugin.ValidateCatalogTransitionContext(ctx, taskplugin.CatalogSnapshot{}, next); err != nil {
+	if err := taskplugin.ValidateStoredCatalogSnapshotContext(ctx, next); err != nil {
 		return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, err)
 	}
 	// Input identities do not depend on database state. Compute them before

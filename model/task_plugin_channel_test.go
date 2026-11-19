@@ -139,6 +139,12 @@ func TestChannelBatchValidatesReceiptUnionOncePerStatement(t *testing.T) {
 	require.Zero(t, count, "a later mapping-only reference rolls back the entire batch")
 	ignored := []Channel{{Name: "omitted-a", Models: "catalog-model"}, {Name: "omitted-b", Models: "catalog-model"}}
 	require.NoError(t, db.Omit("models").Create(&ignored).Error)
+	var persisted []Channel
+	require.NoError(t, db.Where("name IN ?", []string{"omitted-a", "omitted-b"}).Find(&persisted).Error)
+	require.Len(t, persisted, 2)
+	for _, row := range persisted {
+		require.Empty(t, row.Models)
+	}
 	reads = 0
 	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
 		first := []Channel{{Name: "tx-first-a", Models: "ordinary"}, {Name: "tx-first-b", Models: "ordinary"}}

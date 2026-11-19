@@ -485,11 +485,11 @@ func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem
 	var won bool
 	var err error
 	if settlement != nil {
-		won, err = mergedTask.UpdateWithStatusAndSettlement(previousStatus, *settlement)
+		won, err = mergedTask.UpdateWithStatusAndSettlementSnapshot(previousStatus, task.UpdatedAt, *settlement)
 	} else if !providerTerminal {
 		won, err = mergedTask.UpdatePollingProgress(previousStatus)
 	} else {
-		won, err = mergedTask.UpdateWithStatus(previousStatus)
+		won, err = mergedTask.UpdateWithStatusSnapshot(previousStatus, task.UpdatedAt)
 	}
 	if err != nil {
 		common.SysLog("UpdateSunoTask task error: " + err.Error())

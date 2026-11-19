@@ -116,7 +116,12 @@ func TestMidjourneySubmitFailurePreservesFundingOwner(t *testing.T) {
 					require.Equal(t, model.BillingRequestFinalizeOperationKey(info.RequestId), recovery.OperationKey)
 					require.NoError(t, db.Callback().Update().Remove("fail-mj-task-update"))
 					model.ProcessPendingBillingSettlementsOnce()
+					require.NoError(t, db.First(&recovery, "task_id = ?", row.ID).Error)
+					require.Equal(t, model.TaskSubmitFailureRecoveryRecorded, recovery.Status)
+					attempts := recovery.Attempts
 					model.ProcessPendingBillingSettlementsOnce()
+					require.NoError(t, db.First(&recovery, "task_id = ?", row.ID).Error)
+					require.Equal(t, attempts, recovery.Attempts)
 					require.NoError(t, db.First(&stored, row.ID).Error)
 					require.EqualValues(t, model.TaskStatusFailure, stored.Status)
 					require.Zero(t, stored.Quota)

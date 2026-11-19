@@ -125,7 +125,7 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 			return taskplugin.ErrBindingRejected
 		}
 		entry := rows[index]
-		pkg, err := taskplugin.LoadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest)
+		pkg, err := entry.LoadRetainedPackage(ctx)
 		if err != nil {
 			return taskplugin.ErrCatalogInvalid
 		}
@@ -446,14 +446,14 @@ type taskPluginReferenceIdentity struct {
 // Keep legacy deletion scans and serialized write validation on the same
 // reference vocabulary. Returning true from visit stops the traversal.
 func visitTaskPluginReferences(value any, visit func(taskPluginReferenceIdentity) bool) bool {
-	return visitTaskPluginReferencePath(value, nil, visit)
+	return visitTaskPluginReferencePath(value, nil, true, visit)
 }
 
-func visitTaskPluginReferencePath(value any, path []string, visit func(taskPluginReferenceIdentity) bool) bool {
+func visitTaskPluginReferencePath(value any, path []string, typed bool, visit func(taskPluginReferenceIdentity) bool) bool {
 	// These canonical maps hold arbitrary billing facts, not package identity.
 	// Unknown historical objects and actual binding/plan/envelope paths remain
 	// recursive reference containers in both persistence and deletion scans.
-	if len(path) >= 3 && strings.EqualFold(path[0], "billing_context") {
+	if typed && len(path) >= 3 && strings.EqualFold(path[0], "billing_context") {
 		if len(path) == 3 && (strings.EqualFold(path[1], "task_billing") && (strings.EqualFold(path[2], "fields") || strings.EqualFold(path[2], "matched")) || strings.EqualFold(path[1], "pricing_usage_envelope") && strings.EqualFold(path[2], "facts")) {
 			return false
 		}
@@ -496,13 +496,13 @@ func visitTaskPluginReferencePath(value any, path []string, visit func(taskPlugi
 			}
 		}
 		for key, child := range v {
-			if visitTaskPluginReferencePath(child, append(path, key), visit) {
+			if visitTaskPluginReferencePath(child, append(path, key), typed, visit) {
 				return true
 			}
 		}
 	case []any:
 		for _, child := range v {
-			if visitTaskPluginReferencePath(child, path, visit) {
+			if visitTaskPluginReferencePath(child, path, false, visit) {
 				return true
 			}
 		}

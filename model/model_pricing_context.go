@@ -2,7 +2,6 @@
 package model
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -161,7 +160,7 @@ func readPricingCatalog(tx *gorm.DB, lock bool) ([]taskplugin.StoredPackage, boo
 		return nil, false, err
 	}
 	snapshot := taskplugin.CatalogSnapshot{Revision: head.Revision, Packages: rows, Deletions: deletions}
-	if err := taskplugin.ValidateCatalogTransitionContext(tx.Statement.Context, taskplugin.CatalogSnapshot{}, snapshot); err != nil {
+	if err := taskplugin.ValidateStoredCatalogSnapshotContext(tx.Statement.Context, snapshot); err != nil {
 		return nil, false, err
 	}
 	return rows, true, nil
@@ -252,7 +251,7 @@ func (a *pricingAuthority) contextsContext(ctx context.Context, model string) ([
 		pkg := a.validatedPackages[entry.Digest]
 		if pkg == nil {
 			var err error
-			pkg, err = taskplugin.LoadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest)
+			pkg, err = entry.LoadRetainedPackage(ctx)
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}

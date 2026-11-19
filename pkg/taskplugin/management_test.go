@@ -730,7 +730,7 @@ type cancelInstallReceiptTraversal struct {
 
 func (ctx *cancelInstallReceiptTraversal) Err() error {
 	ctx.checks++
-	if ctx.checks == 2 {
+	if ctx.checks == 3 {
 		ctx.cancel()
 	}
 	return ctx.Context.Err()
@@ -745,6 +745,7 @@ func TestInstallReceiptTraversalHonorsCancellationBeforeRevocation(t *testing.T)
 	ctx := &cancelInstallReceiptTraversal{Context: inner, cancel: cancel}
 	err := installCatalogPackagesContext(ctx, &next, pkg)
 	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 3, ctx.checks)
 	require.NotErrorIs(t, err, ErrCatalogRevoked)
 	require.Equal(t, before, next)
 	require.ErrorIs(t, installCatalogPackagesContext(t.Context(), &next, pkg), ErrCatalogRevoked, "uncanceled receipt still enforces revocation")

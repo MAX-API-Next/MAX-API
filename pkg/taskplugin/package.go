@@ -45,13 +45,14 @@ type PackageDocument struct {
 // Package has already passed an administrator-supplied digest check. The hash
 // covers the entire document, including routing and network permissions.
 type Package struct {
-	manifest      Manifest
-	source        string
-	digest        string
-	size          int
-	document      []byte
-	formatVersion int
-	program       *Program
+	manifest              Manifest
+	source                string
+	digest                string
+	size                  int
+	document              []byte
+	formatVersion         int
+	program               *Program
+	legacyRepeatedMembers bool
 }
 
 // LoadPackage accepts exactly one bounded document and requires a trusted hash
@@ -64,6 +65,16 @@ func LoadPackage(reader io.Reader, expectedSHA256 string) (*Package, error) {
 // LoadPackageContext also bounds executable metadata evaluation by the caller's
 // context. The byte, manifest and trusted-pin contract is identical to LoadPackage.
 func LoadPackageContext(ctx context.Context, reader io.Reader, expectedSHA256 string) (*Package, error) {
+	return loadPackageContext(ctx, reader, expectedSHA256, false)
+}
+
+// LoadRetainedPackage reads digest-pinned bytes already retained by a catalog.
+// Legacy packages retain their original JSON interpretation and bytes.
+func (entry StoredPackage) LoadRetainedPackage(ctx context.Context) (*Package, error) {
+	return loadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest, true)
+}
+
+func loadPackageContext(ctx context.Context, reader io.Reader, expectedSHA256 string, retained bool) (*Package, error) {
 	if ctx == nil {
 		return nil, ErrCatalogUnavailable
 	}
@@ -85,8 +96,12 @@ func LoadPackageContext(ctx context.Context, reader io.Reader, expectedSHA256 st
 	// A UTF-8 BOM is permitted only at the start of the JSON document. Hash,
 	// size and persisted identity continue to cover the original upload bytes.
 	jsonData := bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
+	legacyRepeatedMembers := false
 	if !validPackageFields(jsonData) {
-		return nil, errors.New("unsupported task plugin package fields or repeated JSON member")
+		if !retained || !validLegacyPackageFields(jsonData) {
+			return nil, errors.New("unsupported task plugin package fields or repeated JSON member")
+		}
+		legacyRepeatedMembers = true
 	}
 	var document PackageDocument
 	if err := common.Unmarshal(jsonData, &document); err != nil {
@@ -123,7 +138,20 @@ func LoadPackageContext(ctx context.Context, reader io.Reader, expectedSHA256 st
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &Package{manifest: cloneManifest(document.Manifest), source: document.Source, digest: hex.EncodeToString(actual[:]), size: len(data), document: data, formatVersion: document.FormatVersion, program: program}, nil
+	return &Package{manifest: cloneManifest(document.Manifest), source: document.Source, digest: hex.EncodeToString(actual[:]), size: len(data), document: data, formatVersion: document.FormatVersion, program: program, legacyRepeatedMembers: legacyRepeatedMembers}, nil
+}
+
+func validLegacyPackageFields(data []byte) bool {
+	var fields map[string]any
+	if common.Unmarshal(data, &fields) != nil || len(fields) != 3 {
+		return false
+	}
+	for _, name := range []string{"format_version", "manifest", "source"} {
+		if _, exists := fields[name]; !exists {
+			return false
+		}
+	}
+	return true
 }
 
 func validPackageFields(data []byte) bool {

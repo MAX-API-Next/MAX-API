@@ -62,6 +62,25 @@ func TestSlowTaskSubmitFailureClaimDoesNotBlockLaterRecovery(t *testing.T) {
 	require.Equal(t, journal[1].OperationKey, intents[0].OperationKey)
 }
 
+func TestTaskSubmitFailureRecoveryMetadataUsesPassDeadline(t *testing.T) {
+	db := deletionDB(t)
+	previous := DB
+	DB = db
+	t.Cleanup(func() { DB = previous })
+	seen := false
+	require.NoError(t, db.Callback().Row().Before("gorm:row").Register("check-rejection-journal-metadata-deadline", func(tx *gorm.DB) {
+		if !strings.Contains(tx.Statement.SQL.String(), "sqlite_master") {
+			return
+		}
+		seen = true
+		deadline, bounded := tx.Statement.Context.Deadline()
+		require.True(t, bounded)
+		require.LessOrEqual(t, time.Until(deadline), 5*time.Second)
+	}))
+	processPendingTaskSubmitFailures()
+	require.True(t, seen, "exercise the actual migrator query")
+}
+
 func TestPendingSubmitFailureRecoveryOwnsTimeoutAndRetry(t *testing.T) {
 	for _, operation := range []string{"candidate", "retry", "status", "manual"} {
 		t.Run(operation, func(t *testing.T) {
