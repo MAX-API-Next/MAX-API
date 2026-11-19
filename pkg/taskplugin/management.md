@@ -19,6 +19,13 @@ task updates now validate recursive legacy map/array references as well as typed
 bindings and frozen plans under the catalog-head lock. Unknown fields without
 references remain writable; omitted fields do not participate in the check.
 
+Deletion now prefilters historical task JSON for the target identity before
+decoding it. A corrupt row proven unrelated to that identity no longer blocks
+its deletion; candidate rows with invalid JSON or typed data still require
+repair. This changes the scope of the deletion precondition, not worker recovery:
+unreadable tasks remain isolated and require trusted repair. The prefilter is
+not indexed, and large-history lock duration still needs deployment validation.
+
 Package loading, compilation/metadata checks and catalog operations share the
 administrative operation's 10-second context, starting before candidate loading.
 The existing JavaScript per-call execution limits remain secondary bounds.
@@ -108,8 +115,8 @@ that earlier revision correctly conflicts rather than replacing the bootstrap.
 Deletion also checks malformed historical data before it can prove that no
 references remain. An unrelated channel with an invalid model mapping blocks
 deletion with HTTP 422, `code: "invalid_channel_mapping"` and `channel_id`.
-Invalid historical task JSON, or an object that cannot be decoded into typed
-task private data, blocks it with HTTP 422,
+Candidate historical task JSON that is invalid, or an object that cannot be
+decoded into typed task private data, blocks it with HTTP 422,
 `code: "invalid_task_data"` and the decimal-string database row `task_id`.
 Historical root arrays are checked recursively for references; an array with
 no matching reference is not rejected solely because the typed decoder cannot
@@ -156,6 +163,12 @@ scalability work; the current implementation does not provide indexed lookup.
 Any retained non-revoked declaration intentionally satisfies this metadata
 reference check, including inactive or disabled versions. This preserves channel
 configuration and does not prove an active route, executor or paid admission.
+Deletion uses a stricter ownership rule: an unversioned channel model or
+plugin-key pricing override can refer to every matching installed version.
+For example, if v1 and v2 declare the same model, its channel reference blocks
+deletion of either version, even when the other is retained. A key-scoped price
+similarly blocks each version of that key. Another declaration does not transfer
+or version-pin these references; remove them before deleting the version.
 
 The console and management API no longer expose `revoke`; legacy requests are
 rejected without committing. Existing revocation records remain readable for
@@ -207,6 +220,19 @@ typed, case-insensitive JSON field rules as persistence, while recursive legacy
 map/array checks inside the private-data object remain supported. New serialized
 non-null task writes still require an object, matching the typed task/recovery decoder;
 accepting an array at the root would create an unreadable task record.
+Before decoding, SQL selects rows containing the complete quoted package key,
+the complete quoted digest, or any JSON Unicode escape marker (`\u`). Canonical
+identity strings must use a literal or Unicode escapes, so escaped identities,
+case variants of field names and unknown legacy containers remain candidates.
+The original typed and recursive checks then decide whether a reference exists.
+SQLite compares TEXT and BLOB values using their respective native types, also
+preserving UTF-16 TEXT alongside UTF-8 blobs. A disjoint corrupt row is left
+unchanged. This reduces JSON transfer and Go decoding under the existing locks;
+the native database predicate still scans history and may be O(task count).
+Many matching identities or unrelated Unicode escapes can retain many rows.
+No durable reference index or backfill is added, and this is not a guarantee of
+bounded lock time. Validate large histories and real database isolation/roles
+in an isolated environment before relying on deletion latency.
 Typed billing fact containers (`task_billing.fields`/`matched`,
 `pricing_usage_envelope.facts` and `task_billing_plan.expression_plan.submit_facts`
 within `billing_context`) are data, even when a declared fact is named

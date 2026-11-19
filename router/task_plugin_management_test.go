@@ -232,7 +232,7 @@ func TestTaskPluginManagementDeletionRequiresRootAcknowledgementAndNoReferences(
 	require.NoError(t, db.Delete(&legacy).Error)
 	malformed := &model.Task{TaskID: "private-provider-id"}
 	require.NoError(t, db.Create(malformed).Error)
-	require.NoError(t, db.Model(malformed).UpdateColumn("private_data", []byte(`{"upstream_task_id":42,"key":"private-task-secret"}`)).Error)
+	require.NoError(t, db.Model(malformed).UpdateColumn("private_data", []byte(`{"upstream_task_id":42,"key":"private-task-secret","notes":"deletable"}`)).Error)
 	response = request(command, true)
 	require.Equal(t, 422, response.Code, response.Body.String())
 	require.Contains(t, response.Body.String(), `"code":"invalid_task_data"`)

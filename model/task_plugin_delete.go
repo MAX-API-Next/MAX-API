@@ -208,11 +208,47 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 	return revision + 1, nil
 }
 
+func taskPluginTaskReferenceCandidates(tx *gorm.DB, pkg *taskplugin.Package) (*gorm.DB, error) {
+	key, err := common.Marshal(pkg.Manifest().Key)
+	if err != nil {
+		return nil, taskplugin.ErrCatalogInvalid
+	}
+	digest, err := common.Marshal(pkg.Digest())
+	if err != nil {
+		return nil, taskplugin.ErrCatalogInvalid
+	}
+	// Keys and digests are canonical ASCII. An equal decoded JSON string must
+	// contain its complete quoted literal or a unicode escape. Keep the latter
+	// as a conservative fallback regardless of field casing/legacy containers.
+	// SQL still scans storage; this reduces transferred bytes and Go decoding,
+	// and must not be described as an indexed or constant-time lookup.
+	var predicates []clause.Expression
+	for _, needle := range []string{string(key), string(digest), `\u`} {
+		switch tx.Dialector.Name() {
+		case "sqlite":
+			// BLOBs are raw UTF-8 bytes; TEXT follows the database encoding.
+			// Do not cast between them: UTF-16 databases may contain both.
+			predicates = append(predicates, clause.Expr{SQL: "CASE WHEN typeof(private_data) = 'blob' THEN instr(private_data, ?) ELSE instr(private_data, ?) END > 0", Vars: []any{[]byte(needle), needle}})
+		case "mysql":
+			predicates = append(predicates, clause.Expr{SQL: "INSTR(private_data, ?) > 0", Vars: []any{needle}})
+		case "postgres":
+			predicates = append(predicates, clause.Expr{SQL: "POSITION(? IN CAST(private_data AS TEXT)) > 0", Vars: []any{needle}})
+		default:
+			return nil, taskplugin.ErrCatalogUnavailable
+		}
+	}
+	return tx.Model(&Task{}).Where("private_data IS NOT NULL").Where(clause.Or(predicates...)), nil
+}
+
 func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 	m := pkg.Manifest()
 	// Inspect all historical statuses. A terminal task still owns its binding,
 	// frozen pricing and recovery evidence. Never log or return private JSON.
-	rows, err := tx.Model(&Task{}).Select("id", "private_data").Where("private_data IS NOT NULL").Rows()
+	candidates, err := taskPluginTaskReferenceCandidates(tx, pkg)
+	if err != nil {
+		return err
+	}
+	rows, err := candidates.Select("id", "private_data").Rows()
 	if err != nil {
 		return err
 	}

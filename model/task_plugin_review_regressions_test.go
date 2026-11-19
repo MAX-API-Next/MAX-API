@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -21,6 +22,8 @@ import (
 	"github.com/glebarez/sqlite"
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
+	gormmysql "gorm.io/driver/mysql"
+	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"gorm.io/gorm/schema"
@@ -1130,7 +1133,7 @@ func TestTaskPluginMalformedHistoricalTaskIsRepairablePrecondition(t *testing.T)
 	require.NoError(t, err)
 	row := &Task{TaskID: "private-provider-task"}
 	require.NoError(t, db.Create(row).Error)
-	require.NoError(t, db.Model(row).UpdateColumn("private_data", []byte(`{"upstream_task_id":42,"key":"private-secret"}`)).Error)
+	require.NoError(t, db.Model(row).UpdateColumn("private_data", []byte(`{"upstream_task_id":42,"key":"private-secret","notes":"stored"}`)).Error, "candidate type errors remain repairable preconditions")
 	err = catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"})
 	require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
 	require.NotErrorIs(t, err, taskplugin.ErrCatalogUnavailable)
@@ -1224,6 +1227,16 @@ func TestTaskPluginRetainedDeclarationsAreMetadataReferences(t *testing.T) {
 	retired.Active = false
 	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{retired, active})
 	require.NoError(t, err)
+	shared := &Channel{Models: "catalog-model"}
+	require.NoError(t, db.Create(shared).Error)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "2.0.0")
+	require.ErrorIs(t, err, taskplugin.ErrCatalogInUse, "another declaration does not transfer an unversioned channel reference")
+	require.NoError(t, db.Delete(shared).Error)
+	price := &Option{Key: billing_setting.PluginBillingExprOption, Value: `{"stored::catalog-model":"1"}`}
+	require.NoError(t, db.Create(price).Error)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "2.0.0")
+	require.ErrorIs(t, err, taskplugin.ErrCatalogInUse, "plugin-key overrides potentially refer to every version of that key")
+	require.NoError(t, db.Delete(price).Error)
 	_, err = store.DeleteVersion(t.Context(), 1, "stored", "2.0.0")
 	require.NoError(t, err)
 	require.NoError(t, db.Create(&Channel{Models: "catalog-model"}).Error, "retired declaration intentionally retains configuration metadata")
@@ -1545,4 +1558,161 @@ func TestTaskPluginPersistenceRequestsCurrentHeadRead(t *testing.T) {
 	err = db.Create(&Task{TaskID: "current-head", PrivateData: TaskPrivateData{PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", Version: "1.0.0", PackageDigest: pkg.Digest()}}}).Error
 	require.NoError(t, err)
 	require.True(t, headRead, "clause control does not replace real MySQL isolation validation")
+}
+
+func TestTaskPluginReferenceCandidatesNarrowWithoutLosingEscapes(t *testing.T) {
+	db := deletionDB(t)
+	pkg, _ := catalogFixture(t, "stored", "1.0.0", "candidate-scan")
+	ordinary := make([]Task, 256)
+	for i := range ordinary {
+		ordinary[i] = Task{TaskID: fmt.Sprintf("ordinary-%d", i), Status: TaskStatusSuccess, PrivateData: TaskPrivateData{UpstreamTaskID: strings.Repeat("ordinary-data-", 300)}}
+	}
+	require.NoError(t, db.CreateInBatches(&ordinary, 64).Error)
+	var expected []int64
+	fixtures := []struct {
+		raw       string
+		candidate bool
+	}{
+		{`{"plugin_binding":{"plugin_key":"stored-other"}}`, false},
+		{`{"upstream_task_id":42}`, false},
+		{`{"notes":"u(\"units\") * 0.1"}`, false},
+		{`{"PLUGIN_BINDING":{"PLUGIN_KEY":"stored"}}`, true},
+		{fmt.Sprintf(`{"legacy":[{"PACKAGE_DIGEST":%q}]}`, pkg.Digest()), true},
+		{`[{"plugin_key":"stored"}]`, true},
+		{`{"upstream_task_id":"\u0073tored"}`, true},
+		{`{"notes":"\u4e2d"}`, true}, // Conservative unicode fallback, even when unrelated.
+		{`{"upstream_task_id":42,"notes":"stored"}`, true},
+	}
+	for i := range "stored" {
+		key := "stored"
+		fixtures = append(fixtures, struct {
+			raw       string
+			candidate bool
+		}{fmt.Sprintf(`{"legacy":{"plugin_key":"%s\u%04x%s"}}`, key[:i], key[i], key[i+1:]), true})
+	}
+	for _, asText := range []bool{false, true} {
+		for i, f := range fixtures {
+			row := &Task{TaskID: fmt.Sprintf("candidate-%t-%d", asText, i), Status: TaskStatusSuccess}
+			require.NoError(t, db.Create(row).Error)
+			var raw any = []byte(f.raw)
+			if asText {
+				raw = f.raw
+			}
+			require.NoError(t, db.Model(row).UpdateColumn("private_data", raw).Error)
+			if f.candidate {
+				expected = append(expected, row.ID)
+			}
+		}
+	}
+	query, err := taskPluginTaskReferenceCandidates(db, pkg)
+	require.NoError(t, err)
+	var ids []int64
+	require.NoError(t, query.Select("id").Scan(&ids).Error)
+	require.ElementsMatch(t, expected, ids, "only plausible identity/unicode rows should be transferred for JSON decoding")
+}
+
+func TestTaskPluginReferenceCandidatesKeepUTF16TextAndUTF8Blobs(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "utf16.sqlite")), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	require.NoError(t, db.Exec("PRAGMA encoding = 'UTF-16le'").Error)
+	require.NoError(t, db.AutoMigrate(&Task{}))
+	var encoding string
+	require.NoError(t, db.Raw("PRAGMA encoding").Scan(&encoding).Error)
+	require.Equal(t, "UTF-16le", encoding)
+	pkg, _ := catalogFixture(t, "stored", "1.0.0", "utf16-scan")
+	var expected []int64
+	for _, asText := range []bool{false, true} {
+		for i, raw := range []string{`{"plugin_binding":{"plugin_key":"stored"}}`, `{"legacy":{"plugin_key":"\u0073tored"}}`} {
+			row := &Task{TaskID: fmt.Sprintf("utf16-%t-%d", asText, i)}
+			require.NoError(t, db.Create(row).Error)
+			var stored any = []byte(raw)
+			if asText {
+				stored = raw
+			}
+			require.NoError(t, db.Model(row).UpdateColumn("private_data", stored).Error)
+			expected = append(expected, row.ID)
+		}
+	}
+	query, err := taskPluginTaskReferenceCandidates(db, pkg)
+	require.NoError(t, err)
+	var ids []int64
+	require.NoError(t, query.Select("id").Scan(&ids).Error)
+	require.ElementsMatch(t, expected, ids)
+}
+
+func TestTaskPluginDisjointCorruptTaskDoesNotBlockDeletion(t *testing.T) {
+	db := deletionDB(t)
+	pkg, _ := catalogFixture(t, "stored", "1.0.0", "disjoint-task")
+	catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	row := &Task{TaskID: "unrelated-corrupt-task", Status: TaskStatusSubmitted, Quota: 20}
+	require.NoError(t, db.Create(row).Error)
+	const malformed = `{"upstream_task_id":42}`
+	require.NoError(t, db.Model(row).UpdateColumn("private_data", malformed).Error)
+	require.NoError(t, catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"}))
+	var saved struct {
+		PrivateData string
+		Status      TaskStatus
+		Quota       int
+	}
+	require.NoError(t, db.Model(&Task{}).Where("id = ?", row.ID).Take(&saved).Error)
+	require.Equal(t, malformed, saved.PrivateData)
+	require.Equal(t, TaskStatus(TaskStatusSubmitted), saved.Status)
+	require.Equal(t, 20, saved.Quota)
+}
+
+func TestTaskPluginUnicodeLegacyReferencesStillBlockDeletion(t *testing.T) {
+	for _, digestOnly := range []bool{false, true} {
+		t.Run(fmt.Sprint(digestOnly), func(t *testing.T) {
+			db := deletionDB(t)
+			pkg, _ := catalogFixture(t, "stored", "1.0.0", "unicode-legacy")
+			catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+			require.NoError(t, err)
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			row := &Task{TaskID: "unicode-reference", Status: TaskStatusSuccess}
+			require.NoError(t, db.Create(row).Error)
+			raw := `[{"legacy":{"PLUGIN_KEY":"\u0073tored"}}]`
+			if digestOnly {
+				digest := pkg.Digest()
+				raw = fmt.Sprintf(`{"legacy":{"PACKAGE_DIGEST":"\u%04x%s"}}`, digest[0], digest[1:])
+			}
+			require.NoError(t, db.Model(row).UpdateColumn("private_data", raw).Error)
+			require.ErrorIs(t, catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"}), taskplugin.ErrCatalogInUse)
+		})
+	}
+}
+
+func TestTaskPluginCandidateQueryBuildsForSupportedSQLDialects(t *testing.T) {
+	base := deletionDB(t)
+	pkg, _ := catalogFixture(t, "stored", "1.0.0", "dialect-candidates")
+	for name, dialector := range map[string]gorm.Dialector{
+		"mysql":    gormmysql.New(gormmysql.Config{Conn: base.Statement.ConnPool, SkipInitializeWithVersion: true}),
+		"postgres": gormpostgres.New(gormpostgres.Config{Conn: base.Statement.ConnPool}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			db, err := gorm.Open(dialector, &gorm.Config{DisableAutomaticPing: true, DryRun: true})
+			require.NoError(t, err)
+			query, err := taskPluginTaskReferenceCandidates(db, pkg)
+			require.NoError(t, err)
+			var rows []Task
+			built := query.Select("id").Find(&rows)
+			require.NoError(t, built.Error)
+			require.Len(t, built.Statement.Vars, 3)
+			require.Equal(t, `"stored"`, built.Statement.Vars[0])
+			require.Equal(t, `"`+pkg.Digest()+`"`, built.Statement.Vars[1])
+			require.Equal(t, `\u`, built.Statement.Vars[2])
+			if name == "postgres" {
+				require.Contains(t, built.Statement.SQL.String(), "POSITION($1 IN CAST(private_data AS TEXT))")
+			} else {
+				require.Contains(t, built.Statement.SQL.String(), "INSTR(private_data, ?)")
+			}
+			// Uses real dialect builders with SQL execution disabled; it is not
+			// a MySQL/PostgreSQL server, role or isolation integration test.
+		})
+	}
 }

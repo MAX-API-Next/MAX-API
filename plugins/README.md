@@ -45,6 +45,20 @@ explicitly reinstalled if the version was not historically revoked. A revoked
 receipt continues to reject identical bytes. Changed bytes under the same
 identity are always rejected.
 
+Unversioned channel models and plugin-key prices conservatively reference every
+matching installed version. Keeping another version with the same declaration
+does not permit deletion; remove those references first. Channel configuration
+can still use any retained non-revoked declaration, including a retired version.
+This metadata existence rule does not transfer ownership or open paid routing.
+
+Deletion prefilters task JSON by literal identities and Unicode escapes before
+decoding. Potentially related corrupt rows still require repair; provably
+unrelated corrupt rows no longer block the operation and are left unchanged.
+This reduces transferred/decoded data but adds no reference index: native
+database scanning and lock duration still depend on historical data size.
+See the [management guide](../pkg/taskplugin/management.md) for compatibility
+and isolated large-history validation requirements.
+
 Before acknowledging deletion readiness, upgrade every catalog consumer,
 channel writer, task writer **and pricing writer**, including workers that persist serialized
 historical task references. Read the [management upgrade guide](../pkg/taskplugin/management.md)
