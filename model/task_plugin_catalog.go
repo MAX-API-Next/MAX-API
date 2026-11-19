@@ -271,6 +271,7 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 	}
 	var snapshot taskplugin.CatalogSnapshot
 	var observedRevision *int64
+	var completedData *taskplugin.CatalogSnapshot
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var head TaskPluginCatalogHead
 		err := tx.First(&head, 1).Error
@@ -291,6 +292,7 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		if err != nil {
 			return err
 		}
+		completedData = &taskplugin.CatalogSnapshot{Revision: head.Revision, Packages: rows, Deletions: deletions}
 		var after TaskPluginCatalogHead
 		err = tx.First(&after, 1).Error
 		if err != nil && ctx.Err() != nil {
@@ -322,7 +324,7 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 			err = errors.Join(taskplugin.ErrCatalogUnavailable, ctx.Err())
 		}
 		if observedRevision != nil {
-			err = &taskplugin.CatalogReadObservationError{Revision: *observedRevision, Err: err}
+			err = &taskplugin.CatalogReadObservationError{Revision: *observedRevision, Snapshot: completedData, Err: err}
 		}
 		return taskplugin.CatalogSnapshot{}, err
 	}

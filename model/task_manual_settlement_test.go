@@ -41,6 +41,34 @@ func TestPlaceholderRewriteMakesStaleManualDecisionLose(t *testing.T) {
 	}
 }
 
+func TestPlaceholderRewriteLosesAfterNewerManualDecision(t *testing.T) {
+	truncateTables(t)
+	row := &Task{TaskID: "manual-before-retry", Status: TaskStatusSubmitted, Quota: 20, PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: "original"}}
+	insertTask(t, row)
+	var retry Task
+	require.NoError(t, DB.First(&retry, row.ID).Error)
+	observedVersion := retry.UpdatedAt
+	input := BillingSettlementInput{OperationKey: BillingTaskFinalizeOperationKey(row.ID), Source: BillingSettlementSourceWallet, UserID: 1, TaskID: row.ID, TaskQuota: 20, TaskQuotaTarget: 20}
+	won, err := row.UpdateWithStatusAndManualSettlement(TaskStatusSubmitted, row.UpdatedAt, input, "requires reconciliation")
+	require.NoError(t, err)
+	require.True(t, won)
+	retry.ChannelId = 99
+	retry.PrivateData.BillingRequestId = "stale-retry"
+	require.Error(t, retry.RewritePlaceholder())
+	require.Equal(t, observedVersion, retry.UpdatedAt)
+	var fresh Task
+	require.NoError(t, DB.First(&fresh, row.ID).Error)
+	require.Equal(t, "original", fresh.PrivateData.BillingRequestId)
+	require.Equal(t, row.UpdatedAt, fresh.UpdatedAt)
+	require.Equal(t, row.ChannelId, fresh.ChannelId)
+	fresh.PrivateData.BillingRequestId = "reloaded-retry"
+	require.Error(t, fresh.RewritePlaceholder(), "reloading does not authorize replacing an owned finalize decision")
+	var record BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", input.OperationKey).First(&record).Error)
+	require.Equal(t, BillingSettlementStatusManual, record.Status)
+	require.Zero(t, record.AppliedFundingDelta)
+}
+
 func TestPlaceholderRewriteRollsBackWithoutPublishedVersion(t *testing.T) {
 	for _, mode := range []string{"overflow", "readback-failure"} {
 		t.Run(mode, func(t *testing.T) {
@@ -52,6 +80,7 @@ func TestPlaceholderRewriteRollsBackWithoutPublishedVersion(t *testing.T) {
 				version = time.Now().Unix() + 1000
 			}
 			require.NoError(t, DB.Model(&Task{}).Where("id = ?", row.ID).UpdateColumn("updated_at", version).Error)
+			require.NoError(t, DB.First(row, row.ID).Error)
 			originalCallerVersion := row.UpdatedAt
 			row.PrivateData.BillingRequestId = "retry"
 			reached := false

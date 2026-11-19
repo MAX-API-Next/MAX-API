@@ -1961,6 +1961,69 @@ func TestInterruptedCatalogRereadRetainsConflictingReceiptEvidence(t *testing.T)
 	require.Error(t, err, "mixed receipt evidence must suspend the old Host")
 }
 
+func TestInterruptedCatalogReadComparesCompletedObservedSet(t *testing.T) {
+	for _, change := range []string{"matching", "packages", "receipts", "both"} {
+		t.Run(change, func(t *testing.T) {
+			db := deletionDB(t)
+			store := NewTaskPluginCatalogStore(db)
+			catalog, err := taskplugin.OpenCatalog(t.Context(), store)
+			require.NoError(t, err)
+			seed, _ := catalogFixture(t, "seed", "1.0.0", "seed")
+			require.NoError(t, catalog.Install(t.Context(), seed))
+			require.NoError(t, catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "seed", Version: "1.0.0"}))
+			retained, _ := catalogFixture(t, "retained", "1.0.0", "retained")
+			other, _ := catalogFixture(t, "other", "1.0.0", "other")
+			require.NoError(t, catalog.Install(t.Context(), retained, other))
+			actor := taskplugin.Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "observed-set"}
+			binding, err := catalog.Host().Bind(actor, "GET", "/other/one", "catalog-model", taskusage.MiniMaxH3Contract())
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			reached := false
+			require.NoError(t, db.Callback().Query().After("gorm:query").Register("observe-newer-data", func(tx *gorm.DB) {
+				if tx.Error != nil {
+					return
+				}
+				if rows, ok := tx.Statement.Dest.(*[]TaskPluginVersion); ok && (change == "packages" || change == "both") {
+					kept := (*rows)[:0]
+					for _, row := range *rows {
+						if row.Identity != taskPluginIdentity("other", "1.0.0") {
+							kept = append(kept, row)
+						}
+					}
+					*rows = kept
+				}
+				if rows, ok := tx.Statement.Dest.(*[]TaskPluginDeletion); ok {
+					reached = true
+					if change == "receipts" || change == "both" {
+						*rows = append(*rows, TaskPluginDeletion{Identity: taskPluginIdentity("other", "1.0.0"), PluginKey: "other", Version: "1.0.0", Digest: other.Digest()})
+					}
+				}
+			}))
+			headReads := 0
+			require.NoError(t, db.Callback().Query().Before("gorm:query").Register("stop-head-reread", func(tx *gorm.DB) {
+				if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginCatalogHead") {
+					headReads++
+					if headReads == 2 {
+						cancel()
+					}
+				}
+			}))
+			candidate, _ := catalogFixture(t, "candidate", "1.0.0", "candidate")
+			err = catalog.ValidateInstall(ctx, candidate)
+			require.ErrorIs(t, err, context.Canceled)
+			require.True(t, reached)
+			require.Equal(t, 2, headReads)
+			_, err = catalog.Host().Resolve(binding, actor)
+			if change == "matching" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err, "completed changed observations must suspend the deleted version")
+			}
+		})
+	}
+}
+
 func TestConflictingLegacyVersionsRemainKeyOnlyReferences(t *testing.T) {
 	db := deletionDB(t)
 	store := NewTaskPluginCatalogStore(db)

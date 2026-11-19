@@ -285,7 +285,9 @@ func TestManagementConfirmedDeletionSuspendsBeforePendingRefresh(t *testing.T) {
 	pkg := testPackage(t, validManifest(), "source")
 	require.NoError(t, catalog.Install(t.Context(), pkg))
 	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-	defer close(release)
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
 	store.afterCommit = func() { store.onLoad = func(int) { close(entered); <-release } }
 	go func() {
 		done <- catalog.MutateExpected(t.Context(), 1, ManagementMutation{Action: "delete", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version})
@@ -296,9 +298,58 @@ func TestManagementConfirmedDeletionSuspendsBeforePendingRefresh(t *testing.T) {
 		t.Fatal("follow-up refresh did not begin")
 	}
 	require.Nil(t, catalog.host.state.Load(), "the committed old generation must be unavailable while refresh is pending")
-	// Release without closing twice, and wait for the goroutine before cleanup.
-	release <- struct{}{}
-	require.NoError(t, <-done)
+	unblock()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("follow-up refresh stalled after release")
+	}
+}
+
+func TestCatalogPreCASCancellationIsCertifiedNotCommitted(t *testing.T) {
+	for _, stage := range []string{"change", "candidate"} {
+		t.Run(stage, func(t *testing.T) {
+			store := &memoryCatalogStore{}
+			catalog, err := OpenCatalog(t.Context(), store)
+			require.NoError(t, err)
+			pkg := testPackage(t, validManifest(), "source")
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			published := catalog.host.state.Load()
+			inner, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			ctx := &cancelCandidateContext{Context: inner, cancel: cancel}
+			err = catalog.updateExpected(ctx, nil, func(*CatalogSnapshot) error {
+				if stage == "change" {
+					cancel()
+					return ctx.Err()
+				}
+				ctx.armed = true
+				return nil
+			})
+			require.ErrorIs(t, err, context.Canceled)
+			require.ErrorIs(t, err, ErrCatalogNotCommitted)
+			require.Same(t, published, catalog.host.state.Load())
+			require.EqualValues(t, 1, store.snapshot.Revision)
+		})
+	}
+}
+
+type cancelCandidateContext struct {
+	context.Context
+	cancel context.CancelFunc
+	armed  bool
+	checks int
+}
+
+func (ctx *cancelCandidateContext) Err() error {
+	if ctx.armed {
+		ctx.checks++
+		if ctx.checks == 2 {
+			ctx.cancel()
+		}
+	}
+	return ctx.Context.Err()
 }
 
 type confirmedDeletionStore struct {

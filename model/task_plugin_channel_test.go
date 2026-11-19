@@ -199,6 +199,16 @@ func TestTypedChannelUpsertChecksConflictAssignments(t *testing.T) {
 			require.NoError(t, db.First(&fresh, original.Id).Error)
 			require.Equal(t, "ordinary", fresh.Models)
 			require.Nil(t, fresh.ModelMapping)
+			expectedName := "original"
+			switch kind {
+			case "metadata":
+				expectedName = "renamed"
+			case "update-all":
+				expectedName = "typed"
+			case "reused-update-all":
+				expectedName = "typed-again"
+			}
+			require.Equal(t, expectedName, fresh.Name)
 		})
 	}
 }

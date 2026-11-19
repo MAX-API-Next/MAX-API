@@ -383,3 +383,11 @@ Retry placeholder rewrites now advance the database timestamp version atomically
 with their metadata, even within one Unix second. Overflow or failed version
 readback rolls back the rewrite; missing or terminal tasks are not recreated.
 This prevents a timeout/manual decision from overwriting a newer retry's plan.
+The reverse order also fails: a retry must claim the version it observed before
+rewriting metadata, and cannot rewrite a task with an existing task-finalize
+record. A conflict stops submission through the existing local persistence-error
+path; reloading alone does not authorize replacing that settlement decision.
+If an upload preflight finishes reading package and receipt sets but its final
+head reread is interrupted, those private observations are compared with the
+published snapshot. Differing evidence suspends the Host; matching evidence may
+preserve it. No incomplete read is published as an authoritative generation.

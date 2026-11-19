@@ -59,6 +59,9 @@ func (*CatalogPricingDataError) Unwrap() error { return ErrCatalogInvalid }
 // preflight must not preserve an older Host merely because the later read timed out.
 type CatalogReadObservationError struct {
 	Revision int64
+	// Snapshot is private completed data observed before the final head reread.
+	// It is evidence for suspension, never authority to publish a generation.
+	Snapshot *CatalogSnapshot
 	Err      error
 }
 
@@ -194,7 +197,8 @@ func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool
 	}
 	if err != nil || ctx.Err() != nil {
 		var observation *CatalogReadObservationError
-		changed := errors.As(err, &observation) && observation.Revision != catalog.snapshot.Revision
+		changed := errors.As(err, &observation) && (observation.Revision != catalog.snapshot.Revision ||
+			observation.Snapshot != nil && !sameCatalogSnapshot(*observation.Snapshot, catalog.snapshot))
 		if !preflight || ctx.Err() == nil || changed || errors.Is(err, ErrCatalogInvalid) || err == nil && !sameCatalogSnapshot(snapshot, catalog.snapshot) {
 			catalog.host.state.Store(nil)
 		}
@@ -429,11 +433,17 @@ func (catalog *Catalog) updateExpected(ctx context.Context, expected *int64, cha
 	}
 	next := cloneCatalogSnapshot(catalog.snapshot)
 	if err := change(&next); err != nil {
+		if ctx.Err() != nil {
+			return errors.Join(ErrCatalogNotCommitted, err, ctx.Err())
+		}
 		return err
 	}
 	next.Revision++
 	state, err := buildCatalogStateContext(ctx, next, catalog.snapshot, true)
 	if err != nil {
+		if ctx.Err() != nil {
+			return errors.Join(ErrCatalogNotCommitted, err, ctx.Err())
+		}
 		return err
 	}
 	revision, err := catalog.store.CompareAndSwap(ctx, catalog.snapshot.Revision, next.Packages)
@@ -602,11 +612,15 @@ func (catalog *Catalog) List(ctx context.Context) ([]PackageInfo, int64, error) 
 		return nil, 0, err
 	}
 	result := make([]PackageInfo, 0, len(catalog.snapshot.Packages))
+	byDigest := make(map[string]*Package, len(catalog.state.history))
+	for _, pkg := range catalog.state.history {
+		byDigest[pkg.digest] = pkg
+	}
 	for _, entry := range catalog.snapshot.Packages {
-		p, err := LoadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest)
-		if err != nil {
+		if err := ctx.Err(); err != nil {
 			return nil, 0, err
 		}
+		p := byDigest[entry.Digest]
 		result = append(result, PackageInfo{Key: p.manifest.Key, Version: p.manifest.Version, Digest: entry.Digest, Active: entry.Active, Enabled: entry.Enabled, Revoked: entry.Revoked})
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -615,5 +629,8 @@ func (catalog *Catalog) List(ctx context.Context) ([]PackageInfo, int64, error) 
 		}
 		return result[i].Version < result[j].Version
 	})
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
 	return result, catalog.snapshot.Revision, nil
 }
