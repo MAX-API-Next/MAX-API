@@ -610,8 +610,9 @@ func RelayTask(c *gin.Context) {
 		if taskErr != nil {
 			upstreamAmbiguous := relayInfo.UpstreamTaskResponseReceived || relayInfo.UpstreamTaskOutcomeUnknown
 			upstreamPersisted := result != nil && result.Task != nil
-			if relayInfo.Billing != nil && !upstreamAmbiguous && !settlementIntentPersisted && taskErr.Code != taskResponseWriteFailedCode {
-				relayInfo.Billing.Refund(c)
+			definiteFailure := !upstreamAmbiguous && !upstreamPersisted
+			if definiteFailure && !settlementIntentPersisted && taskErr.Code != taskResponseWriteFailedCode {
+				service.CleanupDefiniteTaskSubmitFailure(c, relayInfo, taskErr.Message)
 			}
 			if relayInfo.PersistedTaskID > 0 {
 				reason := taskErr.Message
@@ -634,8 +635,6 @@ func RelayTask(c *gin.Context) {
 					if markErr := model.MarkTaskSubmitAmbiguous(relayInfo.PersistedTaskID, reason); markErr != nil {
 						common.SysError("mark ambiguous task submit error: " + markErr.Error())
 					}
-				} else if markErr := model.MarkTaskSubmitFailed(relayInfo.PersistedTaskID, reason); markErr != nil {
-					common.SysError("mark failed task submit error: " + markErr.Error())
 				}
 			}
 		}

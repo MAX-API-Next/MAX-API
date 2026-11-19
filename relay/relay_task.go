@@ -81,19 +81,37 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 		if err := model.DB.First(&task, info.PersistedTaskID).Error; err != nil {
 			return nil, TaskPersistenceError(err, "load_persisted_task_failed", "failed to load persisted task")
 		}
-		fresh := model.InitTask(platform, info)
-		task.Platform = platform
-		task.ChannelId = fresh.ChannelId
-		task.Group = fresh.Group
-		task.Properties = fresh.Properties
-		task.PrivateData.Key = fresh.PrivateData.Key
-		task.PrivateData.AwaitingUpstreamID = true
-		task.Quota = preConsumedQuota
-		populateTaskBillingMetadata(&task, info)
-		if err := task.RewritePlaceholder(); err != nil {
-			return nil, TaskPersistenceError(err, "update_persisted_task_failed", "failed to update persisted task")
+		for attempt := 0; attempt < 3; attempt++ {
+			observed := task
+			privateSnapshot, err := common.Marshal(task.PrivateData)
+			if err != nil {
+				return nil, TaskPersistenceError(err, "load_persisted_task_failed", "failed to observe persisted task")
+			}
+			if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure || task.PrivateData.UpstreamTaskID != "" {
+				return nil, service.TaskErrorWrapperLocal(errors.New("task lifecycle already advanced"), "task_lifecycle_advanced", http.StatusConflict)
+			}
+			fresh := model.InitTask(platform, info)
+			task.Platform = platform
+			task.ChannelId = fresh.ChannelId
+			task.Group = fresh.Group
+			task.Properties = fresh.Properties
+			task.PrivateData.Key = fresh.PrivateData.Key
+			task.PrivateData.AwaitingUpstreamID = true
+			task.Quota = preConsumedQuota
+			populateTaskBillingMetadata(&task, info)
+			if err := task.RewritePlaceholder(); err != nil {
+				if errors.Is(err, model.ErrTaskPlaceholderConflict) && attempt < 2 {
+					reloaded, readErr := model.GetTaskByID(task.ID)
+					if readErr == nil && taskPlaceholderClaimOnly(observed, privateSnapshot, reloaded) {
+						task = *reloaded
+						continue
+					}
+				}
+				return nil, TaskPersistenceError(err, "update_persisted_task_failed", "failed to update persisted task")
+			}
+			return &task, nil
 		}
-		return &task, nil
+		return nil, service.TaskErrorWrapperLocal(errors.New("task placeholder kept changing"), "task_rewrite_conflict", http.StatusConflict)
 	}
 
 	task := model.InitTask(platform, info)
@@ -105,6 +123,18 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 	}
 	info.PersistedTaskID = task.ID
 	return task, nil
+}
+
+func taskPlaceholderClaimOnly(before model.Task, privateSnapshot []byte, after *model.Task) bool {
+	if after == nil || after.UpdatedAt <= before.UpdatedAt || after.PrivateData.UpstreamTaskID != "" || !after.PrivateData.AwaitingUpstreamID {
+		return false
+	}
+	private, err := common.Marshal(after.PrivateData)
+	return err == nil && bytes.Equal(privateSnapshot, private) && before.ID == after.ID && before.TaskID == after.TaskID &&
+		before.Status == after.Status && before.Quota == after.Quota && before.ChannelId == after.ChannelId && before.UserId == after.UserId &&
+		before.Group == after.Group && before.Platform == after.Platform && before.Action == after.Action && before.Properties == after.Properties &&
+		before.CreatedAt == after.CreatedAt && before.SubmitTime == after.SubmitTime && before.StartTime == after.StartTime && before.FinishTime == after.FinishTime &&
+		before.Progress == after.Progress && before.FailReason == after.FailReason && bytes.Equal(before.Data, after.Data)
 }
 
 func TaskPersistenceError(err error, code string, safeMessage string) *dto.TaskError {

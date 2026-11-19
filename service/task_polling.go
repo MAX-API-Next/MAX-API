@@ -427,6 +427,10 @@ func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem
 		return
 	}
 	mergedTask := *task
+	if err := mergedTask.CapturePrivateDataForStatusUpdate(); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("Suno task %s private history cannot be safely rewritten", task.TaskID))
+		return
+	}
 	mergedTask.Status = lo.If(model.TaskStatus(responseItem.Status) != "", model.TaskStatus(responseItem.Status)).Else(mergedTask.Status)
 	mergedTask.FailReason = lo.If(responseItem.FailReason != "", common.SanitizePersistedLogContent(responseItem.FailReason)).Else(mergedTask.FailReason)
 	mergedTask.SubmitTime = lo.If(responseItem.SubmitTime != 0, responseItem.SubmitTime).Else(mergedTask.SubmitTime)
@@ -577,6 +581,9 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	if task == nil {
 		logger.LogError(ctx, fmt.Sprintf("Task %s not found in taskM", taskId))
 		return fmt.Errorf("task %s not found", taskId)
+	}
+	if err := task.CapturePrivateDataForStatusUpdate(); err != nil {
+		return fmt.Errorf("task %s private history cannot be safely rewritten", taskId)
 	}
 	key := ch.Key
 

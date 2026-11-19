@@ -1171,6 +1171,150 @@ func TestTaskPluginMalformedHistoricalTaskIsRepairablePrecondition(t *testing.T)
 	require.NoError(t, hostErr, "a repairable task precondition must retain the healthy Host")
 }
 
+func TestTaskPluginTruncatedAndRepeatedHistoricalMembersBlockDeletion(t *testing.T) {
+	for _, raw := range []string{
+		`{"plugin_binding":{"plugin_key":"stored`,
+		"truncated-digest",
+		`{"history":{"plugin_key":"stored","plugin_key":"other","version":"1.0.0"}}`,
+		`{"history":{"plugin_key":"stored"},"history":{"plugin_key":"other"}}`,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			db := deletionDB(t)
+			store := NewTaskPluginCatalogStore(db)
+			_, first := catalogFixture(t, "stored", "1.0.0", "stored")
+			_, other := catalogFixture(t, "other", "1.0.0", "other")
+			if raw == "truncated-digest" {
+				raw = `{"history":{"package_digest":"` + first.Digest
+			}
+			_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{first, other})
+			require.NoError(t, err)
+			row := &Task{TaskID: "ambiguous-historical"}
+			require.NoError(t, db.Create(row).Error)
+			require.ErrorIs(t, db.Model(row).Updates(map[string]any{"private_data": raw}).Error, taskplugin.ErrCatalogInvalid)
+			require.NoError(t, db.Model(row).UpdateColumn("private_data", raw).Error)
+			_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+			var data *taskplugin.CatalogTaskDataError
+			require.ErrorAs(t, err, &data)
+			require.Equal(t, row.ID, data.TaskID)
+		})
+	}
+}
+
+func TestPricingReloadFailureReturnsNoIncompleteBaseline(t *testing.T) {
+	_, entry := catalogFixture(t, "stored", "1.0.0", "pricing-reload")
+	entry.Document = []byte("invalid-reload-fixture")
+	authority := &pricingAuthority{plugins: []taskplugin.StoredPackage{entry}}
+	partial, err := authority.contextsContext(t.Context(), "catalog-model")
+	require.Error(t, err, "simulate a reload failure with a live outer operation context")
+	require.Nil(t, partial)
+}
+
+func TestTaskUpsertConflictPrivateDataUsesReferenceGuard(t *testing.T) {
+	for _, kind := range []string{"literal", "expression", "metadata", "excluded"} {
+		t.Run(kind, func(t *testing.T) {
+			db := deletionDB(t)
+			store := NewTaskPluginCatalogStore(db)
+			_, entry := catalogFixture(t, "stored", "1.0.0", "task-upsert")
+			_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+			require.NoError(t, err)
+			_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+			require.NoError(t, err)
+			row := &Task{TaskID: "upsert-task", Progress: "10%"}
+			require.NoError(t, db.Create(row).Error)
+			values := map[string]any{"progress": "20%"}
+			switch kind {
+			case "literal":
+				values["private_data"] = `{"history":{"plugin_key":"stored","version":"1.0.0"}}`
+			case "expression":
+				values["private_data"] = gorm.Expr("?", `{"history":{"plugin_key":"stored","version":"1.0.0"}}`)
+			case "excluded":
+				values["private_data"] = clause.Column{Table: "excluded", Name: "private_data"}
+			}
+			err = db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.Assignments(values)}).Create(&Task{ID: row.ID, TaskID: row.TaskID}).Error
+			var saved Task
+			require.NoError(t, db.First(&saved, row.ID).Error)
+			if kind == "literal" {
+				require.ErrorIs(t, err, taskplugin.ErrBindingRejected)
+			} else if kind == "expression" {
+				require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, "20%", saved.Progress)
+			}
+			if err != nil {
+				require.Equal(t, "10%", saved.Progress)
+			}
+		})
+	}
+}
+
+func TestTaskPrivateJSONAllowsEqualAliasesAndPreservesNumericFacts(t *testing.T) {
+	const raw = `{"history":{"plugin_key":"stored","plugin_key":"stored","PLUGIN_KEY":"stored"},"billing_context":{"other_ratios":{"unit":1,"UNIT":2},"task_billing_plan":{"components":[{"key":"component","legacy":{"plugin_key":"stored"}}]}},"unknown":{"large":18446744073709551617},"result_url":"old"}`
+	var private TaskPrivateData
+	require.NoError(t, private.Scan(raw))
+	private.ResultURL = ""
+	encoded, err := common.Marshal(private)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), "18446744073709551617")
+	require.Contains(t, string(encoded), `"UNIT":2`)
+	require.NotContains(t, string(encoded), "result_url")
+	require.Contains(t, string(encoded), `"legacy":{"plugin_key":"stored"}`)
+	var fresh TaskPrivateData
+	require.NoError(t, fresh.Scan(encoded))
+	again, err := common.Marshal(fresh)
+	require.NoError(t, err)
+	require.JSONEq(t, string(encoded), string(again))
+	fresh.BillingContext.TaskBillingPlan = nil
+	_, err = common.Marshal(fresh)
+	require.Error(t, err, "incompatible typed replacement must not erase or reinterpret old component history")
+}
+
+func TestTaskPrivateHistoryKeepsCaseSensitiveSchemaMapKeys(t *testing.T) {
+	const raw = `{"billing_context":{"task_billing_plan":{"expression_plan":{"contract":{"usage_schema":{"unit":{"type":"number","legacy":{"plugin_key":"one"}},"UNIT":{"type":"number","legacy":{"plugin_key":"two"}}}}}}}}`
+	var private TaskPrivateData
+	require.NoError(t, private.Scan(raw))
+	encoded, err := common.Marshal(private)
+	require.NoError(t, err)
+	var root map[string]any
+	require.NoError(t, common.UnmarshalUseNumber(encoded, &root))
+	schema := root["billing_context"].(map[string]any)["task_billing_plan"].(map[string]any)["expression_plan"].(map[string]any)["contract"].(map[string]any)["usage_schema"].(map[string]any)
+	require.Equal(t, "one", schema["unit"].(map[string]any)["legacy"].(map[string]any)["plugin_key"])
+	require.Equal(t, "two", schema["UNIT"].(map[string]any)["legacy"].(map[string]any)["plugin_key"])
+	delete(private.BillingContext.TaskBillingPlan.ExpressionPlan.Contract.UsageSchema, "unit")
+	_, err = common.Marshal(private)
+	require.Error(t, err)
+}
+
+func TestTaskPrivateDataRetainsUnmodeledHistoryAcrossStatusWrite(t *testing.T) {
+	db := deletionDB(t)
+	previous := DB
+	DB = db
+	t.Cleanup(func() { DB = previous })
+	store := NewTaskPluginCatalogStore(db)
+	_, entry := catalogFixture(t, "stored", "1.0.0", "unknown-history")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	row := &Task{TaskID: "historical-progress", Status: TaskStatusInProgress, Quota: 20}
+	require.NoError(t, db.Create(row).Error)
+	const raw = `{"upstream_task_id":"provider","extension_history":{"plugin_key":"stored","version":"1.0.0","large":18446744073709551617},"billing_context":{"origin_model_name":"model","extension_checkpoint":{"plugin_key":"stored"}}}`
+	require.NoError(t, db.Model(row).UpdateColumn("private_data", raw).Error)
+	claimed := GetAllUnFinishSyncTasks(10)
+	require.Len(t, claimed, 1)
+	version := claimed[0].UpdatedAt
+	claimed[0].Progress = "40%"
+	claimed[0].PrivateData.ResultURL = "https://example.invalid/progress"
+	won, err := claimed[0].UpdateWithStatusSnapshot(TaskStatusInProgress, version)
+	require.NoError(t, err)
+	require.True(t, won)
+	var stored []byte
+	require.NoError(t, db.Model(row).Select("private_data").Row().Scan(&stored))
+	require.Contains(t, string(stored), "extension_history")
+	require.Contains(t, string(stored), "extension_checkpoint")
+	require.Contains(t, string(stored), "18446744073709551617")
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.ErrorIs(t, err, taskplugin.ErrCatalogInUse)
+}
+
 func TestTaskPluginMalformedPricingIsRepairablePrecondition(t *testing.T) {
 	for _, invalid := range []string{`{"bad-key":"private-price-expression"}`, `{"bad-key":7}`} {
 		t.Run(invalid, func(t *testing.T) {
@@ -1602,7 +1746,7 @@ func TestTaskPluginReferenceCandidatesNarrowWithoutLosingEscapes(t *testing.T) {
 		raw       string
 		candidate bool
 	}{
-		{`{"plugin_binding":{"plugin_key":"stored-other"}}`, false},
+		{`{"plugin_binding":{"plugin_key":"stored-other"}}`, true}, // Plausible truncated-target prefix; exact decoder still distinguishes the full key.
 		{`{"upstream_task_id":42}`, false},
 		{`{"notes":"u(\"units\") * 0.1"}`, false},
 		{`{"PLUGIN_BINDING":{"PLUGIN_KEY":"stored"}}`, true},
@@ -1731,10 +1875,12 @@ func TestTaskPluginCandidateQueryBuildsForSupportedSQLDialects(t *testing.T) {
 			var rows []Task
 			built := query.Select("id").Find(&rows)
 			require.NoError(t, built.Error)
-			require.Len(t, built.Statement.Vars, 3)
+			require.Len(t, built.Statement.Vars, 5)
 			require.Equal(t, `"stored"`, built.Statement.Vars[0])
 			require.Equal(t, `"`+pkg.Digest()+`"`, built.Statement.Vars[1])
 			require.Equal(t, `\u`, built.Statement.Vars[2])
+			require.Equal(t, `"stored`, built.Statement.Vars[3])
+			require.Equal(t, `"`+pkg.Digest(), built.Statement.Vars[4])
 			if name == "postgres" {
 				require.Contains(t, built.Statement.SQL.String(), "POSITION($1 IN CAST(private_data AS TEXT))")
 			} else {
@@ -2140,7 +2286,9 @@ func TestTaskPluginAmbiguousVersionsCannotPinDeletion(t *testing.T) {
 			raw := fmt.Sprintf(`{"legacy":{"plugin_key":"stored","version":"2.0.0",%q:"2.0.0",%q:"3.0.0"}}`, strings.ToUpper(field), map[string]string{"version": "Version", "plugin_version": "Plugin_Version"}[field])
 			require.NoError(t, db.Model(row).UpdateColumn("private_data", raw).Error)
 			_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
-			require.ErrorIs(t, err, taskplugin.ErrCatalogInUse, "an ambiguous explicit version cannot fall back to another version field")
+			var data *taskplugin.CatalogTaskDataError
+			require.ErrorAs(t, err, &data, "conflicting identity aliases require repair before any deletion")
+			require.Equal(t, row.ID, data.TaskID)
 		})
 	}
 }

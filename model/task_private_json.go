@@ -1,0 +1,305 @@
+// Copyright (C) 2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
+package model
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
+	"reflect"
+	"strings"
+
+	"github.com/MAX-API-Next/MAX-API/common"
+)
+
+type taskPrivateUnmodeled struct{ fields map[string]any }
+type taskPrivateNested struct{ value any }
+type taskPrivateMap map[string]any
+
+// Anonymous projections must retain the same scalar scanner behavior as
+// Task.PrivateData's explicit json column tag; unknown history is not a relation.
+func (TaskPrivateData) GormDataType() string { return "json" }
+
+// Preserve unknown history at every typed object boundary. Known fields still
+// follow their existing typed marshal/omitempty behavior and validation.
+func (p *TaskPrivateData) UnmarshalJSON(raw []byte) error {
+	type plain TaskPrivateData
+	var next plain
+	if err := common.Unmarshal(raw, &next); err != nil {
+		return err
+	}
+	value, err := decodeTaskPrivateReferenceJSON(raw)
+	if err != nil {
+		return err
+	}
+	if object, ok := value.(map[string]any); ok {
+		if fields := unknownTaskPrivateFields(object, reflect.TypeOf(next)); len(fields) != 0 {
+			next.unmodeled = &taskPrivateUnmodeled{fields: fields}
+		}
+	}
+	*p = TaskPrivateData(next)
+	return nil
+}
+
+func (p TaskPrivateData) MarshalJSON() ([]byte, error) {
+	type plain TaskPrivateData
+	raw, err := common.Marshal(plain(p))
+	if err != nil || p.unmodeled == nil {
+		return raw, err
+	}
+	var current map[string]any
+	if err := common.UnmarshalUseNumber(raw, &current); err != nil {
+		return nil, err
+	}
+	merged, err := mergeTaskPrivateFields(p.unmodeled.fields, current)
+	if err != nil {
+		return nil, err
+	}
+	return common.Marshal(merged)
+}
+
+func unknownTaskPrivateFields(object map[string]any, typ reflect.Type) map[string]any {
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if typ.Kind() != reflect.Struct {
+		return nil
+	}
+	fields := make(map[string]reflect.Type)
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if name == "-" {
+			continue
+		}
+		if name == "" {
+			name = field.Name
+		}
+		fields[strings.ToLower(name)] = field.Type
+	}
+	unknown := make(map[string]any)
+	for key, value := range object {
+		field, known := fields[strings.ToLower(key)]
+		if !known {
+			unknown[key] = value
+			continue
+		}
+		if nested := unknownTaskPrivateValue(value, field); nested != nil {
+			unknown[key] = taskPrivateNested{value: nested}
+		}
+	}
+	return unknown
+}
+
+func unknownTaskPrivateValue(value any, typ reflect.Type) any {
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if object, ok := value.(map[string]any); ok {
+		if typ.Kind() == reflect.Struct {
+			if fields := unknownTaskPrivateFields(object, typ); len(fields) != 0 {
+				return fields
+			}
+		} else if typ.Kind() == reflect.Map {
+			fields := map[string]any{}
+			for key, child := range object {
+				if nested := unknownTaskPrivateValue(child, typ.Elem()); nested != nil {
+					fields[key] = taskPrivateNested{value: nested}
+				}
+			}
+			if len(fields) != 0 {
+				return taskPrivateMap(fields)
+			}
+		}
+	}
+	if array, ok := value.([]any); ok && (typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array) {
+		fields, found := make([]any, len(array)), false
+		for i, child := range array {
+			fields[i] = unknownTaskPrivateValue(child, typ.Elem())
+			found = found || fields[i] != nil
+		}
+		if found {
+			return fields
+		}
+	}
+	return nil
+}
+
+func mergeTaskPrivateFields(unknown, current map[string]any) (map[string]any, error) {
+	merged := make(map[string]any, len(unknown)+len(current))
+	for key, value := range unknown {
+		merged[key] = value
+	}
+	for key, value := range current {
+		// Typed JSON keys are canonical. Retain nested unknown fields even when
+		// the stored spelling used case-insensitive historical aliases.
+		for storedKey, previous := range merged {
+			if !strings.EqualFold(storedKey, key) {
+				continue
+			}
+			if nested, ok := previous.(taskPrivateNested); ok {
+				var err error
+				value, err = mergeTaskPrivateValue(nested.value, value)
+				if err != nil {
+					return nil, err
+				}
+			}
+			delete(merged, storedKey)
+		}
+		merged[key] = value
+	}
+	for _, value := range merged {
+		if _, unresolved := value.(taskPrivateNested); unresolved {
+			return nil, errors.New("cannot discard unmodeled task private history from a removed typed field")
+		}
+	}
+	return merged, nil
+}
+
+func mergeTaskPrivateValue(unknown, current any) (any, error) {
+	if previous, ok := unknown.(taskPrivateMap); ok {
+		if next, ok := current.(map[string]any); ok {
+			merged := make(map[string]any, len(next))
+			for key, value := range next {
+				merged[key] = value
+			}
+			for key, value := range previous {
+				actual, exists := next[key]
+				if !exists {
+					return nil, errors.New("cannot discard unmodeled task private history from a removed map entry")
+				}
+				nested := value.(taskPrivateNested)
+				var err error
+				merged[key], err = mergeTaskPrivateValue(nested.value, actual)
+				if err != nil {
+					return nil, err
+				}
+			}
+			return merged, nil
+		}
+	}
+	if previous, ok := unknown.(map[string]any); ok {
+		if next, ok := current.(map[string]any); ok {
+			return mergeTaskPrivateFields(previous, next)
+		}
+	}
+	if previous, ok := unknown.([]any); ok {
+		if next, ok := current.([]any); ok {
+			merged := append([]any(nil), next...)
+			for i, preserved := range previous {
+				if preserved != nil {
+					if i >= len(merged) {
+						return nil, errors.New("cannot discard unmodeled task private history from a shortened array")
+					}
+					var err error
+					merged[i], err = mergeTaskPrivateValue(preserved, merged[i])
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+			return merged, nil
+		}
+	}
+	return nil, errors.New("cannot discard unmodeled task private history from an incompatible typed value")
+}
+
+// Decode before a map can collapse repeated members. Conflicting duplicate
+// object members outside canonical fact maps are ambiguous historical data;
+// equal duplicates remain readable, including case-insensitive identity aliases.
+func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
+	decoder := common.NewJSONDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var read func([]string, int) (any, error)
+	read = func(path []string, depth int) (any, error) {
+		if depth > 10000 {
+			return nil, errors.New("task private JSON is too deeply nested")
+		}
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		delimiter, compound := token.(json.Delim)
+		if !compound {
+			return token, nil
+		}
+		switch delimiter {
+		case '{':
+			object := make(map[string]any)
+			folded := make(map[string]any)
+			for decoder.More() {
+				token, err := decoder.Token()
+				if err != nil {
+					return nil, err
+				}
+				key, ok := token.(string)
+				if !ok {
+					return nil, errors.New("invalid task private JSON member")
+				}
+				value, err := read(append(path, key), depth+1)
+				if err != nil {
+					return nil, err
+				}
+				if !taskPrivateFactPath(path) {
+					canonical := taskPrivateMemberKey(key)
+					if previous, exists := folded[canonical]; exists && !reflect.DeepEqual(previous, value) {
+						return nil, errors.New("conflicting task private JSON members")
+					}
+					folded[canonical] = value
+				}
+				object[key] = value
+			}
+			_, err := decoder.Token()
+			return object, err
+		case '[':
+			array := []any{}
+			for decoder.More() {
+				value, err := read(path, depth+1)
+				if err != nil {
+					return nil, err
+				}
+				array = append(array, value)
+			}
+			_, err := decoder.Token()
+			return array, err
+		default:
+			return nil, errors.New("invalid task private JSON delimiter")
+		}
+	}
+	value, err := read(nil, 0)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return nil, errors.New("unexpected data after task private JSON")
+	}
+	return value, nil
+}
+
+func taskPrivateFactPath(path []string) bool {
+	if len(path) >= 2 && strings.EqualFold(path[0], "billing_context") && strings.EqualFold(path[1], "other_ratios") {
+		return true
+	}
+	if len(path) < 3 || !strings.EqualFold(path[0], "billing_context") {
+		return false
+	}
+	if strings.EqualFold(path[1], "task_billing") && (strings.EqualFold(path[2], "fields") || strings.EqualFold(path[2], "matched")) {
+		return true
+	}
+	if strings.EqualFold(path[1], "pricing_usage_envelope") && strings.EqualFold(path[2], "facts") {
+		return true
+	}
+	return len(path) >= 4 && strings.EqualFold(path[1], "task_billing_plan") && strings.EqualFold(path[2], "expression_plan") && strings.EqualFold(path[3], "submit_facts")
+}
+
+func taskPrivateMemberKey(key string) string {
+	switch strings.ToLower(key) {
+	case "plugin_key", "package_digest", "selected_plugin_key", "version", "plugin_version", "plugin_binding", "billing_context", "task_billing_plan", "expression_plan", "pricing_usage_envelope":
+		return strings.ToLower(key)
+	default:
+		return key
+	}
+}

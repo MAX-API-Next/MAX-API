@@ -1199,9 +1199,10 @@ func (channel *Channel) GetSetting() dto.ChannelSettings {
 		err := common.Unmarshal([]byte(*channel.Setting), &setting)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
+			malformed := *channel.Setting
 			channel.Setting = nil // 清空设置以避免后续错误
 			if channel.Id > 0 {
-				_ = DB.Model(&Channel{}).Where("id = ?", channel.Id).Update("setting", nil).Error
+				_ = DB.Model(&Channel{}).Where("id = ? AND setting = ?", channel.Id, malformed).Update("setting", nil).Error
 			}
 		}
 	}
@@ -1232,9 +1233,10 @@ func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 		err := common.UnmarshalJsonStr(channel.OtherSettings, &setting)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
+			malformed := channel.OtherSettings
 			channel.OtherSettings = "{}" // 清空设置以避免后续错误
 			if channel.Id > 0 {
-				_ = DB.Model(&Channel{}).Where("id = ?", channel.Id).Update("settings", channel.OtherSettings).Error
+				_ = DB.Model(&Channel{}).Where("id = ? AND settings = ?", channel.Id, malformed).Update("settings", channel.OtherSettings).Error
 			}
 		}
 	}

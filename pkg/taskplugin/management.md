@@ -387,6 +387,31 @@ The reverse order also fails: a retry must claim the version it observed before
 rewriting metadata, and cannot rewrite a task with an existing task-finalize
 record. A conflict stops submission through the existing local persistence-error
 path; reloading alone does not authorize replacing that settlement decision.
+Claim-only timestamp changes may be reloaded at most twice when the persisted
+placeholder otherwise matches its observed identity, status, quota and private
+metadata. Confirmed upstream work, a changed identity, a terminal task or an
+existing task-finalize owner prevents another submission.
+Definite request-failure cleanup first claims the nonterminal task with no
+task-finalize owner and commits the original request-refund intent in the same
+transaction. Only that winner invokes the existing refund engine; manual-owned
+tasks retain their quota and evidence. Failed reads, mismatched refund identity
+or intent writes retain funds/state for reconciliation instead of guessing.
+Generic tasks and Midjourney use this same coordinator, including placeholder
+preparation failures; a failed database write never authorizes an independent
+refund. Accepted or ambiguous provider responses keep their existing handling.
+Historical private metadata retains unknown fields, including nested typed
+objects and arrays, through polling updates. Progress-only polls omit unchanged
+private data; edits merge the retained fields and validate their references.
+An incompatible typed replacement that would discard retained history fails
+closed. Conflicting repeated JSON object members outside canonical fact maps
+are repairable invalid data; equal identity aliases remain readable. Truncated
+target key or digest prefixes reach the deletion decoder, while disjoint
+corruption still does not block unrelated deletion. The scan remains unindexed.
+Channel setting repairs compare the originally malformed value so an automatic
+reset cannot erase a concurrent administrator edit. Pricing metadata reload
+failures propagate instead of silently removing a source from the comparison.
+These guards do not remove the separate real-database, deployment or million-row
+lock-time acceptance requirements.
 If an upload preflight finishes reading package and receipt sets but its final
 head reread is interrupted, those private observations are compared with the
 published snapshot. Differing evidence suspends the Host; matching evidence may

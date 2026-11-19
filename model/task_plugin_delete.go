@@ -233,7 +233,7 @@ func taskPluginTaskReferenceCandidates(tx *gorm.DB, pkg *taskplugin.Package) (*g
 	// SQL still scans storage; this reduces transferred bytes and Go decoding,
 	// and must not be described as an indexed or constant-time lookup.
 	var predicates []clause.Expression
-	for _, needle := range []string{string(key), string(digest), `\u`} {
+	for _, needle := range []string{string(key), string(digest), `\u`, strings.TrimSuffix(string(key), `"`), strings.TrimSuffix(string(digest), `"`)} {
 		switch tx.Dialector.Name() {
 		case "sqlite":
 			// BLOBs are raw UTF-8 bytes; TEXT follows the database encoding.
@@ -273,7 +273,8 @@ func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 			continue
 		}
 		var value any
-		if err := common.UnmarshalUseNumber(raw, &value); err != nil {
+		value, err = decodeTaskPrivateReferenceJSON(raw)
+		if err != nil {
 			return &taskplugin.CatalogTaskDataError{TaskID: taskID}
 		}
 		referenced, ambiguous := taskPluginReference(value, m.Key, m.Version, pkg.Digest())
@@ -551,11 +552,34 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 	if err != nil {
 		return err
 	}
-	if !emitted {
-		return nil
+	if emitted {
+		if err := guardTaskPluginPersistenceValue(tx, task, value); err != nil {
+			return err
+		}
 	}
+	if conflict, ok := tx.Statement.Clauses["ON CONFLICT"].Expression.(clause.OnConflict); ok {
+		for _, assignment := range conflict.DoUpdates {
+			if !strings.EqualFold(assignment.Column.Name, "private_data") {
+				continue
+			}
+			if column, ok := assignment.Value.(clause.Column); ok {
+				if column.Table == "excluded" && strings.EqualFold(column.Name, "private_data") {
+					continue
+				}
+				return taskplugin.ErrCatalogInvalid
+			}
+			if err := guardTaskPluginPersistenceValue(tx, task, assignment.Value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func guardTaskPluginPersistenceValue(tx *gorm.DB, task *Task, value any) error {
 	var private TaskPrivateData
 	var serialized []byte
+	var err error
 	serializedInput := false
 	switch data := value.(type) {
 	case TaskPrivateData:
@@ -585,8 +609,8 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 			return taskplugin.ErrCatalogInvalid
 		}
 	}
-	var raw any
-	if common.UnmarshalUseNumber(serialized, &raw) != nil {
+	raw, err := decodeTaskPrivateReferenceJSON(serialized)
+	if err != nil {
 		return taskplugin.ErrCatalogInvalid
 	}
 	ambiguous := false

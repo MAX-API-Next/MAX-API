@@ -69,12 +69,13 @@ type Task struct {
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
 
-	includeDataInUpdate               bool `gorm:"-"`
-	includePrivateDataInUpdate        bool `gorm:"-"`
-	preservePrivateDataOnStatusUpdate bool `gorm:"-"`
-	privateDataUnreadable             bool `gorm:"-"`
-	quotaWasNull                      bool `gorm:"-"`
-	updatedAtWasNull                  bool `gorm:"-"`
+	includeDataInUpdate               bool   `gorm:"-"`
+	includePrivateDataInUpdate        bool   `gorm:"-"`
+	preservePrivateDataOnStatusUpdate bool   `gorm:"-"`
+	privateDataUnreadable             bool   `gorm:"-"`
+	quotaWasNull                      bool   `gorm:"-"`
+	updatedAtWasNull                  bool   `gorm:"-"`
+	privateDataStatusSnapshot         string `gorm:"-"`
 }
 
 // PrivateDataUnreadable marks worker-only rows whose original metadata could
@@ -191,6 +192,8 @@ func (m Properties) Value() (driver.Value, error) {
 }
 
 type TaskPrivateData struct {
+	// Only unmodeled fields are retained; the pointer keeps the value comparable.
+	unmodeled      *taskPrivateUnmodeled
 	PluginBinding  *types.TaskPluginBinding `json:"plugin_binding,omitempty"` // host-issued immutable plugin identity; never client-visible
 	Key            string                   `json:"key,omitempty"`
 	UpstreamTaskID string                   `json:"upstream_task_id,omitempty"` // 上游真实 task ID
@@ -696,9 +699,23 @@ func (t *Task) statusUpdateValues() map[string]interface{} {
 		values["data"] = t.Data
 	}
 	if !t.preservePrivateDataOnStatusUpdate && (t.PrivateData != (TaskPrivateData{}) || t.includePrivateDataInUpdate) {
-		values["private_data"] = t.PrivateData
+		current, err := common.Marshal(t.PrivateData)
+		if t.includePrivateDataInUpdate || t.privateDataStatusSnapshot == "" || err != nil || string(current) != t.privateDataStatusSnapshot {
+			values["private_data"] = t.PrivateData
+		}
 	}
 	return values
+}
+
+// CapturePrivateDataForStatusUpdate lets polling omit an unchanged private
+// value while preserving explicit private edits and opaque historical fields.
+func (t *Task) CapturePrivateDataForStatusUpdate() error {
+	encoded, err := common.Marshal(t.PrivateData)
+	if err != nil {
+		return err
+	}
+	t.privateDataStatusSnapshot = string(encoded)
+	return nil
 }
 
 // PreservePrivateDataOnStatusUpdate is for status-only timeout transitions.
@@ -731,6 +748,9 @@ func (t *Task) Update() error {
 	})
 }
 
+var ErrTaskPlaceholderConflict = errors.New("task placeholder changed before rewrite")
+var ErrTaskFinalizeOwned = errors.New("task finalize decision already owns this lifecycle")
+
 // RewritePlaceholder atomically claims the observed version and rewrites retry
 // metadata. A stale caller cannot overwrite a newer manual/worker decision.
 func (t *Task) RewritePlaceholder() error {
@@ -750,7 +770,14 @@ func (t *Task) RewritePlaceholder() error {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			return taskSubmitResultUpdateMissError(tx, t.ID)
+			var owned int64
+			if err := tx.Model(&BillingSettlement{}).Where("operation_key = ?", BillingTaskFinalizeOperationKey(t.ID)).Count(&owned).Error; err != nil {
+				return err
+			}
+			if owned != 0 {
+				return ErrTaskFinalizeOwned
+			}
+			return ErrTaskPlaceholderConflict
 		}
 		// Claim first, then retain that row lock until metadata and readback commit.
 		// This also makes unchanged retries independent of MySQL matched-row mode.
@@ -1101,20 +1128,71 @@ func taskSubmitResultUpdateMissError(tx *gorm.DB, taskID int64) error {
 }
 
 func MarkTaskSubmitFailed(taskID int64, reason string) error {
+	_, err := ClaimTaskSubmitFailure(taskID, reason)
+	return err
+}
+
+// ClaimTaskSubmitFailure authorizes definite request-refund cleanup only for
+// the terminal CAS winner. A task-finalize owner or confirmed provider identity
+// keeps its task/quota and cannot race an independent request refund.
+func ClaimTaskSubmitFailure(taskID int64, reason string) (bool, error) {
+	return ClaimTaskSubmitFailureWithSettlement(taskID, reason, nil)
+}
+
+// The request-refund intent and terminal claim commit together. The caller may
+// apply the existing operation after commit; a crash leaves durable recovery.
+func ClaimTaskSubmitFailureWithSettlement(taskID int64, reason string, input *BillingSettlementInput) (bool, error) {
 	if taskID <= 0 {
-		return nil
+		return false, nil
 	}
 	reason = common.SanitizePersistedLogContent(reason)
-	return DB.Model(&Task{}).
-		Where("id = ? AND status NOT IN ?", taskID, []string{TaskStatusFailure, TaskStatusSuccess}).
-		Updates(map[string]interface{}{
-			"status":      TaskStatusFailure,
-			"progress":    "100%",
-			"finish_time": time.Now().Unix(),
-			"fail_reason": reason,
-			"quota":       0,
-			"updated_at":  time.Now().Unix(),
-		}).Error
+	if common.UsingSQLite {
+		billingSettlementSQLiteWriteMu.Lock()
+		defer billingSettlementSQLiteWriteMu.Unlock()
+	}
+	won := false
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var task Task
+		if err := withRowLock(tx).First(&task, taskID).Error; err != nil {
+			return err
+		}
+		if task.Status == TaskStatusFailure || task.Status == TaskStatusSuccess || task.PrivateData.UpstreamTaskID != "" {
+			return nil
+		}
+		if input != nil {
+			if err := validateBillingSettlementInput(*input); err != nil {
+				return err
+			}
+			if input.UserID != task.UserId || input.Source != task.PrivateData.BillingSource || input.TokenID != task.PrivateData.TokenId ||
+				input.SubscriptionID != task.PrivateData.SubscriptionId || task.PrivateData.BillingRequestId == "" ||
+				input.OperationKey != BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId) || input.TaskID != 0 && input.TaskID != taskID {
+				return errors.New("task submission refund identity does not match its placeholder")
+			}
+		}
+		finalize := tx.Session(&gorm.Session{NewDB: true}).Model(&BillingSettlement{}).Select("1").Where("operation_key = ?", BillingTaskFinalizeOperationKey(taskID))
+		result := tx.Model(&Task{}).
+			Where("id = ? AND status NOT IN ?", taskID, []string{TaskStatusFailure, TaskStatusSuccess}).
+			Where("NOT EXISTS (?)", finalize).
+			Updates(map[string]interface{}{
+				"status":      TaskStatusFailure,
+				"progress":    "100%",
+				"finish_time": time.Now().Unix(),
+				"fail_reason": reason,
+				"quota":       0,
+				"updated_at":  time.Now().Unix(),
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		won = result.RowsAffected == 1
+		if won && input != nil {
+			if _, _, err := ensureBillingSettlementRecordDB(tx, *input); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return won && err == nil, err
 }
 
 // MarkTaskSubmitFailedWithSettlement commits a definite submit rejection and
@@ -1128,36 +1206,8 @@ func MarkTaskSubmitFailedWithSettlement(taskID int64, reason string, input *Bill
 		}
 		return nil
 	}
-	reason = common.SanitizePersistedLogContent(reason)
-	if input != nil {
-		if err := validateBillingSettlementInput(*input); err != nil {
-			return err
-		}
-	}
-	return DB.Transaction(func(tx *gorm.DB) error {
-		if input != nil {
-			if _, _, err := ensureBillingSettlementRecordDB(tx, *input); err != nil {
-				return err
-			}
-		}
-		result := tx.Model(&Task{}).
-			Where("id = ? AND status NOT IN ?", taskID, []string{TaskStatusFailure, TaskStatusSuccess}).
-			Updates(map[string]interface{}{
-				"status":      TaskStatusFailure,
-				"progress":    "100%",
-				"finish_time": time.Now().Unix(),
-				"fail_reason": reason,
-				"quota":       0,
-				"updated_at":  time.Now().Unix(),
-			})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return taskSubmitResultUpdateMissError(tx, taskID)
-		}
-		return nil
-	})
+	_, err := ClaimTaskSubmitFailureWithSettlement(taskID, reason, input)
+	return err
 }
 
 // MarkTaskSubmitNeedsReview preserves the pre-consumed quota and any upstream

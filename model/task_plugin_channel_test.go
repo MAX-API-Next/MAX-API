@@ -46,6 +46,33 @@ func TestChannelSettingsRepairDoesNotRewriteMalformedMapping(t *testing.T) {
 	}
 }
 
+func TestChannelSettingsRepairPreservesConcurrentValidValue(t *testing.T) {
+	for _, column := range []string{"setting", "settings"} {
+		t.Run(column, func(t *testing.T) {
+			db := deletionDB(t)
+			previous := DB
+			DB = db
+			t.Cleanup(func() { DB = previous })
+			bad := "{"
+			row := &Channel{Setting: &bad, OtherSettings: bad}
+			require.NoError(t, db.Create(row).Error)
+			var stale Channel
+			require.NoError(t, db.First(&stale, row.Id).Error)
+			const valid = `{"concurrent":true}`
+			require.NoError(t, db.Model(row).UpdateColumn(column, valid).Error)
+			if column == "setting" {
+				stale.GetSetting()
+			} else {
+				stale.GetOtherSettings()
+			}
+			var value *string
+			require.NoError(t, db.Model(row).Select(column).Row().Scan(&value))
+			require.NotNil(t, value)
+			require.Equal(t, valid, *value)
+		})
+	}
+}
+
 func TestChannelReferencesRejectLostWholeReceiptSet(t *testing.T) {
 	for _, mode := range []string{"rows-lost", "table-lost", "legacy-index"} {
 		t.Run(mode, func(t *testing.T) {
@@ -97,7 +124,9 @@ func TestChannelBatchValidatesReceiptUnionOncePerStatement(t *testing.T) {
 	require.NoError(t, db.Create(&more).Error)
 	require.Equal(t, 1, reads, "another statement cannot reuse a previous validation")
 	bad := []Channel{{Name: "safe-member", Models: "ordinary"}, {Name: "deleted-member", Models: "catalog-model"}}
+	reads = 0
 	require.ErrorIs(t, db.Create(&bad).Error, taskplugin.ErrBindingRejected)
+	require.Equal(t, 1, reads, "a rejected union must also scan only once per execution")
 	var count int64
 	require.NoError(t, db.Model(&Channel{}).Where("name IN ?", []string{"safe-member", "deleted-member"}).Count(&count).Error)
 	require.Zero(t, count, "one invalid union member rolls back the whole statement")

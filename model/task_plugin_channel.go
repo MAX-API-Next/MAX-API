@@ -121,15 +121,13 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 	if len(updates) == 0 {
 		return nil
 	}
-	if err := validateChannelReferenceSet(tx, updates); err != nil {
-		return err
-	}
 	// Later rows reuse this execution's union. GORM resets CurDestIndex before
 	// every create, including reuse of an initialized handle and its settings.
+	// GORM retains the first hook error while continuing the remaining rows.
 	if batch {
 		statement.Settings.Store(channelBatchReferenceCheck, statement)
 	}
-	return nil
+	return validateChannelReferenceSet(tx, updates)
 }
 
 func validateChannelReferenceSet(tx *gorm.DB, updates []channelEmittedReferences) error {

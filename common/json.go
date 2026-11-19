@@ -33,6 +33,11 @@ func DecodeJson(reader io.Reader, v any) error {
 	return json.NewDecoder(reader).Decode(v)
 }
 
+// NewJSONDecoder exposes token traversal through the common JSON boundary.
+func NewJSONDecoder(reader io.Reader) *json.Decoder {
+	return json.NewDecoder(reader)
+}
+
 func Marshal(v any) ([]byte, error) {
 	return json.Marshal(v)
 }

@@ -12,12 +12,10 @@ import (
 
 func TestPlaceholderRewriteMakesStaleManualDecisionLose(t *testing.T) {
 	truncateTables(t)
-	previous := DB
-	const fixed int64 = 1700000000
-	DB = DB.Session(&gorm.Session{NowFunc: func() time.Time { return time.Unix(fixed, 0) }})
-	t.Cleanup(func() { DB = previous })
+	fixed := time.Now().Unix() + 100000
 	row := &Task{TaskID: "same-second-retry", Status: TaskStatusSubmitted, Quota: 20, UpdatedAt: fixed, ChannelId: 1, PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: "original"}}
 	insertTask(t, row)
+	require.NoError(t, DB.Model(row).UpdateColumn("updated_at", fixed).Error)
 	for _, request := range []string{"retry-one", "retry-two"} {
 		var observed, retry Task
 		require.NoError(t, DB.First(&observed, row.ID).Error)
@@ -31,7 +29,7 @@ func TestPlaceholderRewriteMakesStaleManualDecisionLose(t *testing.T) {
 		require.False(t, won, "a rewrite within the same Unix second must invalidate the old manual decision")
 		var fresh Task
 		require.NoError(t, DB.First(&fresh, row.ID).Error)
-		require.Greater(t, fresh.UpdatedAt, observed.UpdatedAt)
+		require.Equal(t, observed.UpdatedAt+1, fresh.UpdatedAt)
 		require.Equal(t, retry.UpdatedAt, fresh.UpdatedAt)
 		require.Equal(t, request, fresh.PrivateData.BillingRequestId)
 		require.Equal(t, retry.ChannelId, fresh.ChannelId)
@@ -67,6 +65,78 @@ func TestPlaceholderRewriteLosesAfterNewerManualDecision(t *testing.T) {
 	require.NoError(t, DB.Where("operation_key = ?", input.OperationKey).First(&record).Error)
 	require.Equal(t, BillingSettlementStatusManual, record.Status)
 	require.Zero(t, record.AppliedFundingDelta)
+}
+
+func TestSubmitFailurePreservesOpenTaskFinalizeDecision(t *testing.T) {
+	truncateTables(t)
+	row := &Task{TaskID: "manual-before-failure-cleanup", Status: TaskStatusSubmitted, Quota: 20, PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: "original"}}
+	insertTask(t, row)
+	input := BillingSettlementInput{OperationKey: BillingTaskFinalizeOperationKey(row.ID), Source: BillingSettlementSourceWallet, UserID: 1, TaskID: row.ID, TaskQuota: 20, TaskQuotaTarget: 20}
+	won, err := row.UpdateWithStatusAndManualSettlement(TaskStatusSubmitted, row.UpdatedAt, input, "requires review")
+	require.NoError(t, err)
+	require.True(t, won)
+	require.NoError(t, MarkTaskSubmitFailed(row.ID, "retry rewrite was refused"))
+	var fresh Task
+	require.NoError(t, DB.First(&fresh, row.ID).Error)
+	require.EqualValues(t, TaskStatusSubmitted, fresh.Status)
+	require.Equal(t, 20, fresh.Quota)
+	var record BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", input.OperationKey).First(&record).Error)
+	require.Equal(t, BillingSettlementStatusManual, record.Status)
+	require.Zero(t, record.AppliedFundingDelta)
+}
+
+func TestSubmitFailureAndManualDecisionHaveOneOwner(t *testing.T) {
+	truncateTables(t)
+	row := &Task{TaskID: "failure-manual-race", Status: TaskStatusSubmitted, Quota: 20, PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: "original"}}
+	insertTask(t, row)
+	input := BillingSettlementInput{OperationKey: BillingTaskFinalizeOperationKey(row.ID), Source: BillingSettlementSourceWallet, UserID: 1, TaskID: row.ID, TaskQuota: 20, TaskQuotaTarget: 20}
+	type outcome struct {
+		won bool
+		err error
+	}
+	start, failed, manual := make(chan struct{}), make(chan outcome, 1), make(chan outcome, 1)
+	go func() {
+		<-start
+		won, err := ClaimTaskSubmitFailure(row.ID, "definite rejection")
+		failed <- outcome{won, err}
+	}()
+	go func() {
+		<-start
+		observed := *row
+		won, err := observed.UpdateWithStatusAndManualSettlement(TaskStatusSubmitted, row.UpdatedAt, input, "manual decision")
+		manual <- outcome{won, err}
+	}()
+	close(start)
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	var failureResult, manualResult outcome
+	select {
+	case failureResult = <-failed:
+	case <-deadline.C:
+		t.Fatal("failure claim did not finish")
+	}
+	select {
+	case manualResult = <-manual:
+	case <-deadline.C:
+		t.Fatal("manual decision did not finish")
+	}
+	require.NoError(t, failureResult.err)
+	require.NoError(t, manualResult.err)
+	require.NotEqual(t, failureResult.won, manualResult.won)
+	var fresh Task
+	require.NoError(t, DB.First(&fresh, row.ID).Error)
+	var count int64
+	require.NoError(t, DB.Model(&BillingSettlement{}).Where("operation_key = ?", input.OperationKey).Count(&count).Error)
+	if manualResult.won {
+		require.EqualValues(t, TaskStatusSubmitted, fresh.Status)
+		require.EqualValues(t, 1, count)
+		require.Equal(t, 20, fresh.Quota)
+	} else {
+		require.EqualValues(t, TaskStatusFailure, fresh.Status)
+		require.Zero(t, count)
+		require.Zero(t, fresh.Quota)
+	}
 }
 
 func TestPlaceholderRewriteRollsBackWithoutPublishedVersion(t *testing.T) {

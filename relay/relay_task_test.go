@@ -21,9 +21,87 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
+
+func TestEnsureTaskPlaceholderRetriesOnlyClaimChanges(t *testing.T) {
+	for _, change := range []string{"claim", "continuous-claims", "private-data", "manual-finalize", "confirmed-upstream"} {
+		t.Run(change, func(t *testing.T) {
+			db, err := gorm.Open(sqlite.Open(t.TempDir()+"/retry.db"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+			require.NoError(t, err)
+			require.NoError(t, db.AutoMigrate(&model.Task{}, &model.BillingSettlement{}))
+			previous, oldSQLite := model.DB, common.UsingSQLite
+			model.DB, common.UsingSQLite = db, true
+			t.Cleanup(func() {
+				model.DB, common.UsingSQLite = previous, oldSQLite
+				pool, _ := db.DB()
+				if pool != nil {
+					_ = pool.Close()
+				}
+			})
+			row := &model.Task{TaskID: "retry-placeholder", UserId: 1, ChannelId: 1, Status: model.TaskStatusSubmitted, Quota: 10, UpdatedAt: 100, PrivateData: model.TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: "original"}}
+			require.NoError(t, db.Create(row).Error)
+			injected := 0
+			require.NoError(t, db.Callback().Query().After("gorm:query").Register("poll-claims-between-read-and-rewrite", func(tx *gorm.DB) {
+				loaded, ok := tx.Statement.Dest.(*model.Task)
+				if !ok || tx.Error != nil || loaded.ID != row.ID || injected > 0 && change != "continuous-claims" {
+					return
+				}
+				injected++
+				if change == "manual-finalize" {
+					input := model.BillingSettlementInput{OperationKey: model.BillingTaskFinalizeOperationKey(row.ID), Source: model.BillingSettlementSourceWallet, UserID: 1, TaskID: row.ID, TaskQuota: 10, TaskQuotaTarget: 10}
+					won, err := loaded.UpdateWithStatusAndManualSettlement(model.TaskStatusSubmitted, loaded.UpdatedAt, input, "manual decision")
+					require.NoError(t, err)
+					require.True(t, won)
+					return
+				}
+				updates := map[string]any{"updated_at": loaded.UpdatedAt + 1}
+				if change == "private-data" || change == "confirmed-upstream" {
+					private := loaded.PrivateData
+					if change == "private-data" {
+						private.BillingRequestId = "newer-owner"
+					} else {
+						private.UpstreamTaskID, private.AwaitingUpstreamID = "accepted-provider-id", false
+					}
+					updates["private_data"] = private
+				}
+				require.NoError(t, db.Model(&model.Task{}).Where("id = ?", row.ID).Updates(updates).Error)
+			}))
+			info := &relaycommon.RelayInfo{RequestId: "retry-request", UserId: 1, TokenId: 2, BillingSource: model.BillingSettlementSourceWallet, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 99}, TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: row.ID}}
+			result, taskErr := ensureTaskPlaceholder("", info, 10)
+			require.NoError(t, db.Callback().Query().Remove("poll-claims-between-read-and-rewrite"))
+			var fresh model.Task
+			require.NoError(t, db.First(&fresh, row.ID).Error)
+			if change == "claim" {
+				require.Nil(t, taskErr)
+				require.NotNil(t, result)
+				require.Equal(t, "retry-request", fresh.PrivateData.BillingRequestId)
+				require.Equal(t, 99, fresh.ChannelId)
+				require.Equal(t, result.UpdatedAt, fresh.UpdatedAt)
+			} else {
+				require.NotNil(t, taskErr)
+				require.Nil(t, result)
+				require.Equal(t, 1, fresh.ChannelId)
+				require.Equal(t, 10, fresh.Quota)
+				if change == "private-data" {
+					require.Equal(t, "newer-owner", fresh.PrivateData.BillingRequestId)
+				}
+				if change == "confirmed-upstream" {
+					require.Equal(t, "accepted-provider-id", fresh.PrivateData.UpstreamTaskID)
+				}
+			}
+			if change == "continuous-claims" {
+				require.Equal(t, 3, injected, "two bounded reloads, no provider or money replay")
+			} else {
+				require.Equal(t, 1, injected)
+			}
+		})
+	}
+}
 
 type recordingTaskReservationBilling struct {
 	preConsumed int

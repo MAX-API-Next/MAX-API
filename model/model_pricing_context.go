@@ -258,8 +258,8 @@ func (a *pricingAuthority) contextsContext(ctx context.Context, model string) ([
 				return nil, ctx.Err()
 			}
 			if err != nil {
-				continue
-			} // snapshot validation above already rejects corruption
+				return nil, err
+			} // An incomplete reload must not erase a source from the comparison.
 			a.validatedPackages[entry.Digest] = pkg
 		}
 		manifest := pkg.Manifest()

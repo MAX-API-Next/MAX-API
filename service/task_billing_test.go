@@ -602,6 +602,66 @@ func testSweepTimedOutHistoricalPluginBindingPreservesRefund(t *testing.T, asTex
 
 type historicalCompletionAdaptor struct{ mockAdaptor }
 
+type historicalProgressAdaptor struct{ historicalCompletionAdaptor }
+
+func (*historicalProgressAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return &relaycommon.TaskInfo{Status: model.TaskStatusInProgress, Progress: "50%"}, nil
+}
+
+func TestPollingProgressPreservesUnknownTextReference(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
+	seedUser(t, 727, 80)
+	seedToken(t, 728, 727, "synthetic-history-progress", 80)
+	seedChannel(t, 729)
+	document, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "history", Manifest: taskplugin.Manifest{APIVersion: 1, Key: "stored", Name: "Stored", Version: "1.0.0", Models: []string{"historical-model"}}})
+	require.NoError(t, err)
+	pkg, err := taskplugin.LoadPackage(bytes.NewReader(document), fmt.Sprintf("%x", sha256.Sum256(document)))
+	require.NoError(t, err)
+	catalog, err := taskplugin.OpenCatalog(t.Context(), model.NewTaskPluginCatalogStore(model.DB))
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	row := makeTask(727, 729, 20, 728, model.BillingSettlementSourceWallet, 0)
+	row.TaskID, row.Status = "history-progress", model.TaskStatusInProgress
+	require.NoError(t, model.DB.Create(row).Error)
+	raw, err := common.Marshal(row.PrivateData)
+	require.NoError(t, err)
+	var object map[string]any
+	require.NoError(t, common.UnmarshalUseNumber(raw, &object))
+	object["extension_history"] = map[string]any{"plugin_key": "stored", "version": "1.0.0"}
+	raw, err = common.Marshal(object)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(row).UpdateColumn("private_data", string(raw)).Error)
+	var loaded model.Task
+	require.NoError(t, model.DB.First(&loaded, row.ID).Error)
+	taskWrites, privateWrites := 0, 0
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register("observe-progress-private-column", func(tx *gorm.DB) {
+		if tx.Statement.Table == "tasks" {
+			if values, ok := tx.Statement.Dest.(map[string]any); ok {
+				taskWrites++
+				if _, present := values["private_data"]; present {
+					privateWrites++
+				}
+			}
+		}
+	}))
+	t.Cleanup(func() { _ = model.DB.Callback().Update().Remove("observe-progress-private-column") })
+	for attempt := 0; attempt < 2; attempt++ {
+		require.NoError(t, updateVideoSingleTask(t.Context(), &historicalProgressAdaptor{}, &model.Channel{Id: 729, Type: constant.ChannelTypeKling}, loaded.TaskID, map[string]*model.Task{loaded.TaskID: &loaded}))
+		require.NoError(t, model.DB.First(&loaded, row.ID).Error)
+	}
+	var stored []byte
+	require.NoError(t, model.DB.Model(row).Select("private_data").Row().Scan(&stored))
+	require.Contains(t, string(stored), "extension_history")
+	require.Equal(t, "50%", loaded.Progress)
+	require.Positive(t, taskWrites)
+	require.Zero(t, privateWrites, "progress-only polling omits the unchanged private column")
+	require.Equal(t, 20, loaded.Quota)
+	require.ErrorIs(t, catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"}), taskplugin.ErrCatalogInUse)
+	require.EqualValues(t, 80, getUserQuota(t, 727))
+	require.Equal(t, 80, getTokenRemainQuota(t, 728))
+	require.Zero(t, countLogs(t))
+}
+
 func (*historicalCompletionAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
 }
