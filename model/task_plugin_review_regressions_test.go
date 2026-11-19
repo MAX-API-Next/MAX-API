@@ -81,6 +81,56 @@ func TestChannelExplicitSetCannotBypassReferenceGuard(t *testing.T) {
 	require.Equal(t, "before", stored.Name)
 }
 
+func TestTaskExplicitSetPreservesPrivateReferenceGuard(t *testing.T) {
+	db := deletionDB(t)
+	row := &Task{TaskID: "guard-explicit-set", Status: TaskStatusSubmitted, PrivateData: TaskPrivateData{BillingRequestId: "original"}}
+	require.NoError(t, db.Create(row).Error)
+	err := db.Model(row).Clauses(clause.Set{{Column: clause.Column{Name: "private_data"}, Value: "{}"}}).
+		Update("progress", "new").Error
+	require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+	var stored Task
+	require.NoError(t, db.First(&stored, row.ID).Error)
+	require.Equal(t, "original", stored.PrivateData.BillingRequestId)
+	require.NoError(t, db.Model(&stored).Update("progress", "new").Error)
+	require.NoError(t, db.First(&stored, row.ID).Error)
+	require.Equal(t, "new", stored.Progress)
+	require.Equal(t, "original", stored.PrivateData.BillingRequestId)
+}
+
+func TestPluginPlaceholderRewriteAcquiresCatalogBeforeTaskVersion(t *testing.T) {
+	db := deletionDB(t)
+	require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+	previous := DB
+	DB = db
+	t.Cleanup(func() { DB = previous })
+	catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+	require.NoError(t, err)
+	pkg, _ := catalogFixture(t, "rewrite-lock", "1.0.0", "rewrite-lock-test")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	task := &Task{TaskID: "plugin-bound-retry", Status: TaskStatusSubmitted,
+		PrivateData: TaskPrivateData{AwaitingUpstreamID: true, PluginBinding: &types.TaskPluginBinding{
+			PluginKey: "rewrite-lock", Version: "1.0.0", PackageDigest: pkg.Digest(),
+		}}}
+	require.NoError(t, db.Create(task).Error)
+	var lockOrder []string
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("capture-rewrite-lock-order", func(tx *gorm.DB) {
+		fields, ok := tx.Statement.Dest.(map[string]any)
+		if !ok {
+			return
+		}
+		if tx.Statement.Table == "task_plugin_catalog_heads" && fields["mutation_id"] != nil {
+			lockOrder = append(lockOrder, "catalog")
+		}
+		if tx.Statement.Table == "tasks" && fields["updated_at"] != nil {
+			lockOrder = append(lockOrder, "task")
+		}
+	}))
+	task.ChannelId = 81
+	require.NoError(t, task.RewritePlaceholder())
+	require.GreaterOrEqual(t, len(lockOrder), 2)
+	require.Equal(t, []string{"catalog", "task"}, lockOrder[:2])
+}
+
 func TestTaskPluginDeletedModelIndexCapacity(t *testing.T) {
 	field, ok := any((TaskPluginDeletion{}).Models).(interface {
 		GormDBDataType(*gorm.DB, *schema.Field) string

@@ -11,12 +11,15 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -24,7 +27,7 @@ import (
 
 func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 	for _, funding := range []string{"wallet_only", "subscription_only"} {
-		for _, outcome := range []string{"manual-first", "failure-first", "read-error", "pending-restart", "intent-write-error", "concurrent-cleanup", "identity-mismatch", "read-error-recovery", "intent-write-error-recovery"} {
+		for _, outcome := range []string{"manual-first", "failure-first", "read-error", "pending-restart", "intent-write-error", "concurrent-cleanup", "identity-mismatch", "read-error-recovery", "intent-write-error-recovery", "task-write-error-recovery", "timeout-before-rejection", "timeout-task-write-error-recovery", "timeout-h3-retry-reserve", "different-terminal-failure"} {
 			t.Run(funding+"/"+outcome, func(t *testing.T) {
 				db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "cleanup.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 				require.NoError(t, err)
@@ -52,8 +55,53 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 				require.Nil(t, PreConsumeBilling(c, 100, info))
 				originalBilling := info.Billing
 				row := &model.Task{TaskID: "cleanup-placeholder", UserId: 51001, Quota: 100, Status: model.TaskStatusSubmitted, PrivateData: model.TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: info.RequestId, BillingSource: info.BillingSource, TokenId: info.TokenId, SubscriptionId: info.SubscriptionId}}
+				if outcome == "timeout-h3-retry-reserve" {
+					previousUnit := common.QuotaPerUnit
+					common.QuotaPerUnit = 1000
+					t.Cleanup(func() { common.QuotaPerUnit = previousUnit })
+					plan, err := task_billing_setting.BuildH3BillingPlan(task_billing_setting.H3BillingInput{
+						Resolution: "768P", OutputDurationSeconds: 5, InputVideoCount: 1,
+					}, 0.05)
+					require.NoError(t, err)
+					require.Positive(t, plan.ReserveQuota)
+					require.LessOrEqual(t, plan.ReserveQuota, row.Quota)
+					row.PrivateData.BillingContext = &model.TaskBillingContext{TaskBillingPlan: plan}
+				}
 				require.NoError(t, db.Create(row).Error)
 				info.PersistedTaskID = row.ID
+				originalPlaceholder := *row
+				if strings.HasPrefix(outcome, "timeout-") {
+					previousTimeout := constant.TaskTimeoutMinutes
+					constant.TaskTimeoutMinutes = 1
+					t.Cleanup(func() { constant.TaskTimeoutMinutes = previousTimeout })
+					resetTimedOutTaskSweepCursorForTest(t)
+					require.NoError(t, db.Model(row).UpdateColumn("submit_time", time.Now().Add(-2*time.Minute).Unix()).Error)
+					if outcome == "timeout-h3-retry-reserve" {
+						// The next attempt reserves before it claims the placeholder.
+						require.NoError(t, info.Billing.Reserve(150))
+						require.EqualValues(t, 850, getTokenRemainQuota(t, info.TokenId))
+					}
+					sweepTimedOutTasks(t.Context())
+					require.NoError(t, db.First(&row, row.ID).Error)
+					if outcome == "timeout-h3-retry-reserve" {
+						taskFinalize, found, err := model.GetBillingSettlementStatus(model.BillingTaskFinalizeOperationKey(row.ID))
+						require.NoError(t, err)
+						assert.False(t, found, "an unconfirmed submission has no terminal usage to reconcile: %s", taskFinalize)
+						require.EqualValues(t, 850, getTokenRemainQuota(t, info.TokenId), "unknown outcome keeps all reserved funding")
+					}
+					require.EqualValues(t, model.TaskStatusFailure, row.Status)
+					require.Equal(t, 100, row.Quota, "the real timeout deliberately retains the original reservation")
+				}
+				if outcome == "different-terminal-failure" {
+					require.NoError(t, db.Model(row).UpdateColumn("status", model.TaskStatusFailure).Error)
+				}
+				if strings.Contains(outcome, "task-write-error") {
+					require.NoError(t, db.Callback().Update().Before("gorm:update").Register("fail-task-writes", func(tx *gorm.DB) {
+						if tx.Statement.Table == "tasks" {
+							tx.AddError(errors.New("synthetic task UPDATE unavailable"))
+						}
+					}))
+				}
 				input := model.BillingSettlementInput{OperationKey: model.BillingTaskFinalizeOperationKey(row.ID), Source: info.BillingSource, UserID: info.UserId, TokenID: info.TokenId, TokenKey: info.TokenKey, SubscriptionID: info.SubscriptionId, TaskID: row.ID, TaskQuota: 100, TaskQuotaTarget: 100}
 				var checkedColumns atomic.Int32
 				require.NoError(t, db.Callback().Update().Before("gorm:update").Register("verify-task-cleanup-columns", func(tx *gorm.DB) {
@@ -151,6 +199,20 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 							t.Fatal("concurrent cleanup did not finish")
 						}
 					}
+					var concurrent model.Task
+					require.NoError(t, db.First(&concurrent, row.ID).Error)
+					require.EqualValues(t, model.TaskStatusFailure, concurrent.Status)
+					require.Zero(t, concurrent.Quota)
+					var refunded model.BillingSettlement
+					require.NoError(t, db.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(info.RequestId)).First(&refunded).Error)
+					require.Equal(t, model.BillingSettlementStatusApplied, refunded.Status)
+					require.EqualValues(t, -100, refunded.AppliedFundingDelta)
+					require.EqualValues(t, -100, refunded.AppliedTokenDelta)
+					require.EqualValues(t, 1000, getUserQuota(t, info.UserId))
+					require.EqualValues(t, 1000, getTokenRemainQuota(t, info.TokenId))
+					if funding == "subscription_only" {
+						require.Zero(t, getSubscriptionUsed(t, info.SubscriptionId))
+					}
 				}
 				CleanupDefiniteTaskSubmitFailure(c, info, "rewrite rejected")
 				CleanupDefiniteTaskSubmitFailure(c, info, "duplicate cleanup")
@@ -159,6 +221,12 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 				}
 				if strings.HasPrefix(outcome, "intent-write-error") {
 					require.NoError(t, db.Callback().Create().Remove("fail-refund-intent"))
+				}
+				if strings.Contains(outcome, "task-write-error") {
+					require.NoError(t, db.Callback().Update().Remove("fail-task-writes"))
+					var work model.TaskSubmitFailureRecovery
+					require.NoError(t, db.First(&work, "task_id = ?", row.ID).Error)
+					require.Equal(t, model.TaskSubmitFailureRecoveryPending, work.Status)
 				}
 				recovered := strings.HasSuffix(outcome, "-recovery")
 				if recovered {
@@ -180,7 +248,7 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 					require.NoError(t, db.First(&sub, 51004).Error)
 					used = sub.AmountUsed
 				}
-				if outcome == "failure-first" || outcome == "pending-restart" || outcome == "concurrent-cleanup" || recovered {
+				if outcome == "failure-first" || outcome == "pending-restart" || outcome == "concurrent-cleanup" || outcome == "timeout-before-rejection" || outcome == "timeout-h3-retry-reserve" || recovered {
 					require.Positive(t, checkedColumns.Load(), "the actual cleanup must emit only real database columns")
 					require.EqualValues(t, model.TaskStatusFailure, task.Status)
 					require.Zero(t, task.Quota)
@@ -189,11 +257,22 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 					require.Zero(t, token.UsedQuota)
 					require.EqualValues(t, 1000, user.Quota)
 					require.Zero(t, used)
-					won, err := row.UpdateWithStatusAndManualSettlement(model.TaskStatusSubmitted, row.UpdatedAt, input, "late decision")
+					if outcome == "timeout-h3-retry-reserve" {
+						var refund model.BillingSettlement
+						require.NoError(t, db.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(info.RequestId)).First(&refund).Error)
+						require.Equal(t, model.BillingSettlementStatusApplied, refund.Status)
+						require.EqualValues(t, -150, refund.AppliedFundingDelta)
+						require.EqualValues(t, -150, refund.AppliedTokenDelta)
+					}
+					won, err := originalPlaceholder.UpdateWithStatusAndManualSettlement(model.TaskStatusSubmitted, originalPlaceholder.UpdatedAt, input, "late decision")
 					require.NoError(t, err)
 					require.False(t, won)
 				} else {
-					require.EqualValues(t, model.TaskStatusSubmitted, task.Status)
+					expectedStatus := model.TaskStatusSubmitted
+					if outcome == "different-terminal-failure" {
+						expectedStatus = model.TaskStatusFailure
+					}
+					require.EqualValues(t, expectedStatus, task.Status)
 					require.Equal(t, 100, task.Quota)
 					require.Zero(t, refunds)
 					require.EqualValues(t, 900, token.RemainQuota)

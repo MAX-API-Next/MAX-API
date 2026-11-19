@@ -2,6 +2,8 @@
 package model
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -13,6 +15,52 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+func TestSlowTaskSubmitFailureClaimDoesNotBlockLaterRecovery(t *testing.T) {
+	db := deletionDB(t)
+	require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+	previous, oldSQLite := DB, common.UsingSQLite
+	DB, common.UsingSQLite = db, true
+	t.Cleanup(func() { DB, common.UsingSQLite = previous, oldSQLite })
+	var tasks [2]Task
+	for i := range tasks {
+		request := fmt.Sprintf("request-%d", i)
+		tasks[i] = Task{TaskID: request, Status: TaskStatusSubmitted, Quota: 100, UserId: 71,
+			PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingSource: BillingSettlementSourceWallet, BillingRequestId: request, TokenId: 72}}
+		require.NoError(t, db.Create(&tasks[i]).Error)
+		input := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey(request), Source: BillingSettlementSourceWallet, UserID: 71, TokenID: 72, FundingDelta: -100, TokenDelta: -100}
+		require.NoError(t, RecordTaskSubmitFailureRecovery(tasks[i].ID, "known rejection", input))
+	}
+	seen := 0
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("simulate-one-blocked-task-row", func(tx *gorm.DB) {
+		if tx.Statement.Table != "tasks" {
+			return
+		}
+		seen++
+		if seen == 1 {
+			select {
+			case <-tx.Statement.Context.Done():
+				tx.AddError(tx.Statement.Context.Err())
+			case <-time.After(7 * time.Second):
+				tx.AddError(errors.New("claim did not set a bounded context"))
+			}
+		}
+	}))
+	processPendingTaskSubmitFailures()
+	require.Equal(t, 2, seen)
+	var journal []TaskSubmitFailureRecovery
+	require.NoError(t, db.Order("task_id").Find(&journal).Error)
+	require.Len(t, journal, 2)
+	require.Equal(t, TaskSubmitFailureRecoveryPending, journal[0].Status)
+	require.Equal(t, context.DeadlineExceeded.Error(), journal[0].LastError)
+	require.Equal(t, 1, journal[0].Attempts)
+	require.Positive(t, journal[0].NextAttempt)
+	require.Equal(t, TaskSubmitFailureRecoveryRecorded, journal[1].Status)
+	var intents []BillingSettlement
+	require.NoError(t, db.Find(&intents).Error)
+	require.Len(t, intents, 1)
+	require.Equal(t, journal[1].OperationKey, intents[0].OperationKey)
+}
 
 func TestPendingSubmitFailureRecoveryOwnsTimeoutAndRetry(t *testing.T) {
 	for _, operation := range []string{"candidate", "retry", "status", "manual"} {

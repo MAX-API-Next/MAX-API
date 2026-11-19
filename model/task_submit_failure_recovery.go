@@ -91,13 +91,8 @@ func RecordTaskSubmitFailureRecovery(taskID int64, reason string, input BillingS
 		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
-		now := time.Now().Unix()
-		// Task first, then journal: match timeout/retry lock order and invalidate
-		// a scan that was read before this recovery fact was committed.
-		version := gorm.Expr("CASE WHEN updated_at IS NULL OR updated_at < ? THEN ? WHEN updated_at < ? THEN updated_at + 1 ELSE updated_at END", now, now, int64(1<<63-1))
-		if err := tx.Model(&Task{}).Where("id = ? AND status NOT IN ?", taskID, []string{TaskStatusFailure, TaskStatusSuccess}).UpdateColumn("updated_at", version).Error; err != nil {
-			return err
-		}
+		// Persist the rejection even if the task table cannot currently be
+		// updated. Replay independently verifies task and funding ownership.
 		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "task_id"}}, DoNothing: true}).Create(&record).Error; err != nil {
 			return err
 		}
@@ -137,35 +132,41 @@ func processPendingTaskSubmitFailures() {
 		}
 		input := record.refundInput()
 		if _, err := taskSubmitFailureRecoveryRecord(record.TaskID, record.Reason, input); err != nil {
-			updateTaskSubmitFailureRecovery(db, record, TaskSubmitFailureRecoveryManual, err)
+			updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryManual, err)
 			continue
 		}
-		won, err := claimTaskSubmitFailureWithSettlementDB(db, record.TaskID, record.Reason, &input)
+		claimCtx, cancelClaim := context.WithTimeout(ctx, 2*time.Second)
+		claimDB := DB.WithContext(claimCtx)
+		won, err := claimTaskSubmitFailureWithSettlementDB(claimDB, record.TaskID, record.Reason, &input)
+		cancelClaim()
 		if err != nil {
 			status := TaskSubmitFailureRecoveryPending
 			if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, ErrTaskSubmitRefundIdentityMismatch) || errors.Is(err, ErrBillingSettlementOperationConflict) {
 				status = TaskSubmitFailureRecoveryManual
 			}
-			updateTaskSubmitFailureRecovery(db, record, status, err)
+			updateTaskSubmitFailureRecovery(record, status, err)
 			continue
 		}
 		if !won {
 			var settlement BillingSettlement
 			err := db.Where("operation_key = ?", input.OperationKey).First(&settlement).Error
 			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-				updateTaskSubmitFailureRecovery(db, record, TaskSubmitFailureRecoveryPending, err)
+				updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryPending, err)
 				continue
 			}
 			if err != nil || validateBillingSettlement(settlement, input) != nil {
-				updateTaskSubmitFailureRecovery(db, record, TaskSubmitFailureRecoveryManual, ErrTaskFinalizeOwned)
+				updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryManual, ErrTaskFinalizeOwned)
 				continue
 			}
 		}
-		updateTaskSubmitFailureRecovery(db, record, TaskSubmitFailureRecoveryRecorded, nil)
+		updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryRecorded, nil)
 	}
 }
 
-func updateTaskSubmitFailureRecovery(db *gorm.DB, record TaskSubmitFailureRecovery, status string, cause error) {
+func updateTaskSubmitFailureRecovery(record TaskSubmitFailureRecovery, status string, cause error) {
+	// A claim may use up its deadline while the journal is still writable.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 	next, message := int64(0), ""
 	if cause != nil {
 		message = common.SanitizePersistedLogContent(cause.Error())
@@ -173,7 +174,7 @@ func updateTaskSubmitFailureRecovery(db *gorm.DB, record TaskSubmitFailureRecove
 	if status == TaskSubmitFailureRecoveryPending {
 		next = time.Now().Add(time.Duration(1<<min(record.Attempts+1, 6)) * time.Second).Unix()
 	}
-	if err := db.Model(&TaskSubmitFailureRecovery{}).Where("task_id = ? AND status = ?", record.TaskID, TaskSubmitFailureRecoveryPending).
+	if err := DB.WithContext(ctx).Model(&TaskSubmitFailureRecovery{}).Where("task_id = ? AND status = ?", record.TaskID, TaskSubmitFailureRecoveryPending).
 		Updates(map[string]any{"status": status, "attempts": gorm.Expr("attempts + 1"), "last_error": message, "next_attempt": next, "updated_at": time.Now().Unix()}).Error; err != nil {
 		common.SysError("failed to update task submit failure recovery journal")
 	}

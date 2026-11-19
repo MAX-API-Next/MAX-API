@@ -816,6 +816,12 @@ func TestBillingProcessRejectedTaskRecovery(t *testing.T) {
 			snapshot := billingProcessSnapshot(t, db)
 			finishBillingTestProcess(t, startBillingTestProcess(t, dir, cfg))
 			require.Equal(t, snapshot, billingProcessSnapshot(t, db))
+			var replayTask model.Task
+			var replayRecovery model.TaskSubmitFailureRecovery
+			require.NoError(t, db.First(&replayTask, task.ID).Error)
+			require.NoError(t, db.First(&replayRecovery, "task_id = ?", task.ID).Error)
+			require.Equal(t, task, replayTask)
+			require.Equal(t, recovery, replayRecovery)
 		})
 	}
 }

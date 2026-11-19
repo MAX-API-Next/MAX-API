@@ -303,6 +303,7 @@ func TestTypedPricingIdentityNamedFactsCompleteAndSettleOnce(t *testing.T) {
 			require.NoError(t, info.Billing.Settle(1500))
 			var loaded model.Task
 			require.NoError(t, f.db.First(&loaded, task.ID).Error)
+			originalStatus := loaded.Status
 			p := loaded.PrivateData.BillingContext.TaskBillingPlan.ExpressionPlan
 			result := &relaycommon.TaskInfo{Status: string(model.TaskStatusSuccess), PricingUsageEnvelope: &types.TaskPricingUsageEnvelope{
 				ProducerKind: "task_plugin", SourceID: "hailuo", PluginVersion: p.PluginVersion, PackageDigest: p.PackageDigest,
@@ -322,7 +323,7 @@ func TestTypedPricingIdentityNamedFactsCompleteAndSettleOnce(t *testing.T) {
 				require.NoError(t, f.db.First(&restarted, task.ID).Error)
 				loaded = restarted
 				if missing {
-					require.NotEqualValues(t, model.TaskStatusSuccess, loaded.Status)
+					require.Equal(t, originalStatus, loaded.Status)
 					require.Equal(t, 1500, loaded.Quota)
 					require.EqualValues(t, 1500, getUserQuota(t, 901))
 					require.Equal(t, 1500, getTokenRemainQuota(t, 903))

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math/big"
 	"reflect"
 	"strings"
 
@@ -268,7 +269,7 @@ func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 				if !taskPrivateFactPath(path) {
 					canonical = taskPrivateMemberKey(typ, key)
 				}
-				if previous, exists := folded[canonical]; exists && !reflect.DeepEqual(previous, value) {
+				if previous, exists := folded[canonical]; exists && !taskPrivateJSONValueEqual(previous, value) {
 					return nil, errors.New("conflicting task private JSON members")
 				}
 				folded[canonical] = value
@@ -303,6 +304,44 @@ func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 		return nil, errors.New("unexpected data after task private JSON")
 	}
 	return value, nil
+}
+
+func taskPrivateJSONValueEqual(a, b any) bool {
+	x, xIsNumber := a.(json.Number)
+	y, yIsNumber := b.(json.Number)
+	if !xIsNumber || !yIsNumber || x == y {
+		return reflect.DeepEqual(a, b)
+	}
+	xDigits, xExponent := taskPrivateNumberParts(string(x))
+	yDigits, yExponent := taskPrivateNumberParts(string(y))
+	return xDigits == yDigits && xExponent.Cmp(yExponent) == 0
+}
+
+// Separate the significand from its base-ten exponent without materializing
+// any trailing zeros, even for historical numbers with very large exponents.
+func taskPrivateNumberParts(number string) (string, *big.Int) {
+	exponent := new(big.Int)
+	if i := strings.IndexAny(number, "eE"); i >= 0 {
+		exponent.SetString(number[i+1:], 10) // The decoder validated its grammar.
+		number = number[:i]
+	}
+	sign := ""
+	if number[0] == '-' {
+		sign, number = "-", number[1:]
+	}
+	digits := number
+	shift := 0
+	if dot := strings.IndexByte(number, '.'); dot >= 0 {
+		shift = dot + 1 - len(number)
+		digits = number[:dot] + number[dot+1:]
+	}
+	digits = strings.TrimLeft(digits, "0")
+	if digits == "" {
+		return "0", exponent.SetInt64(0)
+	}
+	normalized := strings.TrimRight(digits, "0")
+	shift += len(digits) - len(normalized)
+	return sign + normalized, exponent.Add(exponent, big.NewInt(int64(shift)))
 }
 
 func taskPrivateFactPath(path []string) bool {

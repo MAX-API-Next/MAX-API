@@ -1528,7 +1528,7 @@ func ensureBillingSettlementRecordDB(db *gorm.DB, input BillingSettlementInput) 
 	if result.Error != nil {
 		return BillingSettlement{}, false, fmt.Errorf("%w: %v", ErrBillingSettlementRecordNotDurable, result.Error)
 	}
-	if err := db.Where("operation_key = ?", input.OperationKey).First(&record).Error; err != nil {
+	if err := readEnsuredBillingSettlement(db, input.OperationKey, &record); err != nil {
 		return BillingSettlement{}, false, err
 	}
 	if err := validateBillingSettlement(record, input); err != nil {
@@ -1581,7 +1581,7 @@ func ensureManualBillingSettlementRecordDB(db *gorm.DB, input BillingSettlementI
 	if result.Error != nil {
 		return BillingSettlement{}, fmt.Errorf("%w: %v", ErrBillingSettlementRecordNotDurable, result.Error)
 	}
-	if err := db.Where("operation_key = ?", input.OperationKey).First(&record).Error; err != nil {
+	if err := readEnsuredBillingSettlement(db, input.OperationKey, &record); err != nil {
 		return BillingSettlement{}, err
 	}
 	if err := validateBillingSettlement(record, input); err != nil {
@@ -1591,6 +1591,15 @@ func ensureManualBillingSettlementRecordDB(db *gorm.DB, input BillingSettlementI
 		return BillingSettlement{}, permanentBillingSettlement(fmt.Errorf("%w: manual settlement identity conflict: %s", ErrBillingSettlementOperationConflict, input.OperationKey))
 	}
 	return record, nil
+}
+
+func readEnsuredBillingSettlement(db *gorm.DB, operationKey string, record *BillingSettlement) error {
+	if _, inTransaction := db.Statement.ConnPool.(gorm.TxCommitter); inTransaction {
+		// A conflicting insert checks the current row. Read that same row
+		// after catalog validation on MySQL, whose snapshot may be older.
+		db = withRowLock(db)
+	}
+	return db.Where("operation_key = ?", operationKey).First(record).Error
 }
 
 func billingSettlementEffectPayload(effect *BillingSettlementEffect) (string, error) {

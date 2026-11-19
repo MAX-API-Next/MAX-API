@@ -41,12 +41,32 @@ func TestTaskPrivateBillingAliasesCannotChooseAnIdentity(t *testing.T) {
 func TestTaskPrivateFactMapsRejectConflictingExactMembers(t *testing.T) {
 	for _, raw := range []string{
 		`{"billing_context":{"other_ratios":{"duration":1,"duration":2}}}`,
-		`{"billing_context":{"task_billing":{"fields":{"duration":1,"duration":2}}}}`,
+		`{"billing_context":{"task_billing":{"fields":{"duration":"1","duration":"2"}}}}`,
 	} {
 		var private TaskPrivateData
 		require.Error(t, private.Scan(raw), raw)
 	}
 	var equal TaskPrivateData
+	require.NoError(t, equal.Scan(`{"billing_context":{"task_billing":{"fields":{"duration":"1"}}}}`))
 	require.NoError(t, equal.Scan(`{"billing_context":{"other_ratios":{"duration":1,"duration":1,"Duration":2}}}`))
 	require.Equal(t, map[string]float64{"duration": 1, "Duration": 2}, equal.BillingContext.OtherRatios)
+}
+
+func TestTaskPrivateFactMapExactNumericEquality(t *testing.T) {
+	for _, raw := range []string{
+		`{"billing_context":{"other_ratios":{"duration":1,"duration":100e-2}}}`,
+		`{"billing_context":{"other_ratios":{"duration":1.0,"duration":1.00}}}`,
+		`{"billing_context":{"other_ratios":{"duration":-0,"duration":0e20}}}`,
+		`{"legacy":1e1000000000000000000,"legacy":10e999999999999999999}`,
+	} {
+		var private TaskPrivateData
+		require.NoError(t, private.Scan(raw), raw)
+	}
+	for _, raw := range []string{
+		`{"billing_context":{"other_ratios":{"duration":9007199254740992,"duration":9007199254740993}}}`,
+		`{"legacy":1e1000000000000000001,"legacy":10e999999999999999999}`,
+	} {
+		var private TaskPrivateData
+		require.Error(t, private.Scan(raw), raw)
+	}
 }

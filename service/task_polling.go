@@ -231,10 +231,17 @@ func sweepTimedOutTasks(ctx context.Context) {
 			remaining--
 			isLegacy := task.SubmitTime > 0 && task.SubmitTime < legacyTaskRefundCutoff
 			isUnconfirmedSubmit := task.PrivateData.AwaitingUpstreamID
+			hasUpstreamID := task.PrivateData.UpstreamTaskID != ""
 			task.PreserveDataOnStatusUpdate()
-			terminalDecision := prepareTaskTerminalBillingDecision(ctx, nil, task, &relaycommon.TaskInfo{
-				Status: string(model.TaskStatusFailure), Reason: reason,
-			}, 0)
+			var terminalDecision taskTerminalBillingDecision
+			if !isUnconfirmedSubmit || hasUpstreamID {
+				// Until an upstream ID is known, the timeout owns only the
+				// submission outcome. A usage decision would freeze the older
+				// placeholder quota while a retry may have reserved more.
+				terminalDecision = prepareTaskTerminalBillingDecision(ctx, nil, task, &relaycommon.TaskInfo{
+					Status: string(model.TaskStatusFailure), Reason: reason,
+				}, 0)
+			}
 			if terminalDecision.UsesPlan && terminalDecision.ManualReason != "" {
 				won, err := persistTaskManualBillingDecision(task, task.Status, task.UpdatedAt, terminalDecision)
 				if err != nil {
@@ -250,6 +257,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 			task.Status = model.TaskStatusFailure
 			task.Progress = "100%"
 			task.FinishTime = now
+			task.SubmitTimeoutRetainedFunding = !isLegacy && isUnconfirmedSubmit && !hasUpstreamID && task.Quota > 0
 			if isLegacy {
 				task.FailReason = legacyReason
 			} else if isUnconfirmedSubmit {
@@ -471,6 +479,8 @@ func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem
 	var err error
 	if settlement != nil {
 		won, err = task.UpdateWithStatusAndSettlement(previousStatus, *settlement)
+	} else if !providerTerminal {
+		won, err = task.UpdatePollingProgress(previousStatus)
 	} else {
 		won, err = task.UpdateWithStatus(previousStatus)
 	}
@@ -813,7 +823,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			transitionWon = true
 		}
 	} else if !snap.Equal(task.Snapshot()) {
-		if _, err := task.UpdateWithStatus(snap.Status); err != nil {
+		if _, err := task.UpdatePollingProgress(snap.Status); err != nil {
 			logger.LogError(ctx, fmt.Sprintf("Failed to update task %s: %s", task.TaskID, err.Error()))
 		}
 	} else {
@@ -866,7 +876,7 @@ func recoverAppliedTaskTerminalEvidence(task *model.Task) (appliedTaskRecoveryOu
 		candidate.PrivateData.ResultURL = candidate.PrivateData.PendingTerminalResultURL
 	}
 	clearPendingTaskTerminalEvidence(&candidate)
-	won, err := candidate.UpdateWithStatus(oldStatus)
+	won, err := candidate.PublishRecoveredTaskTerminalStatus(oldStatus, task.UpdatedAt)
 	if err != nil {
 		return appliedTaskRecoveryNoEvidence, err
 	}
@@ -902,7 +912,7 @@ func markAppliedTaskEvidenceMissing(task *model.Task, now int64) (appliedTaskRec
 	candidate.FinishTime = now
 	candidate.FailReason = "task settlement was already applied but terminal provider evidence is unavailable; manual reconciliation required"
 	clearPendingTaskTerminalEvidence(&candidate)
-	won, err := candidate.UpdateWithStatus(oldStatus)
+	won, err := candidate.PublishRecoveredTaskTerminalStatus(oldStatus, task.UpdatedAt)
 	if err != nil {
 		return appliedTaskRecoveryNoEvidence, err
 	}

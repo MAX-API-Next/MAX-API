@@ -228,6 +228,12 @@ func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T)
 		},
 	}
 	require.NoError(t, model.DB.Create(task).Error)
+	withProviderID := *task
+	withProviderID.ID = 0
+	withProviderID.TaskID = "task_awaiting_with_provider_id"
+	withProviderID.PrivateData.BillingRequestId = "awaiting-with-provider-id-request"
+	withProviderID.PrivateData.UpstreamTaskID = "synthetic-provider-id"
+	require.NoError(t, model.DB.Create(&withProviderID).Error)
 
 	sweepTimedOutTasks(context.Background())
 
@@ -235,7 +241,12 @@ func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T)
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
 	require.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
 	require.Equal(t, 30, reloaded.Quota)
+	require.True(t, reloaded.SubmitTimeoutRetainedFunding)
 	require.Contains(t, reloaded.FailReason, "未自动退款")
+	require.NoError(t, model.DB.First(&withProviderID, withProviderID.ID).Error)
+	require.EqualValues(t, model.TaskStatusFailure, withProviderID.Status)
+	require.Equal(t, 30, withProviderID.Quota)
+	require.False(t, withProviderID.SubmitTimeoutRetainedFunding)
 	var settlementCount int64
 	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Count(&settlementCount).Error)
 	require.Zero(t, settlementCount)
@@ -654,6 +665,34 @@ func (*historicalProgressAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo
 	return &relaycommon.TaskInfo{Status: model.TaskStatusInProgress, Progress: "50%"}, nil
 }
 
+func TestProgressPollingCannotRestoreAnOlderTaskVersion(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
+	row := makeTask(727, 729, 20, 728, model.BillingSettlementSourceWallet, 0)
+	row.TaskID, row.Status = "progress-version", model.TaskStatusInProgress
+	row.UpdatedAt = 10
+	require.NoError(t, model.DB.Create(row).Error)
+	stale, err := model.GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	fresh, err := model.GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	channel := &model.Channel{Id: 729, Type: constant.ChannelTypeKling}
+	poll := func(snapshot *model.Task) {
+		t.Helper()
+		require.NoError(t, updateVideoSingleTask(t.Context(), &historicalProgressAdaptor{}, channel, snapshot.TaskID, map[string]*model.Task{snapshot.TaskID: snapshot}))
+	}
+	poll(fresh)
+	newer, err := model.GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.Equal(t, "50%", newer.Progress)
+	assert.Greater(t, newer.UpdatedAt, stale.UpdatedAt)
+	require.NoError(t, model.DB.Model(row).UpdateColumn("data", json.RawMessage(`{"synthetic":"newer"}`)).Error)
+	poll(stale)
+	stored, err := model.GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.Equal(t, newer.UpdatedAt, stored.UpdatedAt)
+	require.JSONEq(t, `{"synthetic":"newer"}`, string(stored.Data))
+}
+
 func TestPollingProgressPreservesUnknownTextReference(t *testing.T) {
 	isolateTaskPluginBillingDatabase(t)
 	seedUser(t, 727, 80)
@@ -979,6 +1018,53 @@ func TestSweepTimedOutTasksRecoversAppliedFinalizeTerminalEvidence(t *testing.T)
 	var settlementCount int64
 	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Where("task_id = ?", task.ID).Count(&settlementCount).Error)
 	assert.EqualValues(t, 1, settlementCount)
+}
+
+func TestAppliedFinalizeRecoveryPreservesNewerProviderData(t *testing.T) {
+	for _, hasEvidence := range []bool{false, true} {
+		for _, changedVersion := range []bool{false, true} {
+			t.Run(fmt.Sprintf("evidence-%t/version-changed-%t", hasEvidence, changedVersion), func(t *testing.T) {
+				truncate(t)
+				task := &model.Task{TaskID: "applied-recovery-payload", Status: model.TaskStatusInProgress, Quota: 40,
+					Data: json.RawMessage(`{"provider_progress":"old"}`)}
+				if hasEvidence {
+					task.PrivateData.PendingTerminalStatus = model.TaskStatusSuccess
+				}
+				require.NoError(t, model.DB.Create(task).Error)
+				observed, err := model.GetTaskByID(task.ID)
+				require.NoError(t, err)
+				const newPayload = `{"provider_progress":"new"}`
+				values := map[string]any{"data": []byte(newPayload)}
+				if changedVersion {
+					values["updated_at"] = observed.UpdatedAt + 1
+				}
+				require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).UpdateColumns(values).Error)
+				var outcome appliedTaskRecoveryOutcome
+				if hasEvidence {
+					outcome, err = recoverAppliedTaskTerminalEvidence(observed)
+				} else {
+					outcome, err = markAppliedTaskEvidenceMissing(observed, time.Now().Unix())
+				}
+				require.NoError(t, err)
+				fresh, err := model.GetTaskByID(task.ID)
+				require.NoError(t, err)
+				require.Equal(t, newPayload, string(fresh.Data))
+				require.Equal(t, 40, fresh.Quota)
+				if changedVersion {
+					require.Equal(t, appliedTaskRecoveryCASLost, outcome)
+					require.EqualValues(t, model.TaskStatusInProgress, fresh.Status)
+					require.Equal(t, observed.UpdatedAt+1, fresh.UpdatedAt)
+				} else {
+					require.Equal(t, appliedTaskRecoveryUpdated, outcome)
+					if hasEvidence {
+						require.EqualValues(t, model.TaskStatusSuccess, fresh.Status)
+					} else {
+						require.EqualValues(t, model.TaskStatusFailure, fresh.Status)
+					}
+				}
+			})
+		}
+	}
 }
 
 func TestAppliedFinalizeRecoveryCursorSkipsBadPageAndRevisitsRepairs(t *testing.T) {

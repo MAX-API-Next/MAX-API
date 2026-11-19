@@ -232,6 +232,11 @@ func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool
 	}
 	state, err := buildCatalogStateContext(ctx, snapshot, catalog.snapshot, catalog.state != nil)
 	if err != nil {
+		// A canceled build may leave a complete storage observation, while a
+		// rejected snapshot must not by itself raise the publication floor.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			catalog.observeRevision(snapshot.Revision)
+		}
 		if !preflight || ctx.Err() == nil || !sameCatalogSnapshot(snapshot, catalog.snapshot) || errors.Is(err, ErrCatalogInvalid) {
 			catalog.host.state.Store(nil)
 		}

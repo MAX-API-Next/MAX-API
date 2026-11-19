@@ -548,6 +548,9 @@ func taskPluginReference(value any, key, version, digest string) (referenced, am
 }
 
 func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
+	if _, explicit := tx.Statement.Clauses["SET"]; explicit {
+		return taskplugin.ErrCatalogInvalid
+	}
 	value, emitted, err := taskPluginEmittedField(tx, task, "private_data")
 	if err != nil {
 		return err

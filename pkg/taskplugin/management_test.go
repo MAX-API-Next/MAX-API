@@ -279,6 +279,43 @@ func TestCatalogOperationsCancelWhileWaitingWithoutStorage(t *testing.T) {
 	}
 }
 
+type catalogBuildCancellationContext struct {
+	context.Context
+	cancel func()
+	armed  bool
+	checks int
+}
+
+func (ctx *catalogBuildCancellationContext) Err() error {
+	if ctx.armed {
+		ctx.checks++
+		if ctx.checks == 2 {
+			ctx.cancel()
+		}
+	}
+	return ctx.Context.Err()
+}
+
+func TestCanceledCatalogBuildRetainsCompletedHead(t *testing.T) {
+	store := &memoryCatalogStore{}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	pkg := testPackage(t, validManifest(), "source")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	old := cloneCatalogSnapshot(store.snapshot)
+	store.snapshot.Revision++
+	base, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx := &catalogBuildCancellationContext{Context: base, cancel: cancel}
+	store.onLoad = func(int) { ctx.armed = true }
+	require.ErrorIs(t, catalog.Refresh(ctx), context.Canceled)
+	require.Nil(t, catalog.host.state.Load())
+	store.onLoad = nil
+	store.snapshot = old
+	require.ErrorIs(t, catalog.Refresh(t.Context()), ErrCatalogInvalid)
+	require.Nil(t, catalog.host.state.Load(), "the canceled build observed an authoritative newer head")
+}
+
 func TestObservedNewerHeadPreventsLaterCompletedRollback(t *testing.T) {
 	for _, stage := range []string{"observation-error", "completed-read-canceled", "conflict-then-older"} {
 		t.Run(stage, func(t *testing.T) {

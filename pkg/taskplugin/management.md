@@ -336,8 +336,9 @@ Repair their metadata from trusted evidence before expecting further processing.
 Applied-finalize recovery uses its own `(submit_time, id)` cursor and captures a
 fixed inclusive upper cursor for each pass. It wraps after reaching that bound
 or an empty page, so a sustained newer backlog cannot starve repaired older rows.
-The per-cycle scan and recovery allowances remain unchanged. It only publishes already
-funded terminal evidence through the existing CAS, without replaying funding.
+The per-cycle scan and recovery allowances remain unchanged. Recovery publishes
+already funded terminal evidence against the observed status, version and quota.
+It preserves the stored provider payload and never replays funding.
 When an applied finalize record has no recoverable pending terminal status,
 recovery can instead mark the nonterminal task `FAILURE` with a manual
 reconciliation reason. Funding remains applied and is not replayed or refunded
@@ -345,6 +346,9 @@ by this disposition; reconcile the missing provider evidence separately.
 Ordinary timeout decisions compare the observed `updated_at` and quota with status.
 A same-status submission update makes the old decision lose without a terminal
 transition or settlement intent; the next sweep reevaluates the newer task.
+Provider progress writes use the same snapshot predicates and advance the
+version even when the status stays the same, so an older poll cannot restore
+prior provider data or make a stale timeout eligible again.
 The real Relay confirmation writer advances `updated_at` atomically from its
 current database value, even when its in-memory task or wall clock is older.
 This version update, upstream identity and existing settlement intent commit or
@@ -401,14 +405,22 @@ Generic tasks and Midjourney use this same coordinator, including placeholder
 preparation failures; a failed database write never authorizes an independent
 refund. Accepted or ambiguous provider responses keep their existing handling.
 
-Deploy the `task_submit_failure_recoveries` migration before starting nodes
-that submit or poll tasks. If the task claim or refund intent cannot be saved
-after bounded retries, the coordinator records the confirmed rejection with
-its original refund identity in this table. The existing settlement worker
-retries the guarded claim and applies the original refund. Pending recovery
-prevents timeout or retry from taking over the same task. `intent_recorded`
-indicates a durable intent. Use the applied settlement and its deltas to verify
+Apply migrations for `tasks.submit_timeout_retained_funding` and
+`task_submit_failure_recoveries` before starting nodes that submit or poll
+tasks. If the task claim or refund intent cannot be saved after bounded retries,
+the coordinator records the confirmed rejection and original refund identity
+in the journal independently of writes to the task table. The settlement worker
+retries guarded claims with per-record deadlines and persists retry backoff.
+Pending recovery prevents timeout or retry from taking over the same task.
+`intent_recorded` indicates a durable intent. Use the applied settlement and its deltas to verify
 the refund. A conflicting task assignment is held for manual reconciliation.
+When a timeout still has no confirmed upstream ID, it records the unknown
+submission outcome and retains funds, including for H3 or expression-priced
+tasks. A later definite rejection of the same request can claim a marked
+timeout and refund its original reservation, including any retry increase
+already reserved by that request. The task keeps its original completion time.
+Pre-upgrade timeouts and existing manual settlement records retain their
+reconciliation workflow because their refund ownership cannot be inferred.
 If the database cannot save even the recovery record, use the original task
 and reservation records to reconcile the logged task ID after service returns.
 Historical private metadata retains unknown fields, including nested typed
@@ -416,8 +428,9 @@ objects and arrays, through polling updates. Progress-only polls omit unchanged
 private data; edits merge the retained fields and validate their references.
 An incompatible typed replacement that would discard retained history fails
 closed. Conflicting repeated JSON object members outside canonical fact maps
-are repairable invalid data; equal identity aliases remain readable. Truncated
-target key or digest prefixes reach the deletion decoder, while disjoint
+are repairable invalid data; equal identity aliases remain readable. Numeric
+aliases compare at their original precision. Truncated target key or digest
+prefixes reach the deletion decoder, while disjoint
 corruption still does not block unrelated deletion. The scan remains unindexed.
 Channel setting repairs compare the originally malformed value so an automatic
 reset cannot erase a concurrent administrator edit. Pricing metadata reload

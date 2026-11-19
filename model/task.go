@@ -68,6 +68,9 @@ type Task struct {
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
+	// Set only by the guarded timeout sweep when upstream submission is still
+	// unconfirmed and the original reservation remains available.
+	SubmitTimeoutRetainedFunding bool `json:"-" gorm:"not null;default:false"`
 
 	includeDataInUpdate               bool   `gorm:"-"`
 	includePrivateDataInUpdate        bool   `gorm:"-"`
@@ -717,6 +720,9 @@ func (t *Task) statusUpdateValues() map[string]interface{} {
 		"fail_reason": common.SanitizePersistedLogContent(t.FailReason),
 		"updated_at":  updatedAt,
 	}
+	if t.SubmitTimeoutRetainedFunding {
+		values["submit_timeout_retained_funding"] = true
+	}
 	if !t.preserveDataOnStatusUpdate && (t.Data != nil || t.includeDataInUpdate) {
 		values["data"] = t.Data
 	}
@@ -787,6 +793,11 @@ func (t *Task) RewritePlaceholder() error {
 	}
 	var updatedAt int64
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		// Reference-bearing writes take the catalog head before acquiring the
+		// task row. Keep the regular write guard on the actual assignments.
+		if err := guardTaskPluginPersistenceValue(tx, t, t.PrivateData); err != nil {
+			return err
+		}
 		now := time.Now().Unix()
 		finalize := tx.Session(&gorm.Session{NewDB: true}).Model(&BillingSettlement{}).Select("1").
 			Where("operation_key = ?", BillingTaskFinalizeOperationKey(t.ID))
@@ -798,12 +809,15 @@ func (t *Task) RewritePlaceholder() error {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			var owned int64
-			if err := tx.Model(&BillingSettlement{}).Where("operation_key = ?", BillingTaskFinalizeOperationKey(t.ID)).Count(&owned).Error; err != nil {
-				return err
-			}
-			if owned != 0 {
+			// MySQL repeatable-read can retain an earlier snapshot from
+			// catalog validation. Use a current read to identify the owner.
+			var owner BillingSettlement
+			err := withRowLock(tx).Select("id").Where("operation_key = ?", BillingTaskFinalizeOperationKey(t.ID)).Take(&owner).Error
+			if err == nil {
 				return ErrTaskFinalizeOwned
+			}
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
 			}
 			return ErrTaskPlaceholderConflict
 		}
@@ -846,6 +860,44 @@ func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
 // also covers a funding projection whose timestamp returns to wall time.
 func (t *Task) UpdateWithStatusSnapshot(fromStatus TaskStatus, expectedUpdatedAt int64) (bool, error) {
 	return t.updateWithStatusSnapshot(fromStatus, &expectedUpdatedAt)
+}
+
+// UpdatePollingProgress advances the version on every observed provider change,
+// including polls that keep the current status.
+func (t *Task) UpdatePollingProgress(fromStatus TaskStatus) (bool, error) {
+	if t == nil || t.ID <= 0 || t.UpdatedAt < 0 || t.UpdatedAt == 1<<63-1 {
+		return false, errors.New("persisted task and advanceable snapshot are required")
+	}
+	nextVersion := max(time.Now().Unix(), t.UpdatedAt+1)
+	values := t.statusUpdateValues()
+	values["updated_at"] = nextVersion
+	query := DB.Model(&Task{ID: t.ID}).Where("status = ?", fromStatus)
+	result := t.whereQuotaSnapshot(t.whereTimestampSnapshot(query, t.UpdatedAt)).Updates(values)
+	if result.Error != nil || result.RowsAffected == 0 {
+		return false, result.Error
+	}
+	t.UpdatedAt = nextVersion
+	t.updatedAtWasNull = false
+	return true, nil
+}
+
+// PublishRecoveredTaskTerminalStatus writes only the terminal evidence owned
+// by the already applied settlement. It must not restore an older payload.
+func (t *Task) PublishRecoveredTaskTerminalStatus(fromStatus TaskStatus, expectedUpdatedAt int64) (bool, error) {
+	if t == nil || t.ID <= 0 || expectedUpdatedAt < 0 || fromStatus == TaskStatusSuccess || fromStatus == TaskStatusFailure ||
+		(t.Status != TaskStatusSuccess && t.Status != TaskStatusFailure) {
+		return false, errors.New("persisted task and valid terminal evidence are required")
+	}
+	query := DB.Model(&Task{ID: t.ID}).Where("status = ?", fromStatus)
+	query = t.whereQuotaSnapshot(t.whereTimestampSnapshot(query, expectedUpdatedAt))
+	result := query.Omit("updated_at").Updates(map[string]interface{}{
+		"status":       t.Status,
+		"progress":     t.Progress,
+		"finish_time":  t.FinishTime,
+		"fail_reason":  common.SanitizePersistedLogContent(t.FailReason),
+		"private_data": t.PrivateData,
+	})
+	return result.RowsAffected == 1, result.Error
 }
 
 func (t *Task) updateWithStatusSnapshot(fromStatus TaskStatus, expectedUpdatedAt *int64) (bool, error) {
@@ -949,7 +1001,13 @@ func (t *Task) updateWithStatusAndSettlementSnapshot(fromStatus TaskStatus, expe
 		return false, errors.New("task updated_at snapshot is invalid")
 	}
 
+	values := t.statusUpdateValues()
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if private, ok := values["private_data"]; ok {
+			if err := guardTaskPluginPersistenceValue(tx, t, private); err != nil {
+				return err
+			}
+		}
 		if _, _, err := ensureBillingSettlementRecordDB(tx, input); err != nil {
 			return err
 		}
@@ -957,7 +1015,7 @@ func (t *Task) updateWithStatusAndSettlementSnapshot(fromStatus TaskStatus, expe
 		if expectedUpdatedAt != nil {
 			query = t.whereQuotaSnapshot(t.whereTimestampSnapshot(query, *expectedUpdatedAt))
 		}
-		result := query.Updates(t.statusUpdateValues())
+		result := query.Updates(values)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -1006,6 +1064,9 @@ func (t *Task) UpdateWithStatusAndSettlementIntent(fromStatus TaskStatus, expect
 		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := guardTaskPluginPersistenceValue(tx, t, t.PrivateData); err != nil {
+			return err
+		}
 		if _, _, err := ensureBillingSettlementRecordDB(tx, input); err != nil {
 			return err
 		}
@@ -1067,6 +1128,11 @@ func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expect
 		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		// Use the same acquisition order as a placeholder rewrite before
+		// writing either the manual intent or the task snapshot.
+		if err := guardTaskPluginPersistenceValue(tx, t, t.PrivateData); err != nil {
+			return err
+		}
 		if _, err := ensureManualBillingSettlementRecordDB(tx, input, reason); err != nil {
 			return err
 		}
@@ -1074,7 +1140,7 @@ func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expect
 			"private_data": t.PrivateData,
 			"updated_at":   updatedAt,
 		}
-		if t.Data != nil || t.includeDataInUpdate {
+		if !t.preserveDataOnStatusUpdate && (t.Data != nil || t.includeDataInUpdate) {
 			updates["data"] = t.Data
 		}
 		result := t.whereTimestampSnapshot(tx.Model(&Task{ID: t.ID}).Where("id = ? AND status = ?", t.ID, fromStatus), expectedUpdatedAt).
@@ -1105,16 +1171,21 @@ func (t *Task) UpdateWithSettlementIntent(input *BillingSettlementInput) error {
 		return errors.New("persisted task is required")
 	}
 	var updatedAt int64
+	values := t.submitResultUpdateValues()
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		if input != nil {
 			if err := validateBillingSettlementInput(*input); err != nil {
 				return err
 			}
+			if private, ok := values["private_data"]; ok {
+				if err := guardTaskPluginPersistenceValue(tx, t, private); err != nil {
+					return err
+				}
+			}
 			if _, _, err := ensureBillingSettlementRecordDB(tx, *input); err != nil {
 				return err
 			}
 		}
-		values := t.submitResultUpdateValues()
 		now := time.Now().Unix()
 		// The caller can be older than the stored task. Advance from the DB
 		// value atomically so a timeout based on any earlier version loses CAS.
@@ -1200,7 +1271,9 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 		if err := withRowLock(tx).First(&task, taskID).Error; err != nil {
 			return err
 		}
-		if task.Status == TaskStatusFailure || task.Status == TaskStatusSuccess || task.PrivateData.UpstreamTaskID != "" {
+		lateRejection := task.Status == TaskStatusFailure && task.SubmitTimeoutRetainedFunding &&
+			task.PrivateData.AwaitingUpstreamID && task.Quota > 0 && input != nil
+		if task.Status == TaskStatusSuccess || task.Status == TaskStatusFailure && !lateRejection || task.PrivateData.UpstreamTaskID != "" {
 			return nil
 		}
 		if input != nil {
@@ -1213,11 +1286,21 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 				return ErrTaskSubmitRefundIdentityMismatch
 			}
 		}
+		if lateRejection {
+			if _, err := taskSubmitFailureRecoveryRecord(taskID, reason, *input); err != nil {
+				return err
+			}
+		}
 		finalize := tx.Session(&gorm.Session{NewDB: true}).Model(&BillingSettlement{}).Select("1").Where("operation_key = ?", BillingTaskFinalizeOperationKey(taskID))
-		result := tx.Model(&Task{}).
-			Where("id = ? AND status NOT IN ?", taskID, []string{TaskStatusFailure, TaskStatusSuccess}).
-			Where("NOT EXISTS (?)", finalize).
-			Updates(map[string]interface{}{
+		query := tx.Model(&Task{}).Where("id = ? AND NOT EXISTS (?)", taskID, finalize)
+		var result *gorm.DB
+		if lateRejection {
+			// Keep the original completion time and terminal state. Replace
+			// the unknown-outcome explanation with the confirmed rejection.
+			result = query.Where("status = ? AND submit_timeout_retained_funding = ? AND quota = ?", TaskStatusFailure, true, task.Quota).
+				Updates(map[string]interface{}{"quota": 0, "submit_timeout_retained_funding": false, "fail_reason": reason})
+		} else {
+			result = query.Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).Updates(map[string]interface{}{
 				"status":      TaskStatusFailure,
 				"progress":    "100%",
 				"finish_time": time.Now().Unix(),
@@ -1225,6 +1308,7 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 				"quota":       0,
 				"updated_at":  time.Now().Unix(),
 			})
+		}
 		if result.Error != nil {
 			return result.Error
 		}
@@ -1250,7 +1334,10 @@ func MarkTaskSubmitFailedWithSettlement(taskID int64, reason string, input *Bill
 		}
 		return nil
 	}
-	_, err := ClaimTaskSubmitFailureWithSettlement(taskID, reason, input)
+	won, err := ClaimTaskSubmitFailureWithSettlement(taskID, reason, input)
+	if err == nil && !won && input != nil {
+		return errors.New("task submission failure did not claim the refund")
+	}
 	return err
 }
 

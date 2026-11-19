@@ -287,6 +287,52 @@ func TestMarkTaskSubmitFailedWithSettlementRejectsUnpersistedTask(t *testing.T) 
 	require.Zero(t, count)
 }
 
+func TestMarkTaskSubmitFailedWithSettlementReportsLostClaim(t *testing.T) {
+	truncateTables(t)
+	task := &Task{TaskID: "no-submit-claim", Status: TaskStatusSuccess, Quota: 10}
+	insertTask(t, task)
+	input := BillingSettlementInput{
+		OperationKey: BillingRequestFinalizeOperationKey("no-submit-claim"),
+		Source:       BillingSettlementSourceWallet, UserID: 1, FundingDelta: -10,
+	}
+
+	require.Error(t, MarkTaskSubmitFailedWithSettlement(task.ID, "late rejection", &input))
+	require.NoError(t, MarkTaskSubmitFailedWithSettlement(task.ID, "late status-only cleanup", nil))
+	var count int64
+	require.NoError(t, DB.Model(&BillingSettlement{}).Where("operation_key = ?", input.OperationKey).Count(&count).Error)
+	require.Zero(t, count)
+}
+
+func TestManualTaskSettlementPreservesDataOnlyWhenRequested(t *testing.T) {
+	truncateTables(t)
+	for _, preserve := range []bool{true, false} {
+		task := &Task{TaskID: fmt.Sprintf("manual-data-%t", preserve), Status: TaskStatusInProgress,
+			UserId: 1, Quota: 10, Data: json.RawMessage(`{"provider":"stored"}`)}
+		insertTask(t, task)
+		snapshot, err := GetTaskPlaceholderByID(task.ID)
+		require.NoError(t, err)
+		snapshot.Data = json.RawMessage(`{"provider":"candidate"}`)
+		if preserve {
+			snapshot.PreserveDataOnStatusUpdate()
+		}
+		input := BillingSettlementInput{
+			OperationKey: BillingTaskFinalizeOperationKey(task.ID),
+			Source:       BillingSettlementSourceWallet, UserID: task.UserId, TaskID: task.ID,
+			TaskQuota: 10, TaskQuotaTarget: 10,
+		}
+		won, err := snapshot.UpdateWithStatusAndManualSettlement(task.Status, snapshot.UpdatedAt, input, "needs reconciliation")
+		require.NoError(t, err)
+		require.True(t, won)
+		loaded, err := GetTaskPlaceholderByID(task.ID)
+		require.NoError(t, err)
+		if preserve {
+			require.JSONEq(t, string(task.Data), string(loaded.Data))
+		} else {
+			require.JSONEq(t, string(snapshot.Data), string(loaded.Data))
+		}
+	}
+}
+
 func TestUpdateWithSettlementIntentCommitsTaskAndIntentTogether(t *testing.T) {
 	truncateTables(t)
 	task := &Task{
