@@ -207,6 +207,10 @@ typed, case-insensitive JSON field rules as persistence, while recursive legacy
 map/array checks inside the private-data object remain supported. New serialized
 non-null task writes still require an object, matching the typed task/recovery decoder;
 accepting an array at the root would create an unreadable task record.
+Typed billing fact containers (`task_billing.fields`/`matched`,
+`pricing_usage_envelope.facts` and `task_billing_plan.expression_plan.submit_facts`
+within `billing_context`) are data, even when a declared fact is named
+`package_digest` or `plugin_key`. Adjacent package identity fields remain strict.
 Valid task defaults that depend on the removed package are checked under the
 same pricing lock. Deletion cannot newly invalidate such a default, but remains
 allowed when another declared source satisfies it. Prices are never rewritten.
@@ -227,3 +231,9 @@ Workers isolate unreadable task private data, log the database row ID, and
 continue valid neighbors. Timeout cursors advance past bad rows; those rows
 retain their status, quota and original metadata without a new settlement.
 Repair their metadata from trusted evidence before expecting further processing.
+Applied-finalize recovery uses its own `(submit_time, id)` cursor, wrapping after
+an empty page so repaired earlier rows can be retried. It only publishes already
+funded terminal evidence through the existing CAS, without replaying funding.
+Each recovery/timeout class scans at most 2,000 rows per invocation by default;
+both share the existing cap of 100 successful transitions. This permits up to
+4,000 scans when both classes contain many unreadable or otherwise skipped rows.

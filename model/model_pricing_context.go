@@ -78,11 +78,11 @@ func readPricingAuthority(tx *gorm.DB, lock bool) (*pricingAuthority, error) {
 		return nil, err
 	}
 	if len(defaults) > 1 {
-		return nil, errors.New("duplicate self-use pricing setting")
+		return nil, &modelPricingDataError{"SelfUseModeEnabled", errors.New("duplicate self-use pricing setting")}
 	}
 	if len(defaults) == 1 {
 		if defaults[0].Value != "true" && defaults[0].Value != "false" {
-			return nil, errors.New("invalid self-use pricing setting")
+			return nil, &modelPricingDataError{"SelfUseModeEnabled", errors.New("invalid self-use pricing setting")}
 		}
 		a.selfUse = defaults[0].Value == "true"
 	}

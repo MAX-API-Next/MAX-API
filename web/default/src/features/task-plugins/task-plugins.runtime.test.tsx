@@ -575,7 +575,7 @@ test('deleting an installed version requires node acknowledgement and closes onl
   const confirm = panel.getByRole('button', { name: 'Confirm' })
   assert.match(
     panel.getByRole('checkbox').parentElement!.textContent!,
-    /task writers and channel writers/
+    /task writers, channel writers and pricing writers/
   )
   assert.equal((confirm as HTMLButtonElement).disabled, true)
   fireEvent.click(panel.getByRole('checkbox'))

@@ -196,7 +196,7 @@ export function PluginInstallSheet(props: Props) {
               </p>
               <p className='text-muted-foreground text-xs leading-relaxed'>
                 {t(
-                  'SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.'
+                  'Accepted UTF-8 files preserve their BOM and line endings. SHA-256 identifies the submitted bytes; an optional trusted publisher pin verifies those bytes.'
                 )}
               </p>
               {needsNodesReady && (

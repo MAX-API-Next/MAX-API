@@ -673,12 +673,73 @@ func TestSweepTimedOutTasksRecoversAppliedFinalizeTerminalEvidence(t *testing.T)
 	assert.EqualValues(t, 1, settlementCount)
 }
 
+func TestAppliedFinalizeRecoveryCursorSkipsBadPageAndRevisitsRepairs(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	oldTimeout, oldBudget := constant.TaskTimeoutMinutes, timedOutTaskScanBudget
+	constant.TaskTimeoutMinutes, timedOutTaskScanBudget = 1, 100
+	t.Cleanup(func() { constant.TaskTimeoutMinutes, timedOutTaskScanBudget = oldTimeout, oldBudget })
+	seedUser(t, 717, 70)
+	seedToken(t, 718, 717, "synthetic-recovery-token", 70)
+	const malformed = `{"upstream_task_id":42}`
+	now := time.Now().Unix()
+	private := model.TaskPrivateData{TokenId: 718, BillingSource: model.BillingSettlementSourceWallet, PendingTerminalStatus: model.TaskStatusSuccess, PendingTerminalProgress: "100%", PendingTerminalFinishTime: now, PendingTerminalResultURL: "https://example.invalid/recovered"}
+	var firstBadID int64
+	var healthy *model.Task
+	for i := 0; i < 101; i++ {
+		row := &model.Task{TaskID: fmt.Sprintf("recovery-cursor-%d", i), UserId: 717, Quota: 40, SubmitTime: now - 120, Status: model.TaskStatusInProgress, PrivateData: private}
+		require.NoError(t, model.DB.Create(row).Error)
+		if i < 100 {
+			require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", row.ID).UpdateColumn("private_data", malformed).Error)
+			if i == 0 {
+				firstBadID = row.ID
+			}
+		} else {
+			healthy = row
+		}
+		require.NoError(t, model.DB.Create(&model.BillingSettlement{
+			OperationKey: model.BillingTaskFinalizeOperationKey(row.ID), TaskID: row.ID, UserID: 717, TokenID: 718,
+			Source: model.BillingSettlementSourceWallet, TaskQuota: 30, TaskQuotaTarget: 40,
+			FundingDelta: 10, TokenDelta: 10, AppliedFundingDelta: 10, AppliedTokenDelta: 10,
+			Status: model.BillingSettlementStatusApplied, EffectStatus: model.BillingSettlementEffectApplied, CreatedAt: now, UpdatedAt: now, Revision: 1,
+		}).Error)
+	}
+	var before []model.BillingSettlement
+	require.NoError(t, model.DB.Order("id").Find(&before).Error)
+	sweepTimedOutTasks(t.Context())
+	var tail model.Task
+	require.NoError(t, model.DB.First(&tail, healthy.ID).Error)
+	require.EqualValues(t, model.TaskStatusInProgress, tail.Status, "only the first100 candidates may be scanned in this cycle")
+	sweepTimedOutTasks(t.Context())
+	require.NoError(t, model.DB.First(&tail, healthy.ID).Error)
+	require.EqualValues(t, model.TaskStatusSuccess, tail.Status, "the next cycle must advance beyond the unreadable first page")
+	require.Equal(t, 40, tail.Quota)
+	repaired, err := common.Marshal(private)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", firstBadID).UpdateColumn("private_data", string(repaired)).Error)
+	sweepTimedOutTasks(t.Context())
+	var repairedRow model.Task
+	require.NoError(t, model.DB.First(&repairedRow, firstBadID).Error)
+	require.EqualValues(t, model.TaskStatusSuccess, repairedRow.Status, "wrapping the cursor must revisit a repaired old row")
+	var remaining int64
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("status = ?", model.TaskStatusInProgress).Count(&remaining).Error)
+	require.EqualValues(t, 99, remaining)
+	var after []model.BillingSettlement
+	require.NoError(t, model.DB.Order("id").Find(&after).Error)
+	require.Equal(t, before, after, "terminal recovery never reapplies or rewrites funding")
+	require.EqualValues(t, 70, getUserQuota(t, 717))
+	require.Equal(t, 70, getTokenRemainQuota(t, 718))
+	require.Zero(t, countLogs(t))
+}
+
 func resetTimedOutTaskSweepCursorForTest(t *testing.T) {
 	t.Helper()
 	reset := func() {
 		timedOutTaskSweepCursor.Lock()
 		timedOutTaskSweepCursor.afterSubmitTime = 0
 		timedOutTaskSweepCursor.afterID = 0
+		timedOutTaskSweepCursor.appliedAfterSubmitTime = 0
+		timedOutTaskSweepCursor.appliedAfterID = 0
 		timedOutTaskSweepCursor.Unlock()
 	}
 	reset()

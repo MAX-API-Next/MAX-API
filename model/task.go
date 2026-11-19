@@ -422,6 +422,12 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 }
 
 func GetAppliedTaskFinalizeRecoveryCandidates(cutoffUnix int64, limit int) ([]*Task, error) {
+	return GetAppliedTaskFinalizeRecoveryCandidatesAfter(cutoffUnix, 0, 0, limit)
+}
+
+// Recovery has its own stable cursor so unreadable applied rows cannot pin
+// every batch to the same page. Callers wrap after observing an empty page.
+func GetAppliedTaskFinalizeRecoveryCandidatesAfter(cutoffUnix, afterSubmitTime, afterID int64, limit int) ([]*Task, error) {
 	var rows []taskWorkerRow
 	if limit <= 0 {
 		limit = 100
@@ -429,11 +435,14 @@ func GetAppliedTaskFinalizeRecoveryCandidates(cutoffUnix int64, limit int) ([]*T
 	finalize := DB.Model(&BillingSettlement{}).Select("1").
 		Where("operation_key = "+taskFinalizeOperationKeySQL(common.UsingSQLite)).
 		Where("status = ?", BillingSettlementStatusApplied)
-	err := DB.Model(&Task{}).
+	query := DB.Model(&Task{}).
 		Where("status NOT IN ?", []TaskStatus{TaskStatusFailure, TaskStatusSuccess}).
 		Where("submit_time < ?", cutoffUnix).
-		Where("EXISTS (?)", finalize).
-		Order("submit_time ASC, id ASC").Limit(limit).Find(&rows).Error
+		Where("EXISTS (?)", finalize)
+	if afterID > 0 {
+		query = query.Where("(submit_time > ? OR (submit_time = ? AND id > ?))", afterSubmitTime, afterSubmitTime, afterID)
+	}
+	err := query.Order("submit_time ASC, id ASC").Limit(limit).Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}

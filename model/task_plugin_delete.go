@@ -360,6 +360,10 @@ func rejectTaskPluginDefaultRemoval(tx *gorm.DB, pkg *taskplugin.Package, remain
 		if before == nil {
 			before, err = readPricingAuthority(tx, false)
 			if err != nil {
+				var data *modelPricingDataError
+				if errors.As(err, &data) {
+					return &taskplugin.CatalogPricingDataError{OptionKey: data.key}
+				}
 				return taskplugin.ErrCatalogUnavailable
 			}
 		}
@@ -395,8 +399,13 @@ func visitTaskPluginReferencePath(value any, path []string, visit func(taskPlugi
 	// These canonical maps hold arbitrary billing facts, not package identity.
 	// Unknown historical objects and actual binding/plan/envelope paths remain
 	// recursive reference containers in both persistence and deletion scans.
-	if len(path) == 3 && path[0] == "billing_context" && path[1] == "task_billing" && (path[2] == "fields" || path[2] == "matched") {
-		return false
+	if len(path) >= 3 && path[0] == "billing_context" {
+		if len(path) == 3 && (path[1] == "task_billing" && (path[2] == "fields" || path[2] == "matched") || path[1] == "pricing_usage_envelope" && path[2] == "facts") {
+			return false
+		}
+		if len(path) == 4 && path[1] == "task_billing_plan" && path[2] == "expression_plan" && path[3] == "submit_facts" {
+			return false
+		}
 	}
 	switch v := value.(type) {
 	case map[string]any:
@@ -555,7 +564,7 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 		return err
 	}
 	var head TaskPluginCatalogHead
-	if err := tx.First(&head, 1).Error; err != nil {
+	if err := tx.Session(&gorm.Session{NewDB: true}).Clauses(clause.Locking{Strength: "UPDATE"}).First(&head, 1).Error; err != nil {
 		return taskplugin.ErrBindingRejected
 	}
 	// A locking/current read matters under MySQL REPEATABLE READ: a funding

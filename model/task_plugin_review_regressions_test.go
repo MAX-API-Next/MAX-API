@@ -17,6 +17,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
+	"github.com/MoeForge/moejs"
 	"github.com/glebarez/sqlite"
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
@@ -1242,14 +1243,26 @@ func TestTaskPluginStoreMetadataLoadHonorsDeadline(t *testing.T) {
 	require.NoError(t, common.Unmarshal(entry.Document, &document))
 	document.FormatVersion = 3
 	document.Source = `for(;;){}; export const meta={};`
+	program, err := moejs.Compile("stored-loop.js", document.Source)
+	require.NoError(t, err, "the fixture must compile before testing metadata execution")
+	require.NotNil(t, program)
+	require.Contains(t, program.Exports(), "meta")
 	raw, err := common.Marshal(document)
 	require.NoError(t, err)
 	require.NoError(t, db.Model(&TaskPluginVersion{}).Where("identity = ?", taskPluginIdentity("stored", "1.0.0")).Updates(map[string]any{"document": taskPluginDocument(raw), "digest": fmt.Sprintf("%x", sha256.Sum256(raw))}).Error)
+	var sourceRead atomic.Bool
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register("observe-loop-source", func(tx *gorm.DB) {
+		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginVersion") && tx.Error == nil {
+			sourceRead.Store(true)
+		}
+	}))
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	started := time.Now()
 	_, err = store.Load(ctx)
-	require.Error(t, err)
+	require.True(t, sourceRead.Load(), "the stored loop source must reach metadata validation")
+	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+	require.ErrorIs(t, err, taskplugin.ErrCatalogUnavailable)
 	require.Less(t, time.Since(started), 2*time.Second, "storage-side metadata validation shares the caller budget")
 }
 
@@ -1445,4 +1458,91 @@ func TestTaskPluginMalformedDefaultPricingIsRepairable(t *testing.T) {
 			require.EqualValues(t, 1, count)
 		})
 	}
+}
+
+func TestTaskPluginMalformedSelfUsePricingIsRepairable(t *testing.T) {
+	db := setupModelPricingTest(t)
+	require.NoError(t, db.AutoMigrate(&Task{}, &TaskPluginDeletion{}))
+	doc, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "self-use test metadata", Manifest: taskplugin.Manifest{
+		APIVersion: 1, Key: "kling", Name: "Self-use test", Version: "1.0.0", Models: []string{"kling-v1"},
+		UsageSchema: map[string]taskplugin.UsageField{"units": {Type: "number", Unit: "credit"}},
+		Routes:      []taskplugin.Route{{Method: "POST", Path: "/pricing/jobs", Type: "submit", Decode: "submit", Render: "created"}},
+	}})
+	require.NoError(t, err)
+	pkg, err := taskplugin.LoadPackage(bytes.NewReader(doc), fmt.Sprintf("%x", sha256.Sum256(doc)))
+	require.NoError(t, err)
+	catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	entry := pricingEntryForTest(t, db, "kling-v1")
+	_, err = UpdateModelPricing([]types.ModelPricingChange{pricingChangeForTest(entry, types.ModelPricingValues{"billing_setting.billing_mode": "tiered_expr", "billing_setting.billing_expr": `u("units") * 0.1`})})
+	require.NoError(t, err)
+	_, err = catalog.Host().PricingPackage("POST", "/pricing/jobs", "kling-v1")
+	require.NoError(t, err)
+	require.NoError(t, db.Save(&Option{Key: "SelfUseModeEnabled", Value: "maybe"}).Error)
+	err = catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "kling", Version: "1.0.0"})
+	var repair *taskplugin.CatalogPricingDataError
+	require.ErrorAs(t, err, &repair)
+	require.Equal(t, "SelfUseModeEnabled", repair.OptionKey)
+	_, err = catalog.Host().PricingPackage("POST", "/pricing/jobs", "kling-v1")
+	require.NoError(t, err, "known bad option must not unpublish the active Host")
+}
+
+func TestTaskPluginTypedPricingFactsAreNotReferences(t *testing.T) {
+	for _, serialized := range []bool{false, true} {
+		t.Run(fmt.Sprint(serialized), func(t *testing.T) {
+			db := deletionDB(t)
+			require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+			previous := DB
+			DB = db
+			t.Cleanup(func() { DB = previous })
+			pkg, entry := catalogFixture(t, "stored", "1.0.0", "pricing-facts")
+			store := NewTaskPluginCatalogStore(db)
+			_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+			require.NoError(t, err)
+			row := &Task{TaskID: "pricing-facts", Status: TaskStatusInProgress, UserId: 71, Quota: 20, UpdatedAt: 1}
+			require.NoError(t, db.Create(row).Error)
+			private := TaskPrivateData{BillingContext: &TaskBillingContext{
+				TaskBillingPlan:      &types.TaskBillingPlan{ExpressionPlan: &types.TaskExpressionPlan{PluginKey: "stored", PluginVersion: "1.0.0", PackageDigest: pkg.Digest(), SubmitFacts: types.TaskPricingFacts{"package_digest": "standard", "plugin_key": "ordinary"}}},
+				PricingUsageEnvelope: &types.TaskPricingUsageEnvelope{PackageDigest: pkg.Digest(), Facts: types.TaskPricingFacts{"package_digest": "standard", "plugin_key": "ordinary"}},
+			}}
+			if serialized {
+				raw, err := common.Marshal(private)
+				require.NoError(t, err)
+				require.NoError(t, db.Model(row).Updates(map[string]any{"private_data": string(raw)}).Error)
+			} else {
+				row.PrivateData = private
+				won, err := row.UpdateWithStatusAndSettlementIntent(TaskStatusInProgress, 1, BillingSettlementInput{OperationKey: BillingTaskFinalizeOperationKey(row.ID), Source: BillingSettlementSourceWallet, UserID: 71, TaskID: row.ID, TaskQuota: 20, TaskQuotaTarget: 30, FundingDelta: 10})
+				require.NoError(t, err)
+				require.True(t, won)
+			}
+			var saved Task
+			require.NoError(t, db.First(&saved, row.ID).Error)
+			require.Equal(t, "standard", saved.PrivateData.BillingContext.PricingUsageEnvelope.Facts["package_digest"])
+			_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+			require.ErrorIs(t, err, taskplugin.ErrCatalogInUse, "actual identity beside facts still protects the installed version")
+			private.BillingContext.PricingUsageEnvelope.PackageDigest = strings.Repeat("f", 64)
+			require.ErrorIs(t, db.Model(row).Updates(map[string]any{"private_data": private}).Error, taskplugin.ErrBindingRejected, "facts never hide a real stale identity")
+		})
+	}
+}
+
+func TestTaskPluginPersistenceRequestsCurrentHeadRead(t *testing.T) {
+	db := deletionDB(t)
+	pkg, entry := catalogFixture(t, "stored", "1.0.0", "current-head")
+	_, err := NewTaskPluginCatalogStore(db).CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	headRead := false
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("require-current-head", func(tx *gorm.DB) {
+		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginCatalogHead") {
+			headRead = true
+			locking, ok := tx.Statement.Clauses["FOR"].Expression.(clause.Locking)
+			if !ok || locking.Strength != "UPDATE" {
+				tx.AddError(fmt.Errorf("head read must request the current locked row"))
+			}
+		}
+	}))
+	err = db.Create(&Task{TaskID: "current-head", PrivateData: TaskPrivateData{PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", Version: "1.0.0", PackageDigest: pkg.Digest()}}}).Error
+	require.NoError(t, err)
+	require.True(t, headRead, "clause control does not replace real MySQL isolation validation")
 }

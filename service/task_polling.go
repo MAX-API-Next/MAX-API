@@ -61,8 +61,10 @@ var timedOutTaskScanBudget = 2000
 
 var timedOutTaskSweepCursor struct {
 	sync.Mutex
-	afterSubmitTime int64
-	afterID         int64
+	afterSubmitTime        int64
+	afterID                int64
+	appliedAfterSubmitTime int64
+	appliedAfterID         int64
 }
 
 type appliedTaskRecoveryOutcome uint8
@@ -74,7 +76,7 @@ const (
 )
 
 // sweepTimedOutTasks 在主轮询之前独立清理超时任务。
-// 每次最多转换 100 条、扫描 2000 条，剩余的从游标位置在下个周期继续处理。
+// 每次最多转换100条；已结算恢复与普通超时各最多扫描2000条，分别保留游标。
 // 使用 per-task CAS (UpdateWithStatus) 防止覆盖被正常轮询已推进的任务。
 func sweepTimedOutTasks(ctx context.Context) {
 	if constant.TaskTimeoutMinutes <= 0 {
@@ -90,13 +92,25 @@ func sweepTimedOutTasks(ctx context.Context) {
 
 	remaining := timedOutTaskTransitionBudget
 	scanBudget := timedOutTaskScanBudget
-	if recovered, err := model.GetAppliedTaskFinalizeRecoveryCandidates(cutoff, remaining); err != nil {
-		logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize recovery query error: %v", err))
-	} else {
+	appliedScanBudget := timedOutTaskScanBudget
+	appliedAfterTime, appliedAfterID := timedOutTaskSweepCursor.appliedAfterSubmitTime, timedOutTaskSweepCursor.appliedAfterID
+	for remaining > 0 && appliedScanBudget > 0 {
+		queryLimit := min(100, appliedScanBudget)
+		recovered, err := model.GetAppliedTaskFinalizeRecoveryCandidatesAfter(cutoff, appliedAfterTime, appliedAfterID, queryLimit)
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize recovery query error after cursor (%d, %d): %v", appliedAfterTime, appliedAfterID, err))
+			break
+		}
+		if len(recovered) == 0 {
+			appliedAfterTime, appliedAfterID = 0, 0
+			break
+		}
 		for _, task := range recovered {
-			if remaining <= 0 {
+			if remaining <= 0 || appliedScanBudget <= 0 {
 				break
 			}
+			appliedAfterTime, appliedAfterID = task.SubmitTime, task.ID
+			appliedScanBudget--
 			if task.PrivateDataUnreadable() {
 				continue
 			}
@@ -123,6 +137,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 			}
 		}
 	}
+	timedOutTaskSweepCursor.appliedAfterSubmitTime, timedOutTaskSweepCursor.appliedAfterID = appliedAfterTime, appliedAfterID
 	afterSubmitTime := timedOutTaskSweepCursor.afterSubmitTime
 	afterID := timedOutTaskSweepCursor.afterID
 	for remaining > 0 && scanBudget > 0 {
