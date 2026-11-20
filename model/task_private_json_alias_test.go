@@ -35,7 +35,7 @@ func TestTaskPrivateHistoricalContainerNamesRetainCase(t *testing.T) {
 
 func TestBillingPlanHistoryStaysWithItsOriginalConfig(t *testing.T) {
 	var private TaskPrivateData
-	require.NoError(t, private.Scan(`{"billing_context":{"task_billing_plan":{"config_hash":"original","historical_receipt":{"retained":true}}}}`))
+	require.NoError(t, private.Scan(`{"billing_context":{"task_billing_plan":{"config_hash":"original","reserve_quota":-0,"historical_receipt":{"retained":true}}}}`))
 	encoded, err := common.Marshal(private)
 	require.NoError(t, err)
 	require.Contains(t, string(encoded), "historical_receipt")

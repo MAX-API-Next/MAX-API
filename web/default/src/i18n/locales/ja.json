@@ -183,6 +183,7 @@
     "Some settlements remain for review: {{ids}}": "確認が必要な精算が残っています：{{ids}}",
     "record still requires a manual financial review": "このレコードには引き続き手動の財務確認が必要です",
     "Some task settlements still need review.": "一部のタスク精算は引き続き確認が必要です。",
+    "Task submission failures requiring review ({{count}})": "確認が必要なタスク送信エラー（{{count}}）",
     "Settlement #{{id}}: {{message}}": "精算 #{{id}}：{{message}}",
     "Only MiniMax-H3 task settlements can use the zero-quota batch action": "ゼロクォータ一括操作を使用できるのは MiniMax-H3 タスク精算だけです",
     "After selecting alerts, root administrators can either close eligible MiniMax-H3 task settlements with an explicit final quota of 0 or enter an exact final quota for each selected task. Ordinary alerts can be closed directly after review.": "アラートを選択すると、ルート管理者は対象の MiniMax-H3 タスクを最終クォータ 0 で精算するか、選択した各タスクに正確な最終クォータを入力できます。通常のアラートは確認後に直接閉じられます。",

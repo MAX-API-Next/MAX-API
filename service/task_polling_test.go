@@ -472,9 +472,11 @@ func TestVertexCompletionKeepsInlinePayloadOutOfTaskRow(t *testing.T) {
 	}{
 		{name: "object", statusPath: "status", URLPath: "nested.0.video", expected: `{"nested":[{"video":""}],"status":"completed"}`,
 			payload: map[string]any{"nested": []any{map[string]any{"video": inline}}, "status": "completed"}},
-		{name: "array", statusPath: "0.status", URLPath: "0.video", expected: `[{"video":"","status":"completed"},{"video":""},{"video":"https://fixture.invalid/video"}]`,
-			payload: []any{map[string]any{"video": " " + inline + "\n", "status": "completed"},
+		{name: "array", statusPath: "0.status", URLPath: "0.video", expected: `[{"video":"","status":"completed","asset_id":9007199254740993},{"video":""},{"video":"https://fixture.invalid/video"}]`,
+			payload: []any{map[string]any{"video": " " + inline + "\n", "status": "completed", "asset_id": int64(9007199254740993)},
 				map[string]any{"video": "data:video/webm;base64,QQ=="}, map[string]any{"video": "https://fixture.invalid/video"}}},
+		{name: "JSON descriptor", statusPath: "status", URLPath: "descriptor", expected: `{"descriptor":"{\"asset_id\":9007199254740993,\"url\":\"\"}","status":"completed"}`,
+			payload: map[string]any{"descriptor": `{"url":"` + inline + `","asset_id":9007199254740993}`, "status": "completed"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			truncate(t)
@@ -496,8 +498,31 @@ func TestVertexCompletionKeepsInlinePayloadOutOfTaskRow(t *testing.T) {
 			require.Empty(t, stored.PrivateData.InlineVideoDataURL)
 			require.Empty(t, stored.PrivateData.PendingTerminalResultURL)
 			require.JSONEq(t, test.expected, string(stored.Data))
+			if test.name != "object" {
+				require.Contains(t, string(stored.Data), "9007199254740993")
+			}
 		})
 	}
+}
+
+func TestVideoPollingRetainsOneBoundedInlineCopyForOtherProviders(t *testing.T) {
+	truncate(t)
+	task := &model.Task{TaskID: "bounded-inline-video", UserId: 71, Status: model.TaskStatusInProgress}
+	require.NoError(t, model.DB.Create(task).Error)
+	channel := &model.Channel{Type: constant.ChannelTypeMiniMax}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{TaskProtocol: taskcommon.TaskProtocolGenericVideo,
+		TaskProtocolConfig: &dto.TaskProtocolConfig{ResultURLPaths: []string{"video"}}})
+	inline := "data:video/webm;base64,AA=="
+	adaptor := &sunoPollingResponseAdaptor{responseBody: `{"status":"completed","video":"` + inline + `"}`}
+	require.NoError(t, updateVideoSingleTask(t.Context(), adaptor, channel, task.TaskID, map[string]*model.Task{task.TaskID: task}))
+	stored, err := model.GetTaskPlaceholderByID(task.ID)
+	require.NoError(t, err)
+	require.Equal(t, inline, stored.PrivateData.InlineVideoDataURL)
+	require.JSONEq(t, `{"status":"completed","video":""}`, string(stored.Data))
+	require.Equal(t, taskcommon.BuildProxyURL(task.TaskID), stored.GetResultURL())
+	setVideoTaskResult(stored, "data:video/webm;base64,"+strings.Repeat("A", maxRetainedInlineVideoURLBytes))
+	require.Empty(t, stored.PrivateData.InlineVideoDataURL, "historical pending evidence must also honor the stored size bound")
+	require.Equal(t, taskcommon.BuildProxyURL(task.TaskID), stored.GetResultURL())
 }
 
 type onFetchTaskPollingAdaptor struct {

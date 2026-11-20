@@ -19,7 +19,7 @@ type taskPrivateNested struct{ value any }
 type taskPrivateMap map[string]any
 type taskPrivateBillingPlanHistory struct {
 	configHash                  string
-	estimateQuota, reserveQuota string
+	estimateQuota, reserveQuota int64
 	fields                      map[string]any
 }
 type taskPrivateArray struct {
@@ -304,11 +304,12 @@ func mergeTaskPrivateValue(unknown, current any) (any, error) {
 	return nil, errors.New("cannot discard unmodeled task private history from an incompatible typed value")
 }
 
-func taskPrivatePlanQuota(value any) string {
-	if number, ok := value.(json.Number); ok && number != "" {
-		return number.String()
+func taskPrivatePlanQuota(value any) int64 {
+	if number, ok := value.(json.Number); ok {
+		quota, _ := number.Int64() // The typed plan decoder validates the integer.
+		return quota
 	}
-	return "0" // A quota missing from historical JSON decodes to zero.
+	return 0
 }
 
 func (history taskPrivateArray) typed(entries []any) (any, error) {

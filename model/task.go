@@ -753,8 +753,9 @@ func (t *Task) statusUpdateValues() map[string]interface{} {
 		values["data"] = t.Data
 	}
 	if !t.preservePrivateDataOnStatusUpdate && (t.PrivateData != (TaskPrivateData{}) || t.includePrivateDataInUpdate) {
-		current, err := common.Marshal(t.PrivateData)
-		if t.includePrivateDataInUpdate || t.privateDataStatusSnapshot == "" || err != nil || string(current) != t.privateDataStatusSnapshot {
+		if t.includePrivateDataInUpdate || t.privateDataStatusSnapshot == "" {
+			values["private_data"] = t.PrivateData
+		} else if current, err := common.Marshal(t.PrivateData); err != nil || string(current) != t.privateDataStatusSnapshot {
 			values["private_data"] = t.PrivateData
 		}
 	}
@@ -1489,14 +1490,12 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 			}
 			recordedInput = *input
 		}
-		if input != nil && (lateRejection || unprojectedRetry || input.Source == BillingSettlementSourceWallet) {
+		if input != nil {
 			if _, err := taskSubmitFailureRecoveryRecord(taskID, reason, *input, failedReserve); err != nil {
 				return err
 			}
-			if unprojectedRetry || input.Source == BillingSettlementSourceWallet {
-				if err := verifyTaskSubmitRefund(tx, task, &recordedInput, failedReserve); err != nil {
-					return err
-				}
+			if err := verifyTaskSubmitRefund(tx, task, &recordedInput, failedReserve); err != nil {
+				return err
 			}
 		}
 		finalize := tx.Session(&gorm.Session{NewDB: true}).Model(&BillingSettlement{}).Select("1").Where("operation_key = ?", BillingTaskFinalizeOperationKey(taskID))

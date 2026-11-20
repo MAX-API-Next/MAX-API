@@ -374,12 +374,24 @@ func TestSubmitFailureProjectedSubscriptionRefundUsesSameRequest(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, found)
 	input.SubscriptionPreConsumeRequestID = request
+	require.NoError(t, DB.Create(&SubscriptionPreConsumeRecord{RequestId: request, UserId: 7, TokenId: 8,
+		UserSubscriptionId: 9, PreConsumed: 20, Status: "consumed"}).Error)
+	require.NoError(t, DB.Create(&BillingSettlement{OperationKey: "request:" + request + ":reserve:1", Source: input.Source,
+		UserID: 7, TokenID: 8, SubscriptionID: 9, SubscriptionPreConsumeRequestID: request,
+		Status: BillingSettlementStatusApplied, FundingDelta: 5, TokenDelta: 5, AppliedFundingDelta: 5, AppliedTokenDelta: 5}).Error)
+	input.FundingDelta, input.TokenDelta = -40, -40
+	won, err = ClaimTaskSubmitFailureWithSettlement(row.ID, "inflated rejection refund", &input)
+	require.False(t, won)
+	require.ErrorIs(t, err, ErrTaskSubmitRefundIdentityMismatch)
+	input.FundingDelta, input.TokenDelta = -25, -25
 	won, err = ClaimTaskSubmitFailureWithSettlement(row.ID, "definite rejection", &input)
 	require.NoError(t, err)
 	require.True(t, won)
 	var refund BillingSettlement
 	require.NoError(t, DB.Where("operation_key = ?", input.OperationKey).Take(&refund).Error)
 	require.Equal(t, request, refund.SubscriptionPreConsumeRequestID)
+	require.EqualValues(t, -25, refund.FundingDelta)
+	require.EqualValues(t, -25, refund.TokenDelta)
 }
 
 func TestTaskTerminalSettlementIntentChecksObservedQuota(t *testing.T) {

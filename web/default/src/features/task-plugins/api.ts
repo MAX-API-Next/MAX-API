@@ -141,7 +141,7 @@ function requestError(
       }),
       z.object({
         code: z.literal('invalid_task_data'),
-        task_id: z.string().regex(/^[1-9][0-9]*$/),
+        task_id: z.string().regex(/^(?:0|-?[1-9][0-9]*)$/),
       }),
       z.object({
         code: z.literal('invalid_plugin_pricing'),

@@ -271,10 +271,13 @@ func TestCatalogGuardResolvesAliasedTableExpression(t *testing.T) {
 
 func TestTaskPrivateReferenceWritesRequireTypedUpdates(t *testing.T) {
 	db := deletionDB(t)
+	require.NoError(t, db.Callback().Update().Remove("guard_catalog_update_columns"))
 	task := &Task{TaskID: "typed-private-data"}
 	require.NoError(t, db.Create(task).Error)
 	query := db.Table("tasks").Where("id = ?", task.ID)
 	require.ErrorIs(t, query.Updates(map[string]any{"private_data": `{}`}).Error, taskplugin.ErrCatalogInvalid)
+	require.ErrorIs(t, db.Model(task).Updates(map[string]any{"tasks.private_data": `{}`}).Error, taskplugin.ErrCatalogInvalid)
+	require.NoError(t, db.Model(task).Select("progress").Updates(map[string]any{"tasks.private_data": `{}`, "progress": "15%"}).Error)
 	require.NoError(t, db.Table("tasks").Where("id = ?", task.ID).Select("progress").
 		Updates(map[string]any{"progress": "20%", "private_data": `{}`}).Error)
 	require.NoError(t, db.Model(task).Updates(map[string]any{"private_data": `{}`}).Error)

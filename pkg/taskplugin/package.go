@@ -164,7 +164,7 @@ func validPackageFields(data []byte) bool {
 	if err != nil || opening != json.Delim('{') {
 		return false
 	}
-	fields, err := readUniquePackageFields(decoder, opening, reflect.TypeFor[PackageDocument]())
+	fields, err := readUniquePackageFields(decoder, opening, reflect.TypeFor[PackageDocument](), 1)
 	if err != nil || len(fields) != 3 || !fields["format_version"] || !fields["manifest"] || !fields["source"] {
 		return false
 	}
@@ -172,7 +172,7 @@ func validPackageFields(data []byte) bool {
 	return err == io.EOF
 }
 
-func readUniquePackageFields(decoder *json.Decoder, opening json.Token, valueType reflect.Type) (map[string]bool, error) {
+func readUniquePackageFields(decoder *json.Decoder, opening json.Token, valueType reflect.Type, depth int) (map[string]bool, error) {
 	var fields map[string]bool
 	var childType reflect.Type
 	switch opening {
@@ -184,6 +184,9 @@ func readUniquePackageFields(decoder *json.Decoder, opening json.Token, valueTyp
 		}
 	default:
 		return nil, nil
+	}
+	if depth > 10000 { // Match encoding/json's document nesting limit.
+		return nil, errors.New("package JSON is too deeply nested")
 	}
 	for decoder.More() {
 		if fields != nil {
@@ -203,7 +206,7 @@ func readUniquePackageFields(decoder *json.Decoder, opening json.Token, valueTyp
 		if err != nil {
 			return nil, err
 		}
-		if _, err := readUniquePackageFields(decoder, token, childType); err != nil {
+		if _, err := readUniquePackageFields(decoder, token, childType, depth+1); err != nil {
 			return nil, err
 		}
 	}

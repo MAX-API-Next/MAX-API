@@ -2337,7 +2337,7 @@ func TestTaskPluginCanceledReferenceScanHasNoCommitAndKeepsHost(t *testing.T) {
 	require.Zero(t, receipts)
 }
 
-func TestTaskPluginCanceledMutationAttemptRemainsUnknown(t *testing.T) {
+func TestTaskPluginCanceledProvisionalDeletePreservesAdmission(t *testing.T) {
 	db := deletionDB(t)
 	pkg, _ := catalogFixture(t, "stored", "1.0.0", "mutation-cancellation")
 	catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
@@ -2360,10 +2360,12 @@ func TestTaskPluginCanceledMutationAttemptRemainsUnknown(t *testing.T) {
 	t.Cleanup(func() { _ = db.Callback().Update().Remove("expire-after-head-write") })
 	err = catalog.MutateExpected(ctx, 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"})
 	require.True(t, reached)
-	require.ErrorIs(t, err, taskplugin.ErrCatalogUnavailable)
-	require.NotErrorIs(t, err, taskplugin.ErrCatalogNotCommitted)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, taskplugin.ErrCatalogNotCommitted)
 	_, err = catalog.Host().Resolve(binding, actor)
-	require.Error(t, err, "after a mutation attempt only authoritative refresh can restore the Host")
+	require.NoError(t, err)
+	_, err = catalog.Host().Bind(actor, "GET", "/stored/one", "catalog-model", taskusage.MiniMaxH3Contract())
+	require.NoError(t, err, "a canceled provisional change must preserve admission")
 }
 
 func TestTaskPluginPreparationCancellationAfterHeadIsKnownNoWrite(t *testing.T) {
@@ -2636,6 +2638,63 @@ func TestCatalogReadRetainsPackageObservationWhenMetadataValidationIsInterrupted
 			} else {
 				require.NoError(t, err, "matching completed columns keep the previous Host")
 			}
+		})
+	}
+}
+
+func TestCatalogDeleteDistinguishesCorruptHeadAndPreCommitCancellation(t *testing.T) {
+	for _, test := range []string{"corrupt head", "while reading head", "after provisional update"} {
+		t.Run(test, func(t *testing.T) {
+			db := deletionDB(t)
+			store := NewTaskPluginCatalogStore(db)
+			_, entry := catalogFixture(t, "stored", "1.0.0", "delete-commit-boundary")
+			_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			observed := false
+			const callback = "fixture:delete-commit-boundary"
+			if test == "after provisional update" {
+				require.NoError(t, db.Callback().Update().After("gorm:update").Register(callback, func(tx *gorm.DB) {
+					if tx.Statement.Table == "task_plugin_catalog_heads" && tx.Error == nil && tx.RowsAffected == 1 {
+						observed = true
+						cancel()
+					}
+				}))
+			} else {
+				require.NoError(t, db.Callback().Query().After("gorm:query").Register(callback, func(tx *gorm.DB) {
+					if row, ok := tx.Statement.Dest.(*TaskPluginCatalogHead); ok && tx.Error == nil {
+						observed = true
+						if test == "corrupt head" {
+							row.Revision, row.MutationID = 200, ""
+						} else {
+							cancel()
+							_ = tx.AddError(context.Canceled)
+						}
+					}
+				}))
+			}
+			_, err = store.DeleteVersion(ctx, 1, "stored", "1.0.0")
+			require.True(t, observed)
+			require.ErrorIs(t, err, taskplugin.ErrCatalogNotCommitted)
+			if test == "corrupt head" {
+				var observation *taskplugin.CatalogReadObservationError
+				require.ErrorAs(t, err, &observation)
+				require.Zero(t, observation.Revision, "an invalid head cannot advance the observed revision floor")
+				require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+			} else {
+				require.ErrorIs(t, err, context.Canceled)
+			}
+			if test == "after provisional update" {
+				require.NoError(t, db.Callback().Update().Remove(callback))
+			} else {
+				require.NoError(t, db.Callback().Query().Remove(callback))
+			}
+			snapshot, err := store.Load(t.Context())
+			require.NoError(t, err)
+			require.EqualValues(t, 1, snapshot.Revision)
+			require.Len(t, snapshot.Packages, 1)
+			require.Empty(t, snapshot.Deletions)
 		})
 	}
 }

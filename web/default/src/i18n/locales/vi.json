@@ -183,6 +183,7 @@
     "Some settlements remain for review: {{ids}}": "Một số quyết toán vẫn cần xem xét: {{ids}}",
     "record still requires a manual financial review": "Bản ghi vẫn cần được xem xét tài chính thủ công",
     "Some task settlements still need review.": "Một số quyết toán tác vụ vẫn cần xem xét.",
+    "Task submission failures requiring review ({{count}})": "Lỗi gửi tác vụ cần xem xét ({{count}})",
     "Settlement #{{id}}: {{message}}": "Quyết toán #{{id}}: {{message}}",
     "Only MiniMax-H3 task settlements can use the zero-quota batch action": "Chỉ quyết toán tác vụ MiniMax-H3 mới được dùng thao tác hàng loạt với hạn mức bằng 0",
     "After selecting alerts, root administrators can either close eligible MiniMax-H3 task settlements with an explicit final quota of 0 or enter an exact final quota for each selected task. Ordinary alerts can be closed directly after review.": "Sau khi chọn cảnh báo, quản trị viên gốc có thể quyết toán các tác vụ MiniMax-H3 đủ điều kiện với hạn mức cuối bằng 0 hoặc nhập hạn mức cuối chính xác cho từng tác vụ đã chọn. Có thể đóng trực tiếp các cảnh báo thông thường sau khi xem xét.",

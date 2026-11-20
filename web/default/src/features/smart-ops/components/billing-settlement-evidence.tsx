@@ -542,6 +542,34 @@ export function BillingSettlementEvidence(
           />
         </Field>
 
+        {props.data.task_submit_failures &&
+          props.data.task_submit_failures.length > 0 && (
+            <Alert>
+              <TriangleAlert aria-hidden='true' />
+              <AlertTitle>
+                {t('Task submission failures requiring review ({{count}})', {
+                  count: formatCount(
+                    props.data.task_submit_failure_count ??
+                      props.data.task_submit_failures.length,
+                    i18n.language
+                  ),
+                })}
+              </AlertTitle>
+              <AlertDescription>
+                <ul className='flex flex-col gap-1 break-words'>
+                  {props.data.task_submit_failures.map((failure) => (
+                    <li key={failure.task_id}>
+                      <span className='font-medium'>
+                        {t('Task ID')} {failure.task_id}
+                      </span>{' '}
+                      {failure.last_error}
+                    </li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          )}
+
         {props.data.items.length === 0 ? (
           <Alert>
             <CheckCircle2 aria-hidden='true' />

@@ -480,6 +480,9 @@ func taskPluginEmittedField(tx *gorm.DB, receiver any, column string) (any, bool
 				continue
 			}
 			if !strings.EqualFold(name, column) {
+				if tail := name[strings.LastIndexByte(name, '.')+1:]; strings.EqualFold(strings.Trim(tail, "\"`[]"), column) {
+					return nil, false, taskplugin.ErrCatalogInvalid
+				}
 				continue
 			}
 			if found {

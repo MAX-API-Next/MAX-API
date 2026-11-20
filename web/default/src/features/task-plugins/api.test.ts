@@ -85,6 +85,29 @@ test('known mapping repair errors preserve identifiers for reactive feedback', a
     await assert.rejects(mutate, (e) => e instanceof PluginError && !e.repair)
   }
 })
+
+test('task data repair errors preserve canonical signed historical IDs', async () => {
+  for (const taskId of ['-9007199254740993', '-0', '+23']) {
+    respond({ success: false, code: 'invalid_task_data', task_id: taskId }, 422)
+    await assert.rejects(
+      () =>
+        taskPluginAPI.mutate({
+          action: 'delete',
+          key: 'kling',
+          version: '1.2.0',
+          expected_revision: '4',
+          deletion_nodes_ready: true,
+        }),
+      (e) =>
+        e instanceof PluginError &&
+        (taskId === '-9007199254740993'
+          ? e.repair?.code === 'invalid_task_data' &&
+            e.repair.task_id === taskId
+          : !e.repair)
+    )
+  }
+})
+
 function respond(data: unknown, status = 200) {
   const calls: InternalAxiosRequestConfig[] = []
   api.defaults.adapter = async (config) => {

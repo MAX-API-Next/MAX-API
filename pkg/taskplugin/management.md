@@ -468,6 +468,9 @@ and refund authority still require a verified request, wallet and token.
 When an existing free placeholder first retries on a paid wallet route,
 creation of the initial debit record and the wallet/token charge are atomic.
 A failed transaction leaves no new debit for a worker to replay.
+The PostgreSQL migration builds the reserve lookup index concurrently. If a
+previous index build left an invalid index, repair that index before restarting
+the migration.
 If the database cannot save even the recovery record, use the original task
 and reservation records to reconcile the logged task ID after service returns.
 Historical private metadata retains unknown fields, including nested typed

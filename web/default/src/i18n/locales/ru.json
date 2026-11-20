@@ -183,6 +183,7 @@
     "Some settlements remain for review: {{ids}}": "Некоторые расчеты требуют проверки: {{ids}}",
     "record still requires a manual financial review": "Для записи по-прежнему требуется ручная финансовая проверка",
     "Some task settlements still need review.": "Некоторые расчеты задач все еще требуют проверки.",
+    "Task submission failures requiring review ({{count}})": "Ошибки отправки задач, требующие проверки ({{count}})",
     "Settlement #{{id}}: {{message}}": "Расчет #{{id}}: {{message}}",
     "Only MiniMax-H3 task settlements can use the zero-quota batch action": "Пакетное действие с нулевой квотой доступно только для расчетов задач MiniMax-H3",
     "After selecting alerts, root administrators can either close eligible MiniMax-H3 task settlements with an explicit final quota of 0 or enter an exact final quota for each selected task. Ordinary alerts can be closed directly after review.": "После выбора оповещений администратор Root может завершить расчет подходящих задач MiniMax-H3 с явной итоговой квотой 0 или ввести точную итоговую квоту для каждой выбранной задачи. Обычные оповещения можно закрыть сразу после проверки.",

@@ -454,6 +454,9 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	if err := migrateBillingSettlementReserveLookup(DB); err != nil {
+		return err
+	}
 	if err := migrateUserSubscriptionPolicyDefaults(userSubscriptionsTableExisted, userSubscriptionWalletColumnExisted, userSubscriptionDowngradeColumnExisted); err != nil {
 		return err
 	}

@@ -32,6 +32,13 @@ func TestPinnedPackageRejectsRepeatedJSONMembers(t *testing.T) {
 	}
 }
 
+func TestPackageValidationEnforcesJSONNestingLimit(t *testing.T) {
+	for _, depth := range []int{9999, 10000} {
+		document := []byte(`{"format_version":1,"manifest":` + strings.Repeat("[", depth) + "0" + strings.Repeat("]", depth) + `,"source":"fixture"}`)
+		require.Equal(t, depth == 9999, validPackageFields(document))
+	}
+}
+
 func TestPackageFieldAliasesRetainLegacyInterpretation(t *testing.T) {
 	const envelope = `{"format_version":1,"manifest":{"APIVersion":1,"Key":"aliases","Name":"First","name":"Second","Version":"1.0.0","Models":["model"]},"source":"source"}`
 	raw := []byte(envelope)

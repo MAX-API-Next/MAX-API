@@ -166,7 +166,10 @@ func getVertexVideoURL(channel *model.Channel, task *model.Task) (string, error)
 	if url := extractVertexVideoURLFromTaskData(task); url != "" {
 		return url, nil
 	}
+	return fetchVideoTaskResultURL(channel, task)
+}
 
+func fetchVideoTaskResultURL(channel *model.Channel, task *model.Task) (string, error) {
 	baseURL := constant.ChannelBaseURLs[channel.Type]
 	if channel.GetBaseURL() != "" {
 		baseURL = channel.GetBaseURL()
@@ -174,12 +177,12 @@ func getVertexVideoURL(channel *model.Channel, task *model.Task) (string, error)
 
 	adaptor := relay.GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(channel.Type)))
 	if adaptor == nil {
-		return "", fmt.Errorf("vertex task adaptor not found")
+		return "", fmt.Errorf("video task adaptor not found")
 	}
 
 	key := getVertexTaskKey(channel, task)
 	if key == "" {
-		return "", fmt.Errorf("vertex key not available for task")
+		return "", fmt.Errorf("video provider key not available for task")
 	}
 
 	resp, err := adaptor.FetchTask(baseURL, key, taskcommon.WithTaskProtocolConfig(map[string]any{
@@ -207,13 +210,15 @@ func getVertexVideoURL(channel *model.Channel, task *model.Task) (string, error)
 	if parseErr == nil && taskInfo != nil && strings.TrimSpace(taskInfo.Url) != "" {
 		return taskInfo.Url, nil
 	}
-	if url := extractVertexVideoURLFromPayload(body); url != "" {
-		return url, nil
+	if channel.Type == constant.ChannelTypeVertexAi {
+		if url := extractVertexVideoURLFromPayload(body); url != "" {
+			return url, nil
+		}
 	}
 	if parseErr != nil {
 		return "", fmt.Errorf("parse task result failed: %w", parseErr)
 	}
-	return "", fmt.Errorf("vertex video url not found")
+	return "", fmt.Errorf("video result URL not found")
 }
 
 func isTaskProxyContentURL(url string, taskID string) bool {

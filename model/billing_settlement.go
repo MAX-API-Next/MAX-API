@@ -262,14 +262,16 @@ type BillingSettlementReconciliationData struct {
 	OpenAlertCount int64 `json:"open_alert_count"`
 	// ReviewedCount is retained for API compatibility. Closed alerts are no
 	// longer part of this active projection, so the value is always zero.
-	ReviewedCount       int64                                 `json:"reviewed_count"`
-	BlockingRecordCount int64                                 `json:"blocking_record_count"`
-	BlockedUserCount    int64                                 `json:"blocked_user_count"`
-	BlockUserByDefault  bool                                  `json:"block_user_by_default"`
-	OldestCreatedAt     int64                                 `json:"oldest_created_at"`
-	Truncated           bool                                  `json:"truncated"`
-	GeneratedAt         int64                                 `json:"generated_at"`
-	Items               []BillingSettlementReconciliationItem `json:"items"`
+	ReviewedCount          int64                                 `json:"reviewed_count"`
+	BlockingRecordCount    int64                                 `json:"blocking_record_count"`
+	BlockedUserCount       int64                                 `json:"blocked_user_count"`
+	BlockUserByDefault     bool                                  `json:"block_user_by_default"`
+	OldestCreatedAt        int64                                 `json:"oldest_created_at"`
+	Truncated              bool                                  `json:"truncated"`
+	GeneratedAt            int64                                 `json:"generated_at"`
+	Items                  []BillingSettlementReconciliationItem `json:"items"`
+	TaskSubmitFailureCount int64                                 `json:"task_submit_failure_count,omitempty"`
+	TaskSubmitFailures     []taskSubmitFailureReviewItem         `json:"task_submit_failures,omitempty"`
 }
 
 func unresolvedPositiveFinalizeSettlementScope(db *gorm.DB) *gorm.DB {
@@ -547,6 +549,9 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 			_, items[index].BlocksUser = blockedUsers[items[index].UserID]
 		}
 		data.Items = items
+		if err := loadTaskSubmitFailureReview(tx, limit, &data); err != nil {
+			return err
+		}
 		return nil
 	}, transactionOptions...)
 	return data, err
@@ -1157,7 +1162,7 @@ func applyBillingSettlementOnce(input BillingSettlementInput, atomicPreConsume b
 		return record.AppliedFundingDelta, true, nil
 	}
 
-	err = DB.Transaction(func(tx *gorm.DB) error {
+	apply := func(tx *gorm.DB) error {
 		if atomicPreConsume {
 			var err error
 			record, alreadyApplied, err = ensureBillingSettlementRecordDB(tx, input)
@@ -1307,7 +1312,12 @@ func applyBillingSettlementOnce(input BillingSettlementInput, atomicPreConsume b
 			cacheTasks = append(cacheTasks, tokenTask)
 		}
 		return nil
-	})
+	}
+	if atomicPreConsume {
+		_, err = taskSubmitFailureTransaction(DB, apply)
+	} else {
+		err = DB.Transaction(apply)
+	}
 	if err != nil {
 		if !atomicPreConsume && !errors.Is(err, errBillingSettlementCancelled) {
 			markBillingSettlementFailure(input.OperationKey, err)

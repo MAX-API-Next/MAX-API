@@ -79,13 +79,19 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 	// a server's INFORMATION_SCHEMA reads establish a consistent snapshot.
 	for _, table := range []any{&TaskPluginDeletion{}, &Task{}, &Channel{}, &Option{}} {
 		if !db.Migrator().HasTable(table) {
+			if err := ctx.Err(); err != nil {
+				return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, err)
+			}
 			return 0, taskplugin.ErrCatalogUnavailable
 		}
 	}
 	if !db.Migrator().HasColumn(&TaskPluginDeletion{}, "models") {
+		if err := ctx.Err(); err != nil {
+			return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, err)
+		}
 		return 0, taskplugin.ErrCatalogUnavailable
 	}
-	headVerified, mutationAttempted := false, false
+	commitAttempted := false
 	err := db.Transaction(func(tx *gorm.DB) error {
 		var head TaskPluginCatalogHead
 		// Match pricing writers before taking the catalog head or reading references.
@@ -99,12 +105,11 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 			return err
 		}
 		if head.Revision <= 0 || head.MutationID == "" {
-			return taskplugin.ErrCatalogInvalid
+			return invalidTaskPluginDeletionObservation(0, taskplugin.ErrCatalogInvalid)
 		}
 		if head.Revision != revision {
 			return taskplugin.ErrCatalogConflict
 		}
-		headVerified = true
 		deletions, err := loadTaskPluginDeletions(tx)
 		if err != nil {
 			if errors.Is(err, taskplugin.ErrCatalogInvalid) {
@@ -172,7 +177,6 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		if len(models) > maxTaskPluginModelIndexBytes {
 			return taskplugin.ErrCatalogInvalid
 		}
-		mutationAttempted = true // Even an UPDATE error can have an unknown outcome.
 		result := tx.Model(&TaskPluginCatalogHead{}).Where("id = ? AND revision = ?", 1, revision).
 			Updates(map[string]any{"revision": revision + 1, "mutation_id": common.GetUUID(), "last_deletion_revision": revision + 1})
 		if result.Error != nil {
@@ -196,6 +200,10 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		if result.RowsAffected != 1 {
 			return taskplugin.ErrCatalogConflict
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		commitAttempted = true
 		return nil
 	})
 	if err != nil {
@@ -203,8 +211,8 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		if errors.As(err, &observation) {
 			return 0, observation
 		}
-		if ctx.Err() != nil {
-			if headVerified && !mutationAttempted {
+		if ctx.Err() != nil && !errors.Is(err, taskplugin.ErrCatalogConflict) {
+			if !commitAttempted {
 				return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, ctx.Err())
 			}
 			return 0, errors.Join(taskplugin.ErrCatalogUnavailable, ctx.Err())

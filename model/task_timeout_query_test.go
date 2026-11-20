@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"testing"
 
@@ -17,12 +18,49 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestPostgresReserveLookupUsesPatternIndex(t *testing.T) {
+	dsn := os.Getenv("TEST_TASK_RESERVE_PATTERN_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("requires a disposable PostgreSQL matrix database")
+	}
+	db, err := gorm.Open(gormpostgres.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	pool, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pool.Close() })
+	var database string
+	require.NoError(t, db.Raw("SELECT current_database()").Scan(&database).Error)
+	require.Regexp(t, "^maxapi_task_billing_test_round[0-9]+$", database)
+	var nonC int64
+	require.NoError(t, db.Raw("SELECT count(*) FROM pg_collation WHERE collname = 'en-US-x-icu'").Scan(&nonC).Error)
+	require.Positive(t, nonC, "the matrix must exercise a non-C collation")
+	require.NoError(t, db.Exec(`ALTER TABLE billing_settlements ALTER COLUMN operation_key TYPE varchar(191) COLLATE "en-US-x-icu"`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO billing_settlements (operation_key, source, created_at, updated_at)
+		SELECT 'plan-fixture:' || i, 'wallet', 1, 1 FROM generate_series(1, 50000) AS i`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO billing_settlements (operation_key, source, created_at, updated_at)
+		VALUES ('request:plan-_fixture:reserve:1', 'wallet', 1, 1)`).Error)
+	require.NoError(t, db.Exec("ANALYZE billing_settlements").Error)
+	require.NoError(t, migrateBillingSettlementReserveLookup(db))
+	require.NoError(t, migrateBillingSettlementReserveLookup(db))
+	pattern := taskSubmitWalletReservePattern("request:plan-_fixture:reserve:")
+	var plan []string
+	require.NoError(t, db.Raw("EXPLAIN SELECT id FROM billing_settlements WHERE operation_key LIKE ? ESCAPE '!'", pattern).Scan(&plan).Error)
+	require.Contains(t, strings.Join(plan, "\n"), "idx_billing_settlements_operation_key_pattern")
+	var found []string
+	require.NoError(t, db.Raw("SELECT operation_key FROM billing_settlements WHERE operation_key LIKE ? ESCAPE '!'", pattern).Scan(&found).Error)
+	require.Equal(t, []string{"request:plan-_fixture:reserve:1"}, found)
+}
+
 func TestPollingBatchQuarantinesUnadvanceableVersions(t *testing.T) {
 	truncateTables(t)
 	quarantined := make(map[int64]int64)
+	var penultimateID int64
 	for _, version := range []int64{10, math.MaxInt64 - 2, math.MaxInt64 - 1, math.MaxInt64} {
 		row := &Task{TaskID: fmt.Sprint(version), Status: TaskStatusSubmitted, UpdatedAt: version}
 		require.NoError(t, DB.Create(row).Error)
+		if version == math.MaxInt64-2 {
+			penultimateID = row.ID
+		}
 		if version >= math.MaxInt64-1 {
 			quarantined[row.ID] = version
 		}
@@ -32,6 +70,7 @@ func TestPollingBatchQuarantinesUnadvanceableVersions(t *testing.T) {
 	require.Equal(t, "10", tasks[0].TaskID)
 	require.Greater(t, tasks[0].UpdatedAt, int64(10))
 	require.Less(t, tasks[0].UpdatedAt, int64(math.MaxInt64-2))
+	require.Equal(t, penultimateID, tasks[1].ID)
 	require.EqualValues(t, math.MaxInt64-1, tasks[1].UpdatedAt)
 	for _, task := range tasks {
 		stored, err := GetTaskPlaceholderByID(task.ID)

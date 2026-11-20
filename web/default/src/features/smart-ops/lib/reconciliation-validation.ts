@@ -67,6 +67,16 @@ const billingSettlementReconciliationDataSchema: z.ZodType<BillingSettlementReco
     truncated: z.boolean(),
     generated_at: z.number(),
     items: z.array(billingSettlementReconciliationItemSchema),
+    task_submit_failure_count: z.number().int().nonnegative().optional(),
+    task_submit_failures: z
+      .array(
+        z.object({
+          task_id: z.string().regex(/^[1-9][0-9]*$/),
+          last_error: z.string(),
+          updated_at: z.number(),
+        })
+      )
+      .optional(),
   })
 
 export type BillingSettlementReviewSelection =

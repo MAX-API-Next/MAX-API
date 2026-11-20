@@ -129,6 +129,85 @@ func TestTaskSubmitFailureStaleBackoffPreservesNewerSchedule(t *testing.T) {
 	require.Equal(t, before, after)
 }
 
+func TestTaskSubmitFailureJournalOnlyManualItemsAreVisible(t *testing.T) {
+	db := deletionDB(t)
+	require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+	previous := DB
+	DB = db
+	t.Cleanup(func() { DB = previous })
+	require.NoError(t, db.Create(&[]TaskSubmitFailureRecovery{
+		{TaskID: 9007199254740993, Status: TaskSubmitFailureRecoveryManual, OperationKey: "fixture:manual:1", LastError: "query failed https://fixture.invalid?api_key=synthetic-only", UpdatedAt: 20},
+		{TaskID: 1, Status: TaskSubmitFailureRecoveryManual, OperationKey: "fixture:manual:2", UpdatedAt: 10},
+		{TaskID: 2, Status: TaskSubmitFailureRecoveryPending, OperationKey: "fixture:pending", UpdatedAt: 30},
+	}).Error)
+	data, err := GetUnresolvedPositiveFinalizeSettlements(1)
+	require.NoError(t, err)
+	require.Empty(t, data.Items)
+	require.EqualValues(t, 2, data.TaskSubmitFailureCount)
+	require.Len(t, data.TaskSubmitFailures, 1)
+	item := data.TaskSubmitFailures[0]
+	require.Equal(t, "9007199254740993", item.TaskID)
+	require.NotContains(t, item.LastError, "synthetic-only")
+	require.Contains(t, item.LastError, "query failed")
+}
+
+func TestBoundWalletPreConsumeBusyCommitReleasesSQLiteWriter(t *testing.T) {
+	db := deletionDB(t)
+	require.NoError(t, db.AutoMigrate(&User{}, &Token{}, &BillingPreConsumeSelection{}, &BillingSettlement{}, &SubscriptionPreConsumeRecord{}, &CacheInvalidationTask{}))
+	previousDB, previousSQLite, previousRedis := DB, common.UsingSQLite, common.RedisEnabled
+	DB, common.UsingSQLite, common.RedisEnabled = db, true, false
+	t.Cleanup(func() { DB, common.UsingSQLite, common.RedisEnabled = previousDB, previousSQLite, previousRedis })
+	pool, err := db.DB()
+	require.NoError(t, err)
+	pool.SetMaxOpenConns(1)
+	require.NoError(t, db.Exec("PRAGMA journal_mode=DELETE").Error)
+	require.NoError(t, db.Exec("PRAGMA busy_timeout=30").Error)
+	var location struct{ File string }
+	require.NoError(t, db.Raw("PRAGMA database_list").Scan(&location).Error)
+	other, err := gorm.Open(sqlite.Open(location.File), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	otherPool, err := other.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, otherPool.Close()) })
+	const request = "bound-first-paid-commit"
+	require.NoError(t, db.Create(&User{Id: 71, Username: "fixture", Quota: 1000}).Error)
+	require.NoError(t, db.Create(&Token{Id: 72, UserId: 71, Key: "fixture", RemainQuota: 1000}).Error)
+	task := Task{TaskID: request, UserId: 71, Status: TaskStatusSubmitted, PrivateData: TaskPrivateData{
+		AwaitingUpstreamID: true, BillingRequestId: request, TokenId: 72,
+	}}
+	require.NoError(t, db.Create(&task).Error)
+	reader := other.Begin()
+	require.NoError(t, reader.Error)
+	t.Cleanup(func() { _ = reader.Rollback().Error })
+	var count int64
+	require.NoError(t, reader.Model(&Task{}).Count(&count).Error)
+	appliedUpdate := false
+	require.NoError(t, db.Callback().Update().After("gorm:update").Register("fixture:observe-wallet-apply-before-commit", func(tx *gorm.DB) {
+		if tx.Statement.Table == "billing_settlements" && tx.Error == nil && tx.RowsAffected == 1 {
+			appliedUpdate = true
+		}
+	}))
+	input := BillingSettlementInput{OperationKey: "request:" + request + ":pre-consume", Source: BillingSettlementSourceWallet,
+		UserID: 71, TokenID: 72, FundingDelta: 100, TokenDelta: 100, PreConsumeRequestID: request,
+		PreConsumeRequestedQuota: 100, PreConsumeEffectiveQuota: 100, ManualOnFailure: true}
+	_, _, err = ApplyBoundTaskWalletPreConsumeOnce(input)
+	require.ErrorContains(t, err, "database is locked")
+	require.True(t, appliedUpdate, "the debit statements must run before COMMIT fails")
+	require.NoError(t, reader.Rollback().Error)
+	won, err := ClaimTaskSubmitFailureStatusContext(t.Context(), task.ID, request, "retry not sent", 71, 72)
+	require.NoError(t, err)
+	require.True(t, won)
+	_, found, err := GetBillingSettlementStatus(input.OperationKey)
+	require.NoError(t, err)
+	require.False(t, found)
+	var user User
+	var token Token
+	require.NoError(t, db.First(&user, 71).Error)
+	require.NoError(t, db.First(&token, 72).Error)
+	require.EqualValues(t, 1000, user.Quota)
+	require.EqualValues(t, 1000, token.RemainQuota)
+}
+
 func TestTaskSubmitFailureRecoveryMetadataUsesPassDeadline(t *testing.T) {
 	db := deletionDB(t)
 	previous := DB

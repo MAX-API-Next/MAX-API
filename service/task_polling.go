@@ -690,14 +690,17 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 
 	vertex := ch.Type == constant.ChannelTypeVertexAi
 	inlineResult := ""
-	if vertex && strings.HasPrefix(taskResult.Url, "data:") {
-		// The content handler can query Vertex again. Keep the large response
-		// out of both the public payload and the persisted terminal evidence.
-		inlineResult, taskResult.Url = taskResult.Url, ""
+	if strings.HasPrefix(taskResult.Url, "data:") {
+		inlineResult = taskResult.Url
+		// Keep one bounded private copy. The content endpoint can re-fetch
+		// an oversized or Vertex result from its original provider.
+		if vertex || len(inlineResult) > maxRetainedInlineVideoURLBytes {
+			taskResult.Url = ""
+		}
 	}
-	task.Data = redactVideoResponseBody(responseBody, vertex, inlineResult)
+	task.Data = redactVideoResponseBody(responseBody, vertex || inlineResult != "", inlineResult)
 
-	logger.LogDebug(ctx, "updateVideoSingleTask taskResult: %+v", taskResult)
+	logger.LogDebug(ctx, "updateVideoSingleTask status=%s progress=%s", taskResult.Status, taskResult.Progress)
 
 	now := time.Now().Unix()
 	if taskResult.Status == "" {
@@ -900,11 +903,13 @@ func hasPendingVideoTerminalEvidence(task *model.Task) bool {
 	return task != nil && (task.PrivateData.PendingTerminalStatus == model.TaskStatusSuccess || task.PrivateData.PendingTerminalStatus == model.TaskStatusFailure)
 }
 
+const maxRetainedInlineVideoURLBytes = 16 << 20
+
 func setVideoTaskResult(task *model.Task, providerURL string) {
 	task.PrivateData.InlineVideoDataURL = ""
 	if strings.HasPrefix(providerURL, "data:") {
 		platform, _ := strconv.Atoi(string(task.Platform))
-		if platform != constant.ChannelTypeVertexAi {
+		if platform != constant.ChannelTypeVertexAi && len(providerURL) <= maxRetainedInlineVideoURLBytes {
 			task.PrivateData.InlineVideoDataURL = providerURL
 		}
 		providerURL = ""
@@ -1200,14 +1205,14 @@ func shouldApplyTaskResultProgress(taskResult *relaycommon.TaskInfo) bool {
 
 func redactVideoResponseBody(body []byte, removeInlineVideo bool, selectedInlineURL string) []byte {
 	var payload any
-	if err := common.Unmarshal(body, &payload); err != nil {
+	if err := common.UnmarshalUseNumber(body, &payload); err != nil {
 		if removeInlineVideo {
 			return nil
 		}
 		return body
 	}
 	if removeInlineVideo {
-		payload = removeVideoInlinePayload(payload, selectedInlineURL)
+		payload, _ = removeVideoInlinePayload(payload, selectedInlineURL, 0)
 	}
 	m, object := payload.(map[string]any)
 	if !object && !removeInlineVideo {
@@ -1237,7 +1242,7 @@ func redactVideoResponseBody(body []byte, removeInlineVideo bool, selectedInline
 	return b
 }
 
-func removeVideoInlinePayload(value any, selectedInlineURL string) any {
+func removeVideoInlinePayload(value any, selectedInlineURL string, textDepth int) (any, bool) {
 	switch value := value.(type) {
 	case string:
 		trimmed := strings.TrimSpace(value)
@@ -1246,19 +1251,43 @@ func removeVideoInlinePayload(value any, selectedInlineURL string) any {
 			const video = "data:video/"
 			if trimmed == selectedInlineURL || valid && (strings.EqualFold(header, "data:;base64") ||
 				len(header) >= len(video) && strings.EqualFold(header[:len(video)], video)) {
-				return ""
+				return "", true
+			}
+		}
+		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+			if textDepth < 8 && strings.Contains(strings.ToLower(trimmed), "data:") {
+				var nested any
+				if common.UnmarshalUseNumber([]byte(trimmed), &nested) == nil {
+					if result, removed := removeVideoInlinePayload(nested, selectedInlineURL, textDepth+1); removed {
+						if encoded, err := common.Marshal(result); err == nil {
+							return string(encoded), true
+						}
+						return "", true
+					}
+				}
+			}
+			if selectedInlineURL != "" && strings.Contains(trimmed, selectedInlineURL) {
+				return strings.ReplaceAll(value, selectedInlineURL, ""), true
 			}
 		}
 	case map[string]any:
+		changed := false
 		for key, child := range value {
-			value[key] = removeVideoInlinePayload(child, selectedInlineURL)
+			if next, removed := removeVideoInlinePayload(child, selectedInlineURL, textDepth); removed {
+				value[key], changed = next, true
+			}
 		}
+		return value, changed
 	case []any:
+		changed := false
 		for i, child := range value {
-			value[i] = removeVideoInlinePayload(child, selectedInlineURL)
+			if next, removed := removeVideoInlinePayload(child, selectedInlineURL, textDepth); removed {
+				value[i], changed = next, true
+			}
 		}
+		return value, changed
 	}
-	return value
+	return value, false
 }
 
 func truncateBase64(s string) string {

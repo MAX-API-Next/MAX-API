@@ -8,7 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
@@ -49,6 +52,7 @@ func TestVideoProxyServesPersistedInlineContentForOwner(t *testing.T) {
 	response := request(71, false)
 	require.Equal(t, http.StatusOK, response.Code)
 	require.Equal(t, "video/webm", response.Header().Get("Content-Type"))
+	require.Equal(t, "private, no-store", response.Header().Get("Cache-Control"))
 	require.Equal(t, "fixture-video", response.Body.String())
 	partial := request(71, true)
 	require.Equal(t, http.StatusOK, partial.Code)
@@ -76,6 +80,47 @@ func TestWriteVideoDataURLAllowsVideoPayload(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, "video/mp4", recorder.Header().Get("Content-Type"))
 	require.Equal(t, "mp4", recorder.Body.String())
+}
+
+func TestVideoProxyFallsBackToProviderAfterStoredValidationFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/videos/provider-video/content" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "video/webm")
+		w.Header().Set("Cache-Control", "public")
+		_, _ = w.Write([]byte("provider video"))
+	}))
+	defer server.Close()
+	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/provider-video.db"), &gorm.Config{})
+	require.NoError(t, err)
+	pool, err := db.DB()
+	require.NoError(t, err)
+	previousDB, previousCache := model.DB, common.MemoryCacheEnabled
+	oldFetch := *system_setting.GetFetchSetting()
+	model.DB, common.MemoryCacheEnabled = db, false
+	system_setting.GetFetchSetting().EnableSSRFProtection = false // The upstream is an isolated loopback fixture.
+	t.Cleanup(func() {
+		model.DB, common.MemoryCacheEnabled = previousDB, previousCache
+		*system_setting.GetFetchSetting() = oldFetch
+		_ = pool.Close()
+	})
+	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.Channel{}))
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &server.URL, Key: "fixture"}
+	require.NoError(t, db.Create(channel).Error)
+	task := &model.Task{TaskID: "fallback-video", UserId: 71, ChannelId: channel.Id, Status: model.TaskStatusSuccess,
+		PrivateData: model.TaskPrivateData{UpstreamTaskID: "provider-video", InlineVideoDataURL: "data:application/octet-stream;base64,AA=="}}
+	require.NoError(t, db.Create(task).Error)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/videos/fallback-video/content", nil)
+	ctx.Set("id", 71)
+	ctx.Params = gin.Params{{Key: "task_id", Value: task.TaskID}}
+	VideoProxy(ctx)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, "provider video", recorder.Body.String())
+	require.Equal(t, "private, no-store", recorder.Header().Get("Cache-Control"))
 }
 
 func TestWriteVideoDataURLRejectsNonVideoPayload(t *testing.T) {

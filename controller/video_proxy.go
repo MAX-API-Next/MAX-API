@@ -67,18 +67,27 @@ func VideoProxy(c *gin.Context) {
 			fmt.Sprintf("Task is not completed yet, current status: %s", task.Status))
 		return
 	}
+	invalidInline := false
 	if source := task.PrivateData.InlineVideoDataURL; source != "" {
 		if err := writeVideoDataURL(c, source); err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to serve stored video for task %s: %s", taskID, err.Error()))
-			videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to fetch video content")
+			if c.Writer.Written() {
+				return
+			}
+			invalidInline = true
+		} else {
+			return
 		}
-		return
 	}
 
 	channel, err := model.CacheGetChannel(task.ChannelId)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to get channel for task %s: %s", taskID, err.Error()))
-		videoProxyError(c, http.StatusInternalServerError, "server_error", "Failed to retrieve channel information")
+		if invalidInline {
+			videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to fetch video content")
+		} else {
+			videoProxyError(c, http.StatusInternalServerError, "server_error", "Failed to retrieve channel information")
+		}
 		return
 	}
 	baseURL := channel.GetBaseURL()
@@ -132,10 +141,18 @@ func VideoProxy(c *gin.Context) {
 	default:
 		// Video URL is stored in PrivateData.ResultURL (fallback to FailReason for old data)
 		videoURL = task.GetResultURL()
+		if isTaskProxyContentURL(videoURL, task.TaskID) {
+			videoURL, err = fetchVideoTaskResultURL(channel, task)
+			if err != nil {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to re-fetch video result for task %s: %s", taskID, err.Error()))
+				videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to fetch video content")
+				return
+			}
+		}
 	}
 
 	videoURL = strings.TrimSpace(videoURL)
-	if videoURL == "" {
+	if videoURL == "" || isTaskProxyContentURL(videoURL, task.TaskID) {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Video URL is empty for task %s", taskID))
 		videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to fetch video content")
 		return
@@ -183,7 +200,7 @@ func VideoProxy(c *gin.Context) {
 
 	copyVideoResponseHeaders(c, resp)
 
-	c.Writer.Header().Set("Cache-Control", "public, max-age=86400")
+	c.Writer.Header().Set("Cache-Control", "private, no-store")
 	c.Writer.WriteHeader(resp.StatusCode)
 	if _, err = io.Copy(c.Writer, resp.Body); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to stream video content: %s", err.Error()))
@@ -229,7 +246,7 @@ func writeVideoDataURL(c *gin.Context, dataURL string) error {
 	}
 
 	c.Writer.Header().Set("Content-Type", mimeType)
-	c.Writer.Header().Set("Cache-Control", "public, max-age=86400")
+	c.Writer.Header().Set("Cache-Control", "private, no-store")
 	c.Writer.WriteHeader(http.StatusOK)
 	_, err = c.Writer.Write(videoBytes)
 	return err
