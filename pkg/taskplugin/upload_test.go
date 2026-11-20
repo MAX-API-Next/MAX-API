@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,22 +44,46 @@ func TestFormatOneUploadUsesLegacyReaderNumberRange(t *testing.T) {
 	require.Error(t, err)
 }
 
+type uploadMetadataStartContext struct {
+	context.Context
+	onStart func()
+	once    sync.Once
+}
+
+func (ctx *uploadMetadataStartContext) Deadline() (time.Time, bool) {
+	// The parser/compiler use Err only. Program.runInEnvironment first
+	// asks for the deadline when it sets up the metadata runtime watchdog.
+	ctx.once.Do(ctx.onStart)
+	return ctx.Context.Deadline()
+}
+
 func TestLoadUploadContextBoundsRawAndEnvelopeMetadata(t *testing.T) {
+	original, err := LoadUpload(strings.NewReader(validUploadSource), "")
+	require.NoError(t, err)
+	control, err := common.Marshal(PackageDocument{FormatVersion: 3, Manifest: original.Manifest(), Source: validUploadSource})
+	require.NoError(t, err)
+	_, err = LoadUpload(bytes.NewReader(control), "")
+	require.NoError(t, err, "the exact envelope without its loop is valid")
 	source := "for(;;){};" + validUploadSource
-	document, err := common.Marshal(PackageDocument{FormatVersion: 3, Manifest: validManifest(), Source: source})
+	document, err := common.Marshal(PackageDocument{FormatVersion: 3, Manifest: original.Manifest(), Source: source})
 	require.NoError(t, err)
 	for name, data := range map[string][]byte{"raw": []byte(source), "envelope": document} {
 		t.Run(name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+			parent, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			started := time.Now()
+			var started time.Time
+			var timer *time.Timer
+			ctx := &uploadMetadataStartContext{Context: parent, onStart: func() {
+				started = time.Now()
+				timer = time.AfterFunc(100*time.Millisecond, cancel)
+			}}
 			_, err := LoadUploadContext(ctx, bytes.NewReader(data), "")
-			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.NotNil(t, timer, "the metadata runtime must start before cancellation")
+			defer timer.Stop()
+			require.ErrorIs(t, err, context.Canceled)
 			require.Less(t, time.Since(started), 2*time.Second)
 		})
 	}
-	original, err := LoadUpload(bytes.NewReader([]byte(validUploadSource)), "")
-	require.NoError(t, err)
 	bounded, err := LoadUploadContext(t.Context(), bytes.NewReader([]byte(validUploadSource)), "")
 	require.NoError(t, err)
 	require.Equal(t, original.Document(), bounded.Document())

@@ -643,6 +643,24 @@ type cancelAfterCatalogRead struct {
 	checks int
 }
 
+func TestManagementDeletionRefreshCancellationIsNotCommitted(t *testing.T) {
+	store := &memoryCatalogStore{}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	pkg := testPackage(t, validManifest(), "source")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	store.onLoad = func(int) { cancel() }
+	manifest := pkg.Manifest()
+	err = catalog.MutateExpected(ctx, 1, ManagementMutation{Action: "delete", Key: manifest.Key, Version: manifest.Version})
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, ErrCatalogNotCommitted)
+	require.Nil(t, catalog.host.state.Load(), "refresh preserves its fail-closed decision")
+	require.Len(t, store.snapshot.Packages, 1)
+	require.EqualValues(t, 1, store.snapshot.Revision)
+}
+
 func newCancelAfterCatalogRead(t *testing.T) *cancelAfterCatalogRead {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())

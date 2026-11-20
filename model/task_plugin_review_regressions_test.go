@@ -1345,10 +1345,15 @@ func TestPricingAuthorityReusesValidatedPackageWithinSnapshot(t *testing.T) {
 	cached := authority.validatedPackages[entry.Digest]
 	require.NotNil(t, cached)
 	require.Equal(t, entry.Digest, cached.Digest())
-	contexts, err := authority.contextsContext(t.Context(), "catalog-model")
+	retained := *authority
+	retained.plugins = append([]taskplugin.StoredPackage(nil), authority.plugins...)
+	retained.plugins[0].Document = []byte("invalid fallback package")
+	contexts, err := retained.contextsContext(t.Context(), "catalog-model")
 	require.NoError(t, err)
 	require.NotEmpty(t, contexts)
-	require.Same(t, cached, authority.validatedPackages[entry.Digest])
+	retained.validatedPackages = nil
+	_, err = retained.contextsContext(t.Context(), "catalog-model")
+	require.Error(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, err = buildModelPricingEntryContext(ctx, defaultPricingMaps(), authority, "catalog-model")
@@ -1415,7 +1420,10 @@ func TestTaskPrivateJSONAllowsEqualAliasesAndPreservesNumericFacts(t *testing.T)
 	require.NoError(t, fresh.Scan(encoded))
 	again, err := common.Marshal(fresh)
 	require.NoError(t, err)
-	require.JSONEq(t, string(encoded), string(again))
+	var first, second any
+	require.NoError(t, common.UnmarshalUseNumber(encoded, &first))
+	require.NoError(t, common.UnmarshalUseNumber(again, &second))
+	require.Equal(t, first, second)
 	fresh.BillingContext.TaskBillingPlan = nil
 	_, err = common.Marshal(fresh)
 	require.Error(t, err, "incompatible typed replacement must not erase or reinterpret old component history")

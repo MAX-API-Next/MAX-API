@@ -319,8 +319,10 @@ spellings such as `factſ`. Conflicting case aliases for `plugin_key`,
 `selected_plugin_key` or `package_digest` in identity containers are invalid,
 even if one alias uses the canonical spelling. New writes reject them; candidate
 historical rows block deletion with the existing repairable `invalid_task_data`
-response. Equal aliases and single case variants remain supported. Ambiguous
-version aliases cannot pin a version, so their key references remain conservative.
+response. Equal aliases and single case variants remain supported. Conflicting
+case variants such as `version` and `VERSION` likewise require repair. Distinct
+fields `version` and `plugin_version` with different values yield a conservative
+key-only reference.
 Valid task defaults that depend on the removed package are checked under the
 same pricing lock. Deletion cannot newly invalidate such a default, but remains
 allowed when another declared source satisfies it. Prices are never rewritten.
@@ -344,8 +346,10 @@ Repair their metadata from trusted evidence before expecting further processing.
 Applied-finalize recovery uses its own `(submit_time, id)` cursor and captures a
 fixed inclusive upper cursor for each pass. It wraps after reaching that bound
 or an empty page, so a sustained newer backlog cannot starve repaired older rows.
-The per-cycle scan and recovery allowances remain unchanged. Recovery publishes
-already funded terminal evidence against the observed status, version and quota.
+The per-cycle scan allowance is unchanged. Applied-finalize timeout recovery now
+uses at most 50 transitions per sweep. Ordinary video polling can also recover
+already funded terminal evidence before contacting the provider, even when task
+timeouts are disabled. Recovery matches the stored status, version and quota.
 It preserves the stored provider payload and never replays funding.
 When an applied finalize record has no recoverable pending terminal status,
 recovery can instead mark the nonterminal task `FAILURE` with a manual

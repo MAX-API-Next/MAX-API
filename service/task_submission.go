@@ -37,7 +37,7 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 		var err error
 		for attempt := 0; attempt < 3; attempt++ {
 			won, err = model.ClaimTaskSubmitFailureWithSettlement(info.PersistedTaskID, reason, intent)
-			if err == nil || errors.Is(err, model.ErrTaskSubmitRefundIdentityMismatch) || errors.Is(err, model.ErrBillingSettlementOperationConflict) {
+			if err == nil || errors.Is(err, model.ErrTaskSubmitRefundIdentityMismatch) || errors.Is(err, model.ErrBillingSettlementOperationConflict) || errors.Is(err, model.ErrTaskSubmitFailureRecoveryRequiresReview) {
 				break
 			}
 		}

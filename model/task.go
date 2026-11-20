@@ -1274,10 +1274,10 @@ func ClaimTaskSubmitFailure(taskID int64, reason string) (bool, error) {
 // The request-refund intent and terminal claim commit together. The caller may
 // apply the existing operation after commit; a crash leaves durable recovery.
 func ClaimTaskSubmitFailureWithSettlement(taskID int64, reason string, input *BillingSettlementInput) (bool, error) {
-	return claimTaskSubmitFailureWithSettlementDB(DB, taskID, reason, input)
+	return claimTaskSubmitFailureWithSettlementDB(DB, taskID, reason, input, false)
 }
 
-func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason string, input *BillingSettlementInput) (bool, error) {
+func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason string, input *BillingSettlementInput, journalReplay bool) (bool, error) {
 	if taskID <= 0 {
 		return false, nil
 	}
@@ -1304,6 +1304,32 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 		task, err := readTaskSnapshot(withRowLock(tx).Where("id = ?", taskID))
 		if err != nil {
 			return err
+		}
+		if input != nil {
+			// Lock in task-before-journal order, as task writers also consult
+			// the journal while holding the task row. A worker's earlier scan
+			// does not authorize a refund after a manual disposition.
+			var journal TaskSubmitFailureRecovery
+			err := withRowLock(tx).Where("task_id = ?", taskID).Take(&journal).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				if journalReplay {
+					return nil
+				}
+			} else if err != nil {
+				return err
+			} else {
+				if journal.Status != TaskSubmitFailureRecoveryPending {
+					if !journalReplay && journal.Status == TaskSubmitFailureRecoveryManual {
+						return ErrTaskSubmitFailureRecoveryRequiresReview
+					}
+					return nil
+				}
+				observed := *input
+				observed.TokenKey = ""
+				if journal.refundInput() != observed {
+					return ErrBillingSettlementOperationConflict
+				}
+			}
 		}
 		unprojectedRetry := task.PrivateData.AwaitingUpstreamID &&
 			task.Quota == 0 && task.PrivateData.BillingSource == "" && task.PrivateData.SubscriptionId == 0

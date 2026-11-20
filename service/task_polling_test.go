@@ -19,6 +19,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -353,8 +354,18 @@ func TestVideoTerminalPollRejectsNewerSameStatusProgress(t *testing.T) {
 			won, err := row.UpdatePollingProgress(model.TaskStatusInProgress)
 			require.NoError(t, err)
 			require.True(t, won)
+			attempted := false
+			require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register("observe-stale-video-terminal-write", func(tx *gorm.DB) {
+				if candidate, ok := tx.Statement.Model.(*model.Task); ok && candidate.ID == row.ID {
+					if values, ok := tx.Statement.Dest.(map[string]any); ok && values["status"] == model.TaskStatus(model.TaskStatusFailure) {
+						attempted = true
+					}
+				}
+			}))
+			t.Cleanup(func() { _ = model.DB.Callback().Update().Remove("observe-stale-video-terminal-write") })
 			adaptor := &sunoPollingResponseAdaptor{responseBody: `{"code":"success","data":{"status":"FAILURE","fail_reason":"old response","data":{"provider":"older"}}}`}
 			require.NoError(t, updateVideoSingleTask(t.Context(), adaptor, &model.Channel{Type: constant.ChannelTypeDoubaoVideo}, row.TaskID, map[string]*model.Task{row.TaskID: &stale}))
+			require.True(t, attempted)
 			stored, err := model.GetTaskPlaceholderByID(row.ID)
 			require.NoError(t, err)
 			require.Equal(t, row.Status, stored.Status)
@@ -366,6 +377,86 @@ func TestVideoTerminalPollRejectsNewerSameStatusProgress(t *testing.T) {
 			require.Zero(t, intents)
 		})
 	}
+}
+
+func TestVideoPollingRecoversAppliedEvidenceWithoutChannelOrTimeout(t *testing.T) {
+	for _, state := range []string{model.BillingSettlementStatusApplied, model.BillingSettlementStatusManual} {
+		t.Run(state, func(t *testing.T) {
+			truncate(t)
+			timeout := constant.TaskTimeoutMinutes
+			constant.TaskTimeoutMinutes = 0
+			t.Cleanup(func() { constant.TaskTimeoutMinutes = timeout })
+			row := &model.Task{TaskID: "restart-" + state, UserId: 71, Quota: 80, ChannelId: 9899, Status: model.TaskStatusInProgress,
+				Data: []byte(`{"provider":"stored"}`), PrivateData: model.TaskPrivateData{PendingTerminalStatus: model.TaskStatusSuccess,
+					PendingTerminalFinishTime: 99, PendingTerminalResultURL: "https://fixture.invalid/stored"}}
+			require.NoError(t, model.DB.Create(row).Error)
+			key := model.BillingTaskFinalizeOperationKey(row.ID)
+			require.NoError(t, model.DB.Create(&model.BillingSettlement{OperationKey: key, Status: state, TaskID: row.ID,
+				UserID: row.UserId, Source: model.BillingSettlementSourceWallet, TaskQuota: 80, TaskQuotaTarget: 80}).Error)
+			err := updateVideoTasks(t.Context(), "fixture", row.ChannelId, []string{row.TaskID}, map[string]*model.Task{row.TaskID: row})
+			stored, readErr := model.GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, readErr)
+			if state == model.BillingSettlementStatusManual {
+				require.ErrorContains(t, err, "CacheGetChannel failed")
+				require.EqualValues(t, model.TaskStatusInProgress, stored.Status)
+				require.EqualValues(t, model.TaskStatusSuccess, stored.PrivateData.PendingTerminalStatus)
+			} else {
+				require.NoError(t, err)
+				require.EqualValues(t, model.TaskStatusSuccess, stored.Status)
+				require.EqualValues(t, 99, stored.FinishTime)
+				require.Equal(t, "https://fixture.invalid/stored", stored.PrivateData.ResultURL)
+				require.Empty(t, stored.PrivateData.PendingTerminalStatus)
+			}
+			require.JSONEq(t, `{"provider":"stored"}`, string(stored.Data))
+			require.Equal(t, 80, stored.Quota)
+			var records int64
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Where("task_id = ?", row.ID).Count(&records).Error)
+			require.EqualValues(t, 1, records)
+		})
+	}
+}
+
+func TestVideoPollingPublishesAppliedEvidenceAfterTerminalCASLoss(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 961, 962, 963
+	seedUser(t, userID, 900)
+	seedToken(t, tokenID, userID, "synthetic-video-cas-loss", 900)
+	seedChannel(t, channelID)
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5, InputVideoCount: 1,
+	})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	task.UserId, task.ChannelId, task.PrivateData.TokenId = userID, channelID, tokenID
+	task.Status = model.TaskStatusInProgress
+	persistTask(t, task)
+	interleaved := false
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register("interleave-applied-video-terminal-update", func(tx *gorm.DB) {
+		values, ok := tx.Statement.Dest.(map[string]any)
+		if interleaved || tx.Statement.Table != "tasks" || !ok || values["status"] != model.TaskStatus(model.TaskStatusSuccess) || values["updated_at"] == nil {
+			return
+		}
+		interleaved = true
+		tx.AddError(tx.Session(&gorm.Session{NewDB: true}).Exec("UPDATE tasks SET updated_at = updated_at + 1, data = ? WHERE id = ?", []byte(`{"progress":"newer"}`), task.ID).Error)
+	}))
+	t.Cleanup(func() { _ = model.DB.Callback().Update().Remove("interleave-applied-video-terminal-update") })
+	adaptor := &h3TerminalPollingAdaptor{result: &relaycommon.TaskInfo{Status: string(model.TaskStatusSuccess), Usage: &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(5_000), InputVideoDurationMs: h3UsageInt64(5_000), InputImageCount: h3UsageInt64(0),
+		Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
+	}}}
+	ch := &model.Channel{Id: channelID, Type: constant.ChannelTypeMiniMax, Key: "fixture"}
+	require.NoError(t, updateVideoSingleTask(t.Context(), adaptor, ch, task.GetUpstreamTaskID(), map[string]*model.Task{task.GetUpstreamTaskID(): task}))
+	require.True(t, interleaved)
+	stored, err := model.GetTaskPlaceholderByID(task.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, model.TaskStatusSuccess, stored.Status)
+	require.Empty(t, stored.PrivateData.PendingTerminalStatus)
+	require.JSONEq(t, `{"progress":"newer"}`, string(stored.Data))
+	require.Equal(t, 800, stored.Quota)
+	require.EqualValues(t, 1_700, getUserQuota(t, userID))
+	require.Equal(t, 1_700, getTokenRemainQuota(t, tokenID))
+	var records int64
+	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Where("task_id = ?", task.ID).Count(&records).Error)
+	require.EqualValues(t, 1, records)
 }
 
 func TestAppliedTaskRecoveryPreservesSnapshotOnCASLoss(t *testing.T) {

@@ -22,6 +22,8 @@ const (
 	TaskSubmitFailureRecoveryManual   = "manual"
 )
 
+var ErrTaskSubmitFailureRecoveryRequiresReview = errors.New("task submission rejection requires manual review")
+
 // This journal preserves the original refund parameters, never a token key or
 // provider payload. Recorded means the original settlement intent is durable;
 // only BillingSettlement's applied fields prove that money has been refunded.
@@ -166,29 +168,31 @@ func RecordTaskSubmitFailureRecoveryWithStatus(taskID int64, reason string, inpu
 		return nil
 	}
 	db := DB.WithContext(ctx)
-	if db.Dialector.Name() != "sqlite" {
-		if err := db.Transaction(save); err != nil {
-			return "", err
-		}
-		return status, nil
+	if err := retryTaskSubmitFailureTransaction(db, save); err != nil {
+		return "", err
 	}
+	return status, nil
+}
+
+func retryTaskSubmitFailureTransaction(db *gorm.DB, write func(*gorm.DB) error) error {
+	if db.Dialector.Name() != "sqlite" {
+		return db.Transaction(write)
+	}
+	ctx := db.Statement.Context
 	for {
 		if err := billingSettlementSQLiteWriteMu.lockContext(ctx); err != nil {
-			return "", err
+			return err
 		}
-		retry, err := taskSubmitFailureTransaction(db, save)
+		retry, err := taskSubmitFailureTransaction(db, write)
 		billingSettlementSQLiteWriteMu.Unlock()
-		if err == nil {
-			return status, nil
-		}
 		if !retry {
-			return "", err
+			return err
 		}
 		// The failed transaction has rolled back. Release the process gate
 		// before retrying so unrelated local writers can use their own budget.
 		select {
 		case <-ctx.Done():
-			return "", errors.Join(err, ctx.Err())
+			return errors.Join(err, ctx.Err())
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
@@ -292,7 +296,7 @@ func processPendingTaskSubmitFailures() {
 		}
 		claimCtx, cancelClaim := context.WithTimeout(ctx, 2*time.Second)
 		claimDB := DB.WithContext(claimCtx)
-		won, err := claimTaskSubmitFailureWithSettlementDB(claimDB, record.TaskID, record.Reason, &input)
+		won, err := claimTaskSubmitFailureWithSettlementDB(claimDB, record.TaskID, record.Reason, &input, true)
 		cancelClaim()
 		if err != nil {
 			status := TaskSubmitFailureRecoveryPending
@@ -329,7 +333,7 @@ func updateTaskSubmitFailureRecovery(record TaskSubmitFailureRecovery, status st
 	if status == TaskSubmitFailureRecoveryPending {
 		next = time.Now().Add(time.Duration(1<<min(record.Attempts+1, 6)) * time.Second).Unix()
 	}
-	_, err := taskSubmitFailureTransaction(DB.WithContext(ctx), func(conn *gorm.DB) error {
+	err := retryTaskSubmitFailureTransaction(DB.WithContext(ctx), func(conn *gorm.DB) error {
 		return conn.Model(&TaskSubmitFailureRecovery{}).Where("task_id = ? AND status = ?", record.TaskID, TaskSubmitFailureRecoveryPending).
 			Updates(map[string]any{"status": status, "attempts": gorm.Expr("attempts + 1"), "last_error": message, "next_attempt": next, "updated_at": time.Now().Unix()}).Error
 	})

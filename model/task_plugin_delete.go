@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"maps"
 	"math"
 	"strings"
 
@@ -395,6 +396,21 @@ func rejectTaskPluginDefaultRemoval(tx *gorm.DB, pkg *taskplugin.Package, remain
 		return taskplugin.ErrCatalogUnavailable
 	}
 	var before *pricingAuthority
+	draftValues := maps.Clone(values)
+	overridesByModel := make(map[string]map[string]any)
+	for composite, expression := range values[billing_setting.PluginBillingExprOption] {
+		if err := tx.Statement.Context.Err(); err != nil {
+			return errors.Join(taskplugin.ErrCatalogUnavailable, err)
+		}
+		_, model, ok := splitPluginPriceKey(composite)
+		if !ok {
+			continue
+		}
+		if overridesByModel[model] == nil {
+			overridesByModel[model] = make(map[string]any)
+		}
+		overridesByModel[model][composite] = expression
+	}
 	for _, model := range pkg.Manifest().Models {
 		if err := tx.Statement.Context.Err(); err != nil {
 			return errors.Join(taskplugin.ErrCatalogUnavailable, err)
@@ -407,7 +423,8 @@ func rejectTaskPluginDefaultRemoval(tx *gorm.DB, pkg *taskplugin.Package, remain
 		if err != nil || len(keys) == 0 {
 			continue
 		}
-		draft := modelPricingValues(values, model)
+		draftValues[billing_setting.PluginBillingExprOption] = overridesByModel[model]
+		draft := modelPricingValues(draftValues, model)
 		if before == nil {
 			before, err = readPricingAuthority(tx, false)
 			if err != nil {

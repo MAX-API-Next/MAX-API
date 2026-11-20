@@ -61,11 +61,18 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	require.Equal(t, "50%", progress.Progress)
 	require.Greater(t, progress.UpdatedAt, stale.UpdatedAt)
 	progress.Progress = "80%"
-	won, err := progress.UpdatePollingProgress(progress.Status)
+	progress.Status = model.TaskStatusQueued
+	won, err := progress.UpdatePollingProgress(model.TaskStatusInProgress)
 	require.NoError(t, err)
 	require.True(t, won)
 
-	require.NotEmpty(t, tryRealtimeFetch(&stale, false))
+	openAI := stale
+	response := tryRealtimeFetch(&stale, false)
+	require.Contains(t, string(response), `"status":"queued"`)
+	require.Equal(t, "80%", stale.Progress)
+	require.Nil(t, tryRealtimeFetch(&openAI, true))
+	require.EqualValues(t, model.TaskStatusQueued, openAI.Status)
+	require.Equal(t, "80%", openAI.Progress)
 	stored, err := model.GetTaskPlaceholderByID(stale.ID)
 	require.NoError(t, err)
 	require.Equal(t, "80%", stored.Progress)

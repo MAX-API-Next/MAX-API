@@ -489,6 +489,8 @@ func awaitBillingProcessBarrier(t *testing.T, p *billingTestProcess) billingProc
 	defer ticker.Stop()
 	timer := time.NewTimer(30 * time.Second)
 	defer timer.Stop()
+	exited := p.exited
+	childExited := false
 	for {
 		data, err := os.ReadFile(p.ready)
 		if err == nil {
@@ -498,19 +500,15 @@ func awaitBillingProcessBarrier(t *testing.T, p *billingTestProcess) billingProc
 			return event
 		}
 		require.True(t, billingProcessMarkerNotReady(err), "barrier read: %v", err)
-		select {
-		case <-p.exited:
-			// A fast recovery child may publish its marker and exit between our
-			// read and select. Re-read after exit, keeping done for the caller.
-			data, err := os.ReadFile(p.ready)
-			if err == nil {
-				var event billingProcessBarrier
-				require.NoError(t, common.Unmarshal(data, &event))
-				require.Equal(t, p.cmd.Process.Pid, event.PID)
-				return event
-			}
-			require.True(t, billingProcessMarkerNotReady(err), "barrier read after exit: %v", err)
+		if childExited && errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("child exited before its barrier: %v\n%s", <-p.done, p.output.text())
+		}
+		select {
+		case <-exited:
+			// A fast recovery child may publish its marker and exit between our
+			// read and select. Re-read, still retrying a sharing violation.
+			childExited = true
+			exited = nil
 		case <-timer.C:
 			t.Fatalf("child never reached its barrier\n%s", p.output.text())
 		case <-ticker.C:

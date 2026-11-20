@@ -563,6 +563,24 @@ func UpdateVideoTasks(ctx context.Context, platform constant.TaskPlatform, taskC
 
 func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, channelId int, taskIds []string, taskM map[string]*model.Task) error {
 	logger.LogInfo(ctx, fmt.Sprintf("Channel #%d pending video tasks: %d", channelId, len(taskIds)))
+	// Applied funding and its stored evidence can finish without a working
+	// channel, provider adaptor, or timeout sweep.
+	pollIDs := make([]string, 0, len(taskIds))
+	for _, id := range taskIds {
+		task := taskM[id]
+		if hasPendingVideoTerminalEvidence(task) {
+			handled, err := recoverAppliedVideoTaskFromStore(task)
+			if err != nil {
+				logger.LogError(ctx, fmt.Sprintf("failed to recover applied video task %s: %v", task.TaskID, err))
+				continue
+			}
+			if handled {
+				continue
+			}
+		}
+		pollIDs = append(pollIDs, id)
+	}
+	taskIds = pollIDs
 	if len(taskIds) == 0 {
 		return nil
 	}
@@ -595,17 +613,21 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 }
 
 func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *model.Channel, taskId string, taskM map[string]*model.Task) error {
-	baseURL := constant.ChannelBaseURLs[ch.Type]
-	if ch.GetBaseURL() != "" {
-		baseURL = ch.GetBaseURL()
-	}
-	proxy := ch.GetSetting().Proxy
-
 	task := taskM[taskId]
 	if task == nil {
 		logger.LogError(ctx, fmt.Sprintf("Task %s not found in taskM", taskId))
 		return fmt.Errorf("task %s not found", taskId)
 	}
+	if hasPendingVideoTerminalEvidence(task) {
+		if handled, err := recoverAppliedVideoTaskFromStore(task); handled || err != nil {
+			return err
+		}
+	}
+	baseURL := constant.ChannelBaseURLs[ch.Type]
+	if ch.GetBaseURL() != "" {
+		baseURL = ch.GetBaseURL()
+	}
+	proxy := ch.GetSetting().Proxy
 	if err := task.CapturePrivateDataForStatusUpdate(); err != nil {
 		return fmt.Errorf("task %s private history cannot be safely rewritten", taskId)
 	}
@@ -832,6 +854,11 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			shouldSettle = false
 		} else if !won {
 			logger.LogWarn(ctx, fmt.Sprintf("Task %s already transitioned by another process, skip billing", task.TaskID))
+			if taskFinalizeApplied {
+				if _, recoverErr := recoverAppliedVideoTaskFromStore(task); recoverErr != nil {
+					return fmt.Errorf("recover applied video task %s after stale terminal write: %w", task.TaskID, recoverErr)
+				}
+			}
 			shouldRefund = false
 			shouldSettle = false
 		} else {
@@ -851,6 +878,35 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	}
 
 	return nil
+}
+
+func hasPendingVideoTerminalEvidence(task *model.Task) bool {
+	return task != nil && (task.PrivateData.PendingTerminalStatus == model.TaskStatusSuccess || task.PrivateData.PendingTerminalStatus == model.TaskStatusFailure)
+}
+
+func recoverAppliedVideoTaskFromStore(task *model.Task) (bool, error) {
+	latest, err := model.GetTaskPlaceholderByID(task.ID)
+	if err != nil {
+		return false, err
+	}
+	if latest.Status == model.TaskStatusSuccess || latest.Status == model.TaskStatusFailure {
+		*task = *latest
+		return true, nil
+	}
+	if !hasPendingVideoTerminalEvidence(latest) {
+		return false, nil
+	}
+	_, applied, err := taskTerminalSettlementState(latest, true)
+	if err != nil || !applied {
+		return false, err
+	}
+	outcome, err := recoverAppliedTaskTerminalEvidence(latest)
+	if outcome == appliedTaskRecoveryUpdated {
+		*task = *latest
+	}
+	// A lost recovery CAS leaves durable evidence to a fresh poll. This
+	// caller's provider snapshot cannot replace it.
+	return true, err
 }
 
 func persistPendingTaskTerminalEvidence(task *model.Task, result *relaycommon.TaskInfo, now int64) {

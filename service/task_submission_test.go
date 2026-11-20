@@ -215,6 +215,9 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 						require.Zero(t, recoveredSubscription.AmountUsed)
 					}
 					info.Billing.Refund(c) // A delayed original session replays the same durable operation.
+					if funding == "subscription_only" {
+						require.Zero(t, getSubscriptionUsed(t, 51004))
+					}
 				}
 				if outcome == "identity-mismatch" {
 					require.NoError(t, db.Model(row).UpdateColumn("private_data", model.TaskPrivateData{AwaitingUpstreamID: true, BillingSource: info.BillingSource, BillingRequestId: "different-generation", TokenId: info.TokenId, SubscriptionId: info.SubscriptionId}).Error)
@@ -334,6 +337,9 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 				}
 				if recovered {
 					originalBilling.Refund(c)
+					if funding == "subscription_only" {
+						require.Zero(t, getSubscriptionUsed(t, 51004))
+					}
 					require.NoError(t, db.First(&user, info.UserId).Error)
 					require.NoError(t, db.First(&token, info.TokenId).Error)
 					require.EqualValues(t, 1000, user.Quota)

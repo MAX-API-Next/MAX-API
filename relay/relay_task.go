@@ -904,6 +904,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		}
 	}
 
+	observed := *task
 	snap := task.Snapshot()
 
 	// 将上游最新状态更新到 task
@@ -926,7 +927,13 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	// realtime fetch may report terminal data to this caller, but must not make
 	// that state durable without the matching refund/final-settlement intent.
 	if !isTerminalTaskStatus(task.Status) && !snap.Equal(task.Snapshot()) {
-		_, _ = task.UpdatePollingProgress(snap.Status)
+		won, err := task.UpdatePollingProgress(snap.Status)
+		if !won || err != nil {
+			*task = observed
+			if latest, found, readErr := model.GetByTaskId(observed.UserId, observed.TaskID); readErr == nil && found && latest.ID == observed.ID {
+				*task = *latest
+			}
+		}
 	}
 
 	// OpenAI Video API 由调用者的 ConvertToOpenAIVideo 分支处理

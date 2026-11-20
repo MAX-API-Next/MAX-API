@@ -274,7 +274,7 @@ func TestSubmitFailureClaimHonorsDeadlineWhileWaitingForSQLiteWriters(t *testing
 			ctx, cancel := context.WithTimeout(t.Context(), deadline)
 			defer cancel()
 			start := time.Now()
-			won, err := claimTaskSubmitFailureWithSettlementDB(db.WithContext(ctx), row.ID, "known rejection", nil)
+			won, err := claimTaskSubmitFailureWithSettlementDB(db.WithContext(ctx), row.ID, "known rejection", nil, false)
 			if lock == "process" {
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 			} else {
@@ -293,7 +293,7 @@ func TestSubmitFailureClaimHonorsDeadlineWhileWaitingForSQLiteWriters(t *testing
 			require.Equal(t, 5000, busy, "ordinary pool configuration must be preserved")
 			finish()
 			<-released
-			won, err = claimTaskSubmitFailureWithSettlementDB(db.WithContext(t.Context()), row.ID, "known rejection", nil)
+			won, err = claimTaskSubmitFailureWithSettlementDB(db.WithContext(t.Context()), row.ID, "known rejection", nil, false)
 			require.NoError(t, err)
 			require.True(t, won)
 			require.NoError(t, db.First(&stored, row.ID).Error)
@@ -418,14 +418,27 @@ func TestSubmitFailureWorkerCanReplayAfterBusySQLiteCommit(t *testing.T) {
 	var count int64
 	require.NoError(t, reader.Model(&Task{}).Count(&count).Error)
 	attemptedIntent := false
+	statusWrites := 0
+	var readerRelease error
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("release-reader-during-journal-status-retry", func(tx *gorm.DB) {
+		if tx.Statement.Table == "task_submit_failure_recoveries" {
+			statusWrites++
+			if statusWrites == 2 {
+				readerRelease = reader.Rollback().Error
+			}
+		}
+	}))
 	require.NoError(t, db.Callback().Create().After("gorm:create").Register("observe-claim-before-busy-commit", func(tx *gorm.DB) {
 		if tx.Statement.Table == "billing_settlements" && tx.Error == nil {
 			attemptedIntent = true
 		}
 	}))
+	beforeBackoff := time.Now().Unix()
 	processPendingTaskSubmitFailures()
 	require.True(t, attemptedIntent, "the task and intent SQL must have run before the busy commit")
-	require.NoError(t, reader.Rollback().Error)
+	require.Equal(t, 2, statusWrites)
+	require.NoError(t, readerRelease)
+	require.NoError(t, db.Callback().Update().Remove("release-reader-during-journal-status-retry"))
 	stored, err := GetTaskPlaceholderByID(row.ID)
 	require.NoError(t, err)
 	require.EqualValues(t, TaskStatusSubmitted, stored.Status)
@@ -435,9 +448,14 @@ func TestSubmitFailureWorkerCanReplayAfterBusySQLiteCommit(t *testing.T) {
 	var busyTimeout int
 	require.NoError(t, db.Raw("PRAGMA busy_timeout").Scan(&busyTimeout).Error)
 	require.Equal(t, 5000, busyTimeout)
-	processPendingTaskSubmitFailures()
-	processPendingTaskSubmitFailures()
 	var record TaskSubmitFailureRecovery
+	require.NoError(t, db.First(&record, row.ID).Error)
+	require.Equal(t, TaskSubmitFailureRecoveryPending, record.Status)
+	require.Equal(t, 1, record.Attempts)
+	require.GreaterOrEqual(t, record.NextAttempt, beforeBackoff+2)
+	require.NoError(t, db.Model(&record).UpdateColumn("next_attempt", 0).Error)
+	processPendingTaskSubmitFailures()
+	processPendingTaskSubmitFailures()
 	require.NoError(t, db.First(&record, row.ID).Error)
 	require.Equal(t, TaskSubmitFailureRecoveryRecorded, record.Status)
 	var intents []BillingSettlement
@@ -449,6 +467,42 @@ func TestSubmitFailureWorkerCanReplayAfterBusySQLiteCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, TaskStatusFailure, stored.Status)
 	require.Zero(t, stored.Quota)
+}
+
+func TestSubmitFailureWorkerRechecksManualDispositionBeforeClaim(t *testing.T) {
+	db := deletionDB(t)
+	require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+	previous, oldSQLite := DB, common.UsingSQLite
+	DB, common.UsingSQLite = db, true
+	t.Cleanup(func() { DB, common.UsingSQLite = previous, oldSQLite })
+	requestID := "manual-journal-interleave"
+	row := &Task{TaskID: requestID, UserId: 71, Quota: 100, Status: TaskStatusSubmitted,
+		PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingSource: BillingSettlementSourceWallet, BillingRequestId: requestID, TokenId: 72}}
+	require.NoError(t, db.Create(row).Error)
+	input := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey(requestID), Source: BillingSettlementSourceWallet, UserID: 71, TokenID: 72, FundingDelta: -100, TokenDelta: -100}
+	require.NoError(t, RecordTaskSubmitFailureRecovery(row.ID, "definite rejection", input))
+	changed := false
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register("manual-disposition-after-journal-read", func(tx *gorm.DB) {
+		if _, batch := tx.Statement.Dest.(*[]TaskSubmitFailureRecovery); batch && !changed && tx.RowsAffected == 1 {
+			changed = true
+			require.NoError(t, db.Model(&TaskSubmitFailureRecovery{}).Where("task_id = ?", row.ID).UpdateColumn("status", TaskSubmitFailureRecoveryManual).Error)
+		}
+	}))
+	processPendingTaskSubmitFailures()
+	require.True(t, changed)
+	won, err := ClaimTaskSubmitFailureWithSettlement(row.ID, "duplicate rejection", &input)
+	require.ErrorIs(t, err, ErrTaskSubmitFailureRecoveryRequiresReview)
+	require.False(t, won)
+	var record TaskSubmitFailureRecovery
+	require.NoError(t, db.First(&record, row.ID).Error)
+	require.Equal(t, TaskSubmitFailureRecoveryManual, record.Status)
+	var count int64
+	require.NoError(t, db.Model(&BillingSettlement{}).Count(&count).Error)
+	require.Zero(t, count)
+	stored, err := GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, TaskStatusSubmitted, stored.Status)
+	require.Equal(t, 100, stored.Quota)
 }
 
 func TestSubmitFailureJournalReportsExistingManualStatus(t *testing.T) {

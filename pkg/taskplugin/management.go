@@ -127,9 +127,12 @@ func (catalog *Catalog) deleteExpected(ctx context.Context, expected int64, key,
 	}
 	defer catalog.mu.Unlock()
 	if err := managementContextError(ctx); err != nil {
-		return err
+		return errors.Join(ErrCatalogNotCommitted, err)
 	}
 	if err := catalog.refreshLocked(ctx); err != nil {
+		if ctx.Err() != nil {
+			return errors.Join(ErrCatalogNotCommitted, err)
+		}
 		return err
 	}
 	if catalog.snapshot.Revision != expected {
