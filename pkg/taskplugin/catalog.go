@@ -573,6 +573,10 @@ func (catalog *Catalog) updateExpected(ctx context.Context, expected *int64, cha
 	}
 	revision, err := catalog.store.CompareAndSwap(ctx, catalog.snapshot.Revision, next.Packages)
 	if err != nil || revision != next.Revision {
+		var observation *CatalogReadObservationError
+		if errors.As(err, &observation) {
+			catalog.observeRevision(observation.Revision)
+		}
 		if errors.Is(err, ErrCatalogNotCommitted) && !errors.Is(err, ErrCatalogConflict) {
 			return err
 		}
@@ -672,6 +676,7 @@ func catalogVersion(ctx context.Context, snapshot *CatalogSnapshot, key, version
 }
 
 func (catalog *Catalog) Activate(ctx context.Context, key, version string) error {
+	ctx = withRetainedPackageValidation(ctx)
 	return catalog.update(ctx, func(next *CatalogSnapshot) error { return activateCatalogVersion(ctx, next, key, version) })
 }
 

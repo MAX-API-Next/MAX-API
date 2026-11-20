@@ -47,24 +47,7 @@ func TestMain(m *testing.M) {
 	common.BatchUpdateEnabled = false
 	common.LogConsumeEnabled = true
 
-	if err := db.AutoMigrate(
-		&model.Task{},
-		&model.TaskSubmitFailureRecovery{},
-		&model.User{},
-		&model.Token{},
-		&model.Log{},
-		&model.BillingLogReceipt{},
-		&model.Channel{},
-		&model.TopUp{},
-		&model.SubscriptionPlan{},
-		&model.UserSubscription{},
-		&model.SubscriptionPreConsumeRecord{},
-		&model.BillingSettlement{},
-		&model.BillingPreConsumeSelection{},
-		&model.CacheInvalidationTask{},
-		&model.Midjourney{},
-		&model.MidjourneyBillingClaim{},
-	); err != nil {
+	if err := db.AutoMigrate(taskBillingTestModels()...); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
 
@@ -568,6 +551,27 @@ func TestSweepTimedOutTaskWaitsForSubmissionSettlement(t *testing.T) {
 	assert.EqualValues(t, -30, refund.AppliedFundingDelta)
 }
 
+func taskBillingTestModels() []any {
+	return []any{
+		&model.Task{},
+		&model.TaskSubmitFailureRecovery{},
+		&model.User{},
+		&model.Token{},
+		&model.Log{},
+		&model.BillingLogReceipt{},
+		&model.Channel{},
+		&model.TopUp{},
+		&model.SubscriptionPlan{},
+		&model.UserSubscription{},
+		&model.SubscriptionPreConsumeRecord{},
+		&model.BillingSettlement{},
+		&model.BillingPreConsumeSelection{},
+		&model.CacheInvalidationTask{},
+		&model.Midjourney{},
+		&model.MidjourneyBillingClaim{},
+	}
+}
+
 func isolateTaskPluginBillingDatabase(t *testing.T) {
 	t.Helper()
 	isolated, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -575,7 +579,7 @@ func isolateTaskPluginBillingDatabase(t *testing.T) {
 	sqlDB, err := isolated.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	require.NoError(t, isolated.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.User{}, &model.Token{}, &model.Log{}, &model.BillingLogReceipt{}, &model.Channel{}, &model.TopUp{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.BillingSettlement{}, &model.BillingPreConsumeSelection{}, &model.CacheInvalidationTask{}, &model.Midjourney{}, &model.MidjourneyBillingClaim{}, &model.Option{}, &model.TaskPluginCatalogHead{}, &model.TaskPluginVersion{}, &model.TaskPluginDeletion{}))
+	require.NoError(t, isolated.AutoMigrate(append(taskBillingTestModels(), &model.Option{}, &model.TaskPluginCatalogHead{}, &model.TaskPluginVersion{}, &model.TaskPluginDeletion{})...))
 	previousDB, previousLog := model.DB, model.LOG_DB
 	model.DB, model.LOG_DB = isolated, isolated
 	t.Cleanup(func() { model.DB, model.LOG_DB = previousDB, previousLog; _ = sqlDB.Close() })

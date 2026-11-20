@@ -65,10 +65,10 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	awaiting := &model.Task{TaskID: "awaiting-provider", ChannelId: channel.Id, Status: model.TaskStatusSubmitted,
 		PrivateData: model.TaskPrivateData{AwaitingUpstreamID: true}}
 	require.NoError(t, db.Create(awaiting).Error)
-	require.Nil(t, tryRealtimeFetch(awaiting, false))
+	require.Nil(t, tryRealtimeFetch(t.Context(), awaiting, false))
 	require.Zero(t, providerCalls.Load())
 	stale := *task
-	require.NotEmpty(t, tryRealtimeFetch(task, false))
+	require.NotEmpty(t, tryRealtimeFetch(t.Context(), task, false))
 	progress, err := model.GetTaskPlaceholderByID(task.ID)
 	require.NoError(t, err)
 	require.Equal(t, "50%", progress.Progress)
@@ -78,7 +78,7 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, won)
 	sameStatus := stale
-	require.NotEmpty(t, tryRealtimeFetch(&sameStatus, false))
+	require.NotEmpty(t, tryRealtimeFetch(t.Context(), &sameStatus, false))
 	require.Equal(t, "80%", sameStatus.Progress)
 	observedVersion := progress.UpdatedAt
 	sameStored, err := model.GetTaskPlaceholderByID(task.ID)
@@ -91,10 +91,10 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	require.True(t, won)
 
 	openAI := stale
-	response := tryRealtimeFetch(&stale, false)
+	response := tryRealtimeFetch(t.Context(), &stale, false)
 	require.Contains(t, string(response), `"status":"queued"`)
 	require.Equal(t, "80%", stale.Progress)
-	require.Nil(t, tryRealtimeFetch(&openAI, true))
+	require.Nil(t, tryRealtimeFetch(t.Context(), &openAI, true))
 	require.EqualValues(t, model.TaskStatusQueued, openAI.Status)
 	require.Equal(t, "80%", openAI.Progress)
 	stored, err := model.GetTaskPlaceholderByID(stale.ID)
@@ -104,21 +104,21 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	require.NoError(t, db.Model(stored).UpdateColumn("status", model.TaskStatusFailure).Error)
 	providerDone.Store(true)
 	staleTerminal := stale
-	require.Contains(t, string(tryRealtimeFetch(&staleTerminal, false)), `"status":"failed"`, "the settled status wins over a stale realtime success")
+	require.Contains(t, string(tryRealtimeFetch(t.Context(), &staleTerminal, false)), `"status":"failed"`, "the settled status wins over a stale realtime success")
 	require.Equal(t, model.TaskStatus(model.TaskStatusFailure), staleTerminal.Status)
 	providerDone.Store(false)
 	terminal, err := model.GetTaskPlaceholderByID(task.ID)
 	require.NoError(t, err)
 	before := providerCalls.Load()
-	require.Contains(t, string(tryRealtimeFetch(terminal, false)), `"status":"failed"`)
+	require.Contains(t, string(tryRealtimeFetch(t.Context(), terminal, false)), `"status":"failed"`)
 	terminal.PrivateData.ResultURL = "https://fixture.invalid/stored.webm"
 	require.NoError(t, model.DB.Model(terminal).UpdateColumns(map[string]any{
 		"status": model.TaskStatusSuccess, "data": []byte(`{"response":{"videos":[{"mimeType":"video/webm"}]}}`), "private_data": terminal.PrivateData,
 	}).Error)
 	terminal, err = model.GetTaskPlaceholderByID(task.ID)
 	require.NoError(t, err)
-	require.JSONEq(t, `{"code":"success","message":"","data":{"error":null,"format":"video/webm","metadata":null,"status":"succeeded","task_id":"realtime-local","url":"https://fixture.invalid/stored.webm"}}`, string(tryRealtimeFetch(terminal, false)))
-	require.Nil(t, tryRealtimeFetch(terminal, true))
+	require.JSONEq(t, `{"code":"success","message":"","data":{"error":null,"format":"video/webm","metadata":null,"status":"succeeded","task_id":"realtime-local","url":"https://fixture.invalid/stored.webm"}}`, string(tryRealtimeFetch(t.Context(), terminal, false)))
+	require.Nil(t, tryRealtimeFetch(t.Context(), terminal, true))
 	require.Equal(t, before, providerCalls.Load())
 	require.EqualValues(t, model.TaskStatusSuccess, terminal.Status)
 
@@ -140,7 +140,7 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	require.Equal(t, before, providerCalls.Load(), "unreadable private metadata cannot dispatch")
 	older := *terminal
 	older.Status, older.Progress, older.UpdatedAt = model.TaskStatusInProgress, "15%", 100
-	response = tryRealtimeFetch(&older, false)
+	response = tryRealtimeFetch(t.Context(), &older, false)
 	require.Contains(t, string(response), `"status":"processing"`)
 	require.Contains(t, string(response), `"url":""`)
 	require.Equal(t, "80%", older.Progress)
@@ -157,7 +157,7 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	t.Cleanup(func() { _ = db.Callback().Query().Remove(readHook) })
 	observed := *terminal
 	observed.Status, observed.Progress, observed.UpdatedAt = model.TaskStatusInProgress, "15%", 100
-	response = tryRealtimeFetch(&observed, false)
+	response = tryRealtimeFetch(t.Context(), &observed, false)
 	require.Contains(t, string(response), `"format":"video/webm"`)
 	require.Equal(t, "15%", observed.Progress)
 	require.Equal(t, before+2, providerCalls.Load())

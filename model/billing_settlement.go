@@ -112,6 +112,7 @@ type BillingSettlement struct {
 	FundingDelta                    int64  `gorm:"not null;default:0;index:idx_billing_settlement_admission,priority:3;index:idx_billing_settlement_status_funding,priority:2;index:idx_billing_settlement_reconciliation,priority:2"`
 	AppliedFundingDelta             int64  `gorm:"not null;default:0"`
 	TokenDelta                      int64  `gorm:"not null;default:0"`
+	TokenMissingAtApply             bool   `gorm:"not null;default:false" json:"-"`
 	AppliedTokenDelta               int64  `gorm:"not null;default:0"`
 	TaskID                          int64  `gorm:"not null;default:0"`
 	TaskQuota                       int64  `gorm:"not null;default:0"`
@@ -1300,14 +1301,15 @@ func applyBillingSettlementOnce(input BillingSettlementInput, boundTaskID int64)
 		result := tx.Model(&BillingSettlement{}).
 			Where("id = ? AND status = ?", record.ID, BillingSettlementStatusPending).
 			Updates(map[string]interface{}{
-				"applied_funding_delta": appliedFundingDelta,
-				"applied_token_delta":   appliedTokenDelta,
-				"status":                BillingSettlementStatusApplied,
-				"effect_status":         effectStatusAfterSettlement(current.EffectPayload),
-				"last_error":            "",
-				"next_attempt":          0,
-				"updated_at":            time.Now().Unix(),
-				"revision":              gorm.Expr("revision + ?", 1),
+				"applied_funding_delta":  appliedFundingDelta,
+				"applied_token_delta":    appliedTokenDelta,
+				"token_missing_at_apply": input.AllowMissingToken && input.TokenID > 0 && input.TokenDelta != 0 && effectiveTokenID == 0,
+				"status":                 BillingSettlementStatusApplied,
+				"effect_status":          effectStatusAfterSettlement(current.EffectPayload),
+				"last_error":             "",
+				"next_attempt":           0,
+				"updated_at":             time.Now().Unix(),
+				"revision":               gorm.Expr("revision + ?", 1),
 			})
 		if result.Error != nil {
 			return result.Error
@@ -1496,6 +1498,7 @@ func promoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPref
 			"user_blocking_override":            nil,
 			"applied_funding_delta":             0,
 			"applied_token_delta":               0,
+			"token_missing_at_apply":            false,
 		}
 		result := tx.Model(&BillingSettlement{}).
 			Where("id = ? AND revision = ? AND status = ?", record.ID, record.Revision, BillingSettlementStatusManual).

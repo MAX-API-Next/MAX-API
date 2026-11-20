@@ -15,6 +15,13 @@ import (
 	"gorm.io/gorm/schema"
 )
 
+func TestQuotedUnrelatedTableAcceptsMapCreate(t *testing.T) {
+	db := deletionDB(t)
+	require.NoError(t, registerTaskPluginTypedCreateGuard(db))
+	require.NoError(t, db.Exec(`CREATE TABLE "channels archive" (name text)`).Error)
+	require.NoError(t, db.Table(`"channels archive"`).Create(map[string]any{"name": "archived"}).Error)
+}
+
 func TestChannelSettingsRepairDoesNotRewriteMalformedMapping(t *testing.T) {
 	for _, field := range []string{"setting", "other_settings"} {
 		t.Run(field, func(t *testing.T) {

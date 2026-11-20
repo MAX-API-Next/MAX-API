@@ -192,6 +192,7 @@ test('custom uploads may omit or leave the external SHA-256 empty', async () => 
     assert.equal(result.digest, entry.digest)
     assert.equal(calls.length, 1)
     const sent = JSON.parse(calls[0].data)
+    assert.equal(sent.document, upload.document)
     assert.equal(
       Object.hasOwn(sent, 'expected_sha256'),
       Object.hasOwn(upload, 'expected_sha256')

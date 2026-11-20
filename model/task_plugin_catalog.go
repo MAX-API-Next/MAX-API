@@ -447,7 +447,10 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 				var current TaskPluginCatalogHead
 				err := withRowLock(tx).First(&current, 1).Error
 				if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-					return err
+					return errors.Join(taskplugin.ErrCatalogConflict, err)
+				}
+				if err == nil && validTaskPluginCatalogHead(current) && current.Revision > revision {
+					return &taskplugin.CatalogReadObservationError{Revision: current.Revision, Err: taskplugin.ErrCatalogConflict}
 				}
 				if err == nil && current.Revision == revision && !validTaskPluginCatalogHead(current) {
 					return taskplugin.ErrCatalogInvalid

@@ -17,6 +17,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/relay"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
+	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 	"github.com/tidwall/gjson"
 )
@@ -202,6 +203,7 @@ func fetchVideoTaskResultURL(ctx context.Context, channel *model.Channel, task *
 		"action":  task.Action,
 		"model":   task.Properties.UpstreamModelName,
 	})
+	adaptor.Init(&relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: channel.Type, ChannelBaseUrl: baseURL, ApiKey: key}})
 	settings := channel.GetOtherSettings()
 	resp, err := adaptor.FetchTask(baseURL, key, taskcommon.WithTaskProtocolConfig(query, settings), channel.GetSetting().Proxy)
 	if err != nil {
@@ -367,7 +369,7 @@ func buildVideoDataURL(mimeType string, encoding string, base64Data string) stri
 }
 
 func ensureAPIKey(uri, key string) string {
-	if key == "" || uri == "" {
+	if key == "" || uri == "" || strings.HasPrefix(uri, "data:") {
 		return uri
 	}
 	if strings.Contains(uri, "key=") {

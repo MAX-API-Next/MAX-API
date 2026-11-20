@@ -180,7 +180,7 @@ func VideoProxy(c *gin.Context) {
 		videoURL = nativeContentURL
 	}
 	if nativeContentURL != "" && videoURL == nativeContentURL {
-		req.Header.Set("Authorization", "Bearer "+channel.Key)
+		req.Header.Set("Authorization", "Bearer "+getVertexTaskKey(channel, task))
 	}
 
 	fetchSetting := system_setting.GetFetchSetting()

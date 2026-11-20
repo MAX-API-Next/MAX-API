@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -744,6 +745,14 @@ func TestBoundTaskWalletPreConsumeReadFailureLeavesNoReplayDebit(t *testing.T) {
 }
 
 func TestDefiniteRejectionRecoversSubscriptionAfterFailedReserve(t *testing.T) {
+	for _, missingToken := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing_token_%t", missingToken), func(t *testing.T) {
+			testDefiniteRejectionAfterSubscriptionReserve(t, missingToken)
+		})
+	}
+}
+
+func testDefiniteRejectionAfterSubscriptionReserve(t *testing.T, missingToken bool) {
 	isolateTaskPluginBillingDatabase(t)
 	const user, token, subscription = 91, 92, 94
 	const request = "synthetic-subscription-reserve-failure"
@@ -770,11 +779,22 @@ func TestDefiniteRejectionRecoversSubscriptionAfterFailedReserve(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, original)
 	require.EqualValues(t, 1, revision)
+	if missingToken {
+		require.NoError(t, model.DB.Delete(&model.Token{}, token).Error)
+	}
 	CleanupDefiniteTaskSubmitFailure(ctx, info, reason)
 	model.ProcessPendingBillingSettlementsOnce()
 	model.ProcessPendingBillingSettlementsOnce()
 	require.Zero(t, getSubscriptionUsed(t, subscription))
-	require.EqualValues(t, 1000, getTokenRemainQuota(t, token))
+	if missingToken {
+		var receipt model.BillingSettlement
+		require.NoError(t, model.DB.Where("operation_key = ?", original.OperationKey).Take(&receipt).Error)
+		require.True(t, receipt.TokenMissingAtApply)
+		require.Zero(t, receipt.AppliedTokenDelta)
+		require.EqualValues(t, -100, receipt.AppliedFundingDelta)
+	} else {
+		require.EqualValues(t, 1000, getTokenRemainQuota(t, token))
+	}
 	stored, err := model.GetTaskPlaceholderByID(row.ID)
 	require.NoError(t, err)
 	require.EqualValues(t, model.TaskStatusFailure, stored.Status)
@@ -791,5 +811,7 @@ func TestDefiniteRejectionRecoversSubscriptionAfterFailedReserve(t *testing.T) {
 	require.NoError(t, model.DB.Where("task_id = ?", row.ID).Take(&journal).Error)
 	require.Equal(t, model.TaskSubmitFailureRecoveryRecorded, journal.Status)
 	require.Zero(t, getSubscriptionUsed(t, subscription))
-	require.EqualValues(t, 1000, getTokenRemainQuota(t, token))
+	if !missingToken {
+		require.EqualValues(t, 1000, getTokenRemainQuota(t, token))
+	}
 }

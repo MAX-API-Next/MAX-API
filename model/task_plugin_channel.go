@@ -36,6 +36,11 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 			return
 		}
 		table, resolved := taskPluginStatementTable(tx.Statement, dialect == "postgres")
+		// The SQLite INSERT builder quotes Statement.Table directly. GORM leaves
+		// it empty for a raw, quoted identifier containing a space.
+		if dialect == "sqlite" && resolved && tx.Statement.Table == "" && strings.Contains(table, " ") {
+			tx.Statement.Table = table
+		}
 		if explicit, exists := tx.Statement.Clauses["INSERT"]; exists {
 			insert, knownInsert := explicit.Expression.(clause.Insert)
 			if !knownInsert || insert.Table.Raw || insert.Table.Alias != "" || strings.ContainsAny(insert.Table.Name, "\"`[]") {
@@ -86,7 +91,7 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 		table, resolved := taskPluginStatementTable(tx.Statement, dialect == "postgres")
 		if explicit, exists := tx.Statement.Clauses["UPDATE"]; exists {
 			update, known := explicit.Expression.(clause.Update)
-			if !known || update.Table.Raw || update.Table.Alias != "" || strings.ContainsAny(update.Table.Name, "\"\x60[]") {
+			if !known || update.Table.Raw || update.Table.Alias != "" || strings.ContainsAny(update.Table.Name, "\"`[]") {
 				tx.AddError(taskplugin.ErrCatalogInvalid)
 				return
 			}
@@ -146,6 +151,19 @@ func taskPluginStatementTable(statement *gorm.Statement, postgres bool) (string,
 		return statement.Table, true
 	}
 	expression := statement.TableExpr
+	// GORM preserves a quoted raw table name, including embedded spaces.
+	if len(expression.Vars) == 0 {
+		raw := strings.TrimSpace(expression.SQL)
+		if len(raw) >= 2 && strings.ContainsRune("\"[`", rune(raw[0])) {
+			end := raw[0]
+			if end == '[' {
+				end = ']'
+			}
+			if raw[len(raw)-1] == end && !strings.ContainsAny(raw[1:len(raw)-1], "\"`[].") {
+				return raw[1 : len(raw)-1], true
+			}
+		}
+	}
 	parts := strings.Fields(expression.SQL)
 	only := false
 	if len(parts) > 0 && strings.EqualFold(parts[0], "ONLY") {

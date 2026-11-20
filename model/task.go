@@ -133,6 +133,15 @@ func decodeTaskListRows(rows []taskWorkerRow) []*Task {
 	return decoded
 }
 
+func decodeTaskHistoryRows(rows []taskWorkerRow) []*Task {
+	tasks := decodeTaskListRows(rows)
+	for _, task := range tasks {
+		task.PrivateData.InlineVideoDataURL = ""
+		task.PrivateData.PendingTerminalResultURL = ""
+	}
+	return tasks
+}
+
 func selectTaskHistory(query *gorm.DB, includeChannel bool) *gorm.DB {
 	statement := &gorm.Statement{DB: query}
 	if err := statement.Parse(&Task{}); err != nil {
@@ -144,17 +153,20 @@ func selectTaskHistory(query *gorm.DB, includeChannel bool) *gorm.DB {
 	case "postgres":
 		// The json type keeps duplicate members. The strict decoder must see
 		// all retained keys and values after the large media fields are removed.
-		private = `CASE json_typeof(private_data) WHEN 'object' THEN COALESCE((
+		private = `CASE WHEN private_data::text ~ '\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})' THEN private_data::text ELSE CASE json_typeof(private_data) WHEN 'object' THEN COALESCE((
 			SELECT json_object_agg(metadata.key, metadata.value)::text FROM json_each(private_data) AS metadata
 			WHERE translate(metadata.key, 'ABCDEFGHIJKLMNOPQRSTUVWXYZſ', 'abcdefghijklmnopqrstuvwxyzs')
-				NOT IN ('inline_video_data_url', 'pending_terminal_result_url')
-		), '{}') WHEN 'null' THEN NULL ELSE CASE WHEN private_data IS NULL THEN NULL ELSE '[]' END END`
+				NOT IN ('inline_video_data_url', 'pending_terminal_result_url') OR json_typeof(metadata.value) NOT IN ('string','null')
+		), '{}') WHEN 'null' THEN NULL ELSE CASE WHEN private_data IS NULL THEN NULL ELSE '[]' END END END`
 	case "mysql":
 		private = mysqlTaskHistoryPrivateData()
 	default:
 		// Remove matching keys from the original document so the JSON engine
 		// does not replace large numbers or collapse other repeated members.
-		private = `CASE WHEN private_data IS NULL THEN NULL WHEN NOT json_valid(private_data) THEN '[]' ELSE (
+		private = `CASE WHEN private_data IS NULL THEN NULL WHEN NOT json_valid(private_data) THEN '[]'
+			WHEN EXISTS (SELECT 1 FROM json_each(private_data)
+				WHERE lower(replace(key, 'ſ', 's')) IN ('inline_video_data_url', 'pending_terminal_result_url')
+				AND type NOT IN ('text','null')) THEN '[]' ELSE (
 			WITH RECURSIVE
 			media_keys AS (
 				SELECT key, row_number() OVER (ORDER BY id) AS position
@@ -194,7 +206,9 @@ func mysqlTaskHistoryPrivateData() string {
 		match := "JSON_SEARCH(" + keys + ", 'all', _utf8mb4'" + pattern + "' COLLATE utf8mb4_unicode_ci, '!')"
 		ambiguous = append(ambiguous, "JSON_TYPE("+match+") = 'ARRAY'")
 		key := "JSON_UNQUOTE(JSON_EXTRACT(" + keys + ", JSON_UNQUOTE(" + match + ")))"
-		paths = append(paths, "COALESCE(CONCAT('$.', JSON_QUOTE("+key+")), '$."+name+"')")
+		path := "COALESCE(CONCAT('$.', JSON_QUOTE(" + key + ")), '$." + name + "')"
+		paths = append(paths, path)
+		ambiguous = append(ambiguous, "JSON_TYPE(JSON_EXTRACT(private_data, "+path+")) NOT IN ('STRING','NULL')")
 	}
 	return "CASE WHEN " + strings.Join(ambiguous, " OR ") + " THEN '[]' ELSE JSON_REMOVE(private_data, " + strings.Join(paths, ", ") + ") END"
 }
@@ -368,6 +382,8 @@ func GenerateTaskID() string {
 	return "task_" + key
 }
 
+var errTaskPrivateDataUnreadable = errors.New("unreadable task private data")
+
 func (p *TaskPrivateData) Scan(val interface{}) error {
 	var raw []byte
 	switch value := val.(type) {
@@ -377,7 +393,7 @@ func (p *TaskPrivateData) Scan(val interface{}) error {
 	case string:
 		raw = []byte(value)
 	default:
-		return fmt.Errorf("unsupported task private data storage type %T", val)
+		return fmt.Errorf("%w: unsupported storage type %T", errTaskPrivateDataUnreadable, val)
 	}
 	var next TaskPrivateData
 	if len(raw) == 0 {
@@ -385,7 +401,7 @@ func (p *TaskPrivateData) Scan(val interface{}) error {
 		return nil
 	}
 	if err := common.Unmarshal(raw, &next); err != nil {
-		return err
+		return errors.Join(errTaskPrivateDataUnreadable, err)
 	}
 	*p = next
 	return nil
@@ -485,7 +501,7 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 		return nil
 	}
 
-	return decodeTaskListRows(rows)
+	return decodeTaskHistoryRows(rows)
 }
 
 func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
@@ -531,7 +547,7 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 		return nil
 	}
 
-	return decodeTaskListRows(rows)
+	return decodeTaskHistoryRows(rows)
 }
 
 func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
@@ -943,7 +959,7 @@ func (t *Task) RewritePlaceholder(observed Task) error {
 		}
 		// Claim first, then retain that row lock until metadata and readback commit.
 		// This also makes unchanged retries independent of MySQL matched-row mode.
-		if err := tx.Model(t).Select("*").Omit("updated_at").Updates(t).Error; err != nil {
+		if err := tx.Model(t).Select("*").Omit("updated_at", "last_polled_at").Updates(t).Error; err != nil {
 			return err
 		}
 		var persisted struct{ UpdatedAt int64 }
@@ -1357,6 +1373,8 @@ func (t *Task) UpdateWithSettlementIntent(input *BillingSettlementInput) error {
 	})
 	if err == nil {
 		t.UpdatedAt = updatedAt
+		t.updatedAtWasNull = false
+		t.quotaWasNull = false
 	}
 	return err
 }
@@ -1449,8 +1467,9 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 	}
 	won := false
 	var recordedInput BillingSettlementInput
-	statusOnly := recovery != nil && input == nil
 	claim := func(tx *gorm.DB) error {
+		input := input
+		statusOnly := recovery != nil && input == nil
 		if tx.Dialector.Name() == "sqlite" {
 			// Reserve the WAL writer before any read establishes a snapshot.
 			// This keeps unrelated commits from making the terminal claim lose
@@ -1490,7 +1509,7 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 					observed = *input
 					observed.TokenKey = ""
 				}
-				if journal.refundInput() != observed || journal.FailedReserveRevision != failedReserve {
+				if journal.refundInput() != observed || journal.FailedReserveRevision != failedReserve || journal.BoundWalletOutcomeUnknown != (recovery != nil && recovery.BoundWalletOutcomeUnknown) {
 					return ErrBillingSettlementOperationConflict
 				}
 				pendingJournal = &journal
@@ -1530,7 +1549,8 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 			}
 			if failedReserve != 0 {
 				if found && expected.Source == BillingSettlementSourceSubscription && existing.Status == BillingSettlementStatusApplied {
-					if existing.AppliedFundingDelta != existing.FundingDelta || existing.AppliedTokenDelta != existing.TokenDelta {
+					missingToken := existing.TokenMissingAtApply && existing.AllowMissingToken && expected.AllowMissingToken && existing.TokenID > 0 && existing.AppliedTokenDelta == 0
+					if existing.AppliedFundingDelta != existing.FundingDelta || existing.AppliedTokenDelta != existing.TokenDelta && !missingToken {
 						return ErrBillingSettlementOperationConflict
 					}
 					err = verifyTaskSubmitSubscriptionRefund(tx, task.PrivateData.BillingRequestId, &expected, failedReserve, "refunded")
@@ -1555,9 +1575,27 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 			}
 			return complete(TaskSubmitFailureRecoveryRecorded)
 		}
-		if statusOnly {
-			if err := verifyTaskSubmitFailureStatusOnly(tx, task, *recovery); err != nil {
+		if input != nil && recovery != nil && recovery.BoundWalletOutcomeUnknown {
+			if input.Source != BillingSettlementSourceWallet || failedReserve != 0 {
+				return ErrTaskSubmitRefundIdentityMismatch
+			}
+			identity, err := taskSubmitFailureStatusRecoveryRecord(taskID, task.PrivateData.BillingRequestId, reason, input.UserID, input.TokenID)
+			if err != nil || identity.OperationKey != input.OperationKey {
+				return ErrTaskSubmitRefundIdentityMismatch
+			}
+			// The bound debit takes this same task lock before writing either receipt.
+			err = verifyTaskSubmitFailureStatusOnly(tx, task, identity, true)
+			if err == nil {
+				statusOnly, input = true, nil
+			} else if !errors.Is(err, ErrTaskSubmitRefundIdentityMismatch) {
 				return err
+			}
+		}
+		if statusOnly {
+			if recovery.FundingDelta == 0 {
+				if err := verifyTaskSubmitFailureStatusOnly(tx, task, *recovery, false); err != nil {
+					return err
+				}
 			}
 			if task.Status == TaskStatusFailure && !task.SubmitTimeoutRetainedFunding && task.FailReason == reason {
 				return complete(TaskSubmitFailureStatusRecorded)

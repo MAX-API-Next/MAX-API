@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -794,7 +795,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	isKlingOfficialAPI := c.GetBool("kling_official_route") || strings.HasPrefix(c.Request.RequestURI, "/kling/v1/videos/")
 
 	// Gemini/Vertex 支持实时查询：用户 fetch 时直接从上游拉取最新状态
-	if realtimeResp := tryRealtimeFetch(originTask, isOpenAIVideoAPI); len(realtimeResp) > 0 {
+	if realtimeResp := tryRealtimeFetch(c.Request.Context(), originTask, isOpenAIVideoAPI); len(realtimeResp) > 0 {
 		respBody = realtimeResp
 		return
 	}
@@ -860,7 +861,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 // tryRealtimeFetch 尝试从上游实时拉取 Gemini/Vertex 任务状态。
 // 仅当渠道类型为 Gemini 或 Vertex 时触发；其他渠道或出错时返回 nil。
 // 当非 OpenAI Video API 时，还会构建自定义格式的响应体。
-func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
+func tryRealtimeFetch(ctx context.Context, task *model.Task, isOpenAIVideoAPI bool) []byte {
 	terminal := isTerminalTaskStatus(task.Status)
 	if task.PrivateDataUnreadable() || terminal && isOpenAIVideoAPI {
 		return nil
@@ -899,11 +900,11 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		return nil
 	}
 
-	resp, err := adaptor.FetchTask(baseURL, channelModel.Key, taskcommon.WithTaskProtocolConfig(map[string]any{
+	resp, err := adaptor.FetchTask(baseURL, channelModel.Key, taskcommon.WithTaskProtocolConfig(taskcommon.WithTaskQueryContext(ctx, map[string]any{
 		"task_id": upstreamTaskID,
 		"action":  task.Action,
 		"model":   task.Properties.UpstreamModelName,
-	}, channelModel.GetOtherSettings()), proxy)
+	}), channelModel.GetOtherSettings()), proxy)
 	if err != nil || resp == nil {
 		return nil
 	}
@@ -948,13 +949,13 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	// Terminal transitions must go through the polling settlement path. The
 	// realtime fetch may report terminal data to this caller, but must not make
 	// that state durable without the matching refund/final-settlement intent.
-	if isTerminalTaskStatus(task.Status) {
+	if isTerminalTaskStatus(task.Status) || snap.Equal(task.Snapshot()) {
 		if latest, found, readErr := model.GetUserTaskStatusByID(observed.UserId, observed.TaskID); readErr == nil && found &&
 			latest.ID == observed.ID && isTerminalTaskStatus(latest.Status) {
 			*task = *latest
 			body = latest.Data
 		}
-	} else if !snap.Equal(task.Snapshot()) {
+	} else {
 		won, err := task.UpdatePollingProgress(snap.Status)
 		if !won || err != nil {
 			*task = observed

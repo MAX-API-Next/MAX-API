@@ -662,9 +662,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	// gateways may return code=success while their nested data.data object is
 	// the actual provider result; consuming the outer wrapper first would keep
 	// the task in the gateway's local IN_PROGRESS state forever.
-	if configuredResult, ok, parseErr := taskcommon.ParseConfiguredTaskResult(responseBody, ch.GetOtherSettings()); parseErr != nil {
+	configuredResult, configured, parseErr := taskcommon.ParseConfiguredTaskResult(responseBody, ch.GetOtherSettings())
+	if parseErr != nil {
 		return fmt.Errorf("parse configured task result failed for task %s: %w", taskId, parseErr)
-	} else if ok {
+	} else if configured {
 		taskResult = configuredResult
 	} else {
 		// try parse as MAX API response format
@@ -698,7 +699,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			taskResult.Url = ""
 		}
 	}
-	task.Data = redactVideoResponseBody(responseBody, vertex || inlineResult != "", inlineResult)
+	task.Data = redactVideoResponseBody(responseBody, vertex || configured || inlineResult != "", inlineResult)
 
 	logger.LogDebug(ctx, "updateVideoSingleTask status=%s progress=%s", taskResult.Status, taskResult.Progress)
 

@@ -1,11 +1,15 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
+	"github.com/MAX-API-Next/MAX-API/relay"
+	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +91,7 @@ func TestWriteVideoDataURLAllowsVideoPayload(t *testing.T) {
 
 func TestVideoProxyFallsBackToProviderAfterStoredValidationFails(t *testing.T) {
 	const fixtureVideo = "provider video"
+	largeVideo := bytes.Repeat([]byte{0x31}, 13<<20)
 	service.InitHttpClient()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -101,6 +106,8 @@ func TestVideoProxyFallsBackToProviderAfterStoredValidationFails(t *testing.T) {
 		case "/jobs/configured-video":
 			encoded := base64.StdEncoding.EncodeToString([]byte(fixtureVideo))
 			_, _ = w.Write([]byte(`{"status":"completed","result":{"url":"data:video/webm;base64,` + encoded + `"}}`))
+		case "/jobs/" + taskcommon.EncodeLocalTaskID("operations/gemini-poll-video"):
+			_, _ = w.Write([]byte(`{"status":"completed","result":{"url":"data:video/webm;base64,` + base64.StdEncoding.EncodeToString(largeVideo) + `"}}`))
 		case "/jobs/oversized-video":
 			encoded := base64.StdEncoding.EncodeToString([]byte(fixtureVideo))
 			_, _ = w.Write([]byte(`{"status":"completed","result":{"url":"data:video/webm;base64,` + encoded + `"},"other_output":"` + strings.Repeat("X", (1<<20)+128) + `"}`))
@@ -142,6 +149,7 @@ func TestVideoProxyFallsBackToProviderAfterStoredValidationFails(t *testing.T) {
 		channelType    int
 	}{
 		{name: "native", channelType: constant.ChannelTypeOpenAI},
+		{name: "gemini-poll", channelType: constant.ChannelTypeGemini, settings: configured},
 		{name: "configured", channelType: constant.ChannelTypeSora, settings: configured},
 		{name: "oversized", channelType: constant.ChannelTypeSora, settings: configured},
 		{name: "invalid-provider-inline", channelType: constant.ChannelTypeSora, settings: configured},
@@ -156,11 +164,31 @@ func TestVideoProxyFallsBackToProviderAfterStoredValidationFails(t *testing.T) {
 				settings := (&model.Channel{OtherSettings: configured}).GetOtherSettings()
 				require.Empty(t, configuredInlineVideoFromPrefix([]byte(`{"result":{"url":"data:video/webm;base64,AA==`), settings))
 			}
-			channel := &model.Channel{Type: tc.channelType, BaseURL: &server.URL, Key: "fixture", OtherSettings: tc.settings}
+			channel := &model.Channel{Type: tc.channelType, BaseURL: &server.URL, Key: "different-channel-credential", OtherSettings: tc.settings}
 			require.NoError(t, db.Create(channel).Error)
 			task := &model.Task{TaskID: "fallback-" + tc.name, UserId: 71, ChannelId: channel.Id, Status: model.TaskStatusSuccess,
-				PrivateData: model.TaskPrivateData{UpstreamTaskID: tc.name + "-video", InlineVideoDataURL: "data:application/octet-stream;base64,AA=="}}
+				PrivateData: model.TaskPrivateData{Key: "fixture", UpstreamTaskID: tc.name + "-video", InlineVideoDataURL: "data:application/octet-stream;base64,AA=="}}
+			if tc.name == "gemini-poll" {
+				task.Status = model.TaskStatusInProgress
+				task.PrivateData.UpstreamTaskID = taskcommon.EncodeLocalTaskID("operations/gemini-poll-video")
+				task.PrivateData.InlineVideoDataURL = ""
+				task.Platform = constant.TaskPlatform(strconv.Itoa(tc.channelType))
+			}
 			require.NoError(t, db.Create(task).Error)
+			if tc.name == "gemini-poll" {
+				require.NoError(t, db.AutoMigrate(&model.BillingSettlement{}, &model.TaskSubmitFailureRecovery{}))
+				previous := service.GetTaskAdaptorFunc
+				service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor { return relay.GetTaskAdaptor(platform) }
+				t.Cleanup(func() { service.GetTaskAdaptorFunc = previous })
+				require.NoError(t, UpdateVideoTaskAll(t.Context(), task.Platform, map[int][]string{channel.Id: {task.TaskID}}, map[string]*model.Task{task.TaskID: task}))
+				stored, found, err := model.GetByTaskId(task.UserId, task.TaskID)
+				require.NoError(t, err)
+				require.True(t, found)
+				require.EqualValues(t, model.TaskStatusSuccess, stored.Status)
+				require.Empty(t, stored.PrivateData.InlineVideoDataURL)
+				require.Less(t, len(stored.Data), 2048)
+				require.Contains(t, stored.GetResultURL(), model.TaskVideoProxyPath(task.TaskID))
+			}
 			recorder := httptest.NewRecorder()
 			ctx, _ := gin.CreateTestContext(recorder)
 			ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/videos/"+task.TaskID+"/content", nil)
@@ -168,7 +196,11 @@ func TestVideoProxyFallsBackToProviderAfterStoredValidationFails(t *testing.T) {
 			ctx.Params = gin.Params{{Key: "task_id", Value: task.TaskID}}
 			VideoProxy(ctx)
 			require.Equal(t, http.StatusOK, recorder.Code)
-			require.Equal(t, fixtureVideo, recorder.Body.String())
+			if tc.name == "gemini-poll" {
+				require.True(t, bytes.Equal(largeVideo, recorder.Body.Bytes()))
+			} else {
+				require.Equal(t, fixtureVideo, recorder.Body.String())
+			}
 			require.Equal(t, "video/webm", recorder.Header().Get("Content-Type"))
 			require.Equal(t, "private, no-store", recorder.Header().Get("Cache-Control"))
 		})

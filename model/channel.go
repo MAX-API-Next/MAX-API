@@ -1216,7 +1216,10 @@ func (channel *Channel) GetSetting() dto.ChannelSettings {
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
 			if channel.Id > 0 {
-				_ = channelSettingRepairQuery(DB, channel.Id, "setting", observed).Update("setting", nil).Error
+				result := channelSettingRepairQuery(DB, channel.Id, "setting", observed).Update("setting", nil)
+				if result.Error == nil && result.RowsAffected == 1 {
+					cacheUpdateChannel(channel, true)
+				}
 			}
 		}
 	}
@@ -1248,7 +1251,10 @@ func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
 			if channel.Id > 0 {
-				_ = channelSettingRepairQuery(DB, channel.Id, "settings", observed).Update("settings", "{}").Error
+				result := channelSettingRepairQuery(DB, channel.Id, "settings", observed).Update("settings", "{}")
+				if result.Error == nil && result.RowsAffected == 1 {
+					cacheUpdateChannel(channel, true)
+				}
 			}
 		}
 	}

@@ -481,6 +481,13 @@ and token.
 When an existing free placeholder first retries on a paid wallet route,
 creation of the initial debit record and the wallet/token charge are atomic.
 A failed transaction leaves no new debit for a worker to replay.
+Upgrade the recovery journal and settlement tables before starting the new
+workers. The journal uses `bound_wallet_outcome_unknown` to distinguish a lost
+commit response. The worker locks the original task and checks the debit and
+funding selection before closing a rolled-back attempt or recording a refund.
+An applied subscription refund records `token_missing_at_apply` when its token
+was already absent. Older receipts without this evidence retain manual review
+when their token amounts differ.
 
 ### PostgreSQL reserve index for upgrades
 

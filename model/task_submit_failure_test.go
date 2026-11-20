@@ -226,6 +226,35 @@ func TestPostgresBoundWalletDebitCanRecoverAfterLostCommitResponse(t *testing.T)
 	})
 }
 
+func TestBoundWalletRejectionAfterRollbackClosesOnlyTheTask(t *testing.T) {
+	db := deletionDB(t)
+	previous := DB
+	DB = db
+	t.Cleanup(func() { DB = previous })
+	require.NoError(t, db.AutoMigrate(&BillingSettlement{}, &BillingPreConsumeSelection{}, &SubscriptionPreConsumeRecord{}))
+	for _, quota := range []int64{0, 100} {
+		request := fmt.Sprintf("bound-rollback-%d", quota)
+		task := Task{TaskID: request, UserId: 71, Status: TaskStatusSubmitted, PrivateData: TaskPrivateData{
+			AwaitingUpstreamID: true, BillingSource: BillingSettlementSourceWallet, BillingRequestId: request, TokenId: 72,
+		}}
+		require.NoError(t, db.Create(&task).Error)
+		refund := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey(request), Source: BillingSettlementSourceWallet, UserID: 71, TokenID: 72, FundingDelta: -quota, TokenDelta: -quota, AllowMissingToken: true}
+		for i := 0; i < 2; i++ {
+			require.NoError(t, RecoverBoundWalletRejection(t.Context(), task.ID, "rejected", refund))
+		}
+		var journal TaskSubmitFailureRecovery
+		require.NoError(t, db.Where("task_id = ?", task.ID).Take(&journal).Error)
+		require.Equal(t, TaskSubmitFailureStatusRecorded, journal.Status)
+		require.True(t, journal.BoundWalletOutcomeUnknown)
+		stored, err := GetTaskPlaceholderByID(task.ID)
+		require.NoError(t, err)
+		require.EqualValues(t, TaskStatusFailure, stored.Status)
+		var entries int64
+		require.NoError(t, db.Model(&BillingSettlement{}).Count(&entries).Error)
+		require.Zero(t, entries)
+	}
+}
+
 func TestDeferredTaskSubmitRejectionPersistsAfterWriterBecomesAvailable(t *testing.T) {
 	db := deletionDB(t)
 	previousDB, previousSQLite := DB, common.UsingSQLite

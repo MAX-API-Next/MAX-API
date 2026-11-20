@@ -23,7 +23,7 @@ func TestTaskListsIsolateUnreadableMetadataAndKeepScope(t *testing.T) {
 				"upstream_task_id":"healthy-provider","result_url":"/v1/videos/healthy-list/content",
 				"Inline_Video_Data_URL":"data:video/mp4;base64,AA==","Pending_Terminal_Reſult_URL":"data:video/mp4;base64,AA=="
 			}`).Error)
-			var raw any = []byte(`{"upstream_task_id":42}`)
+			var raw any = []byte(`{"result_url":"/hidden","inline_video_data_url":42}`)
 			if asText {
 				raw = `{"upstream_task_id":42}`
 			}

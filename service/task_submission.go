@@ -37,7 +37,12 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 			if recovery, ok := candidate.(boundWalletDebitRecovery); ok && recovery.taskID == info.PersistedTaskID &&
 				recovery.refund.OperationKey == model.BillingRequestFinalizeOperationKey(info.RequestId) &&
 				recovery.refund.UserID == info.UserId && recovery.refund.TokenID == info.TokenId {
-				intent, statusOnly = &recovery.refund, false
+				ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+				defer cancel()
+				if err := model.RecoverBoundWalletRejection(ctx, recovery.taskID, reason, recovery.refund); err != nil {
+					common.SysError(fmt.Sprintf("bound wallet rejection requires reconciliation: task_id=%d result=%s", recovery.taskID, taskSubmitRecoveryErrorCategory(err)))
+				}
+				return
 			}
 		}
 		if info.Billing != nil {

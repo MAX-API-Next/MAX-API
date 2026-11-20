@@ -109,6 +109,8 @@ func (catalog *Catalog) MutateExpected(ctx context.Context, expected int64, muta
 	}
 	if mutation.Action == "install" {
 		ctx = withRetainedPackageValidation(ctx, mutation.Package)
+	} else if mutation.Action == "activate" {
+		ctx = withRetainedPackageValidation(ctx)
 	}
 	return catalog.updateExpected(ctx, &expected, func(next *CatalogSnapshot) error {
 		switch mutation.Action {

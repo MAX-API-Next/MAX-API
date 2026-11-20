@@ -89,7 +89,7 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		if err := ctx.Err(); err != nil {
 			return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, err)
 		}
-		return 0, taskplugin.ErrCatalogUnavailable
+		return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, taskplugin.ErrCatalogUnavailable)
 	}
 	commitAttempted := false
 	err := db.Transaction(func(tx *gorm.DB) error {
@@ -108,6 +108,9 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 			return invalidTaskPluginDeletionObservation(0, taskplugin.ErrCatalogInvalid)
 		}
 		if head.Revision != revision {
+			if head.Revision > revision && validTaskPluginCatalogHead(head) {
+				return invalidTaskPluginDeletionObservation(head.Revision, taskplugin.ErrCatalogConflict)
+			}
 			return taskplugin.ErrCatalogConflict
 		}
 		deletions, err := loadTaskPluginDeletions(tx)
@@ -661,6 +664,7 @@ func guardTaskPluginPersistenceValue(tx *gorm.DB, task *Task, value any) error {
 			return taskplugin.ErrCatalogInvalid
 		}
 	} else {
+		private.InlineVideoDataURL = ""
 		serialized, err = common.Marshal(private)
 		if err != nil {
 			return taskplugin.ErrCatalogInvalid

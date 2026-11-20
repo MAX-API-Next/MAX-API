@@ -50,6 +50,7 @@ type TaskSubmitFailureRecovery struct {
 	TokenID                         int    `gorm:"not null;default:0"`
 	FundingDelta                    int64  `gorm:"not null"`
 	TokenDelta                      int64  `gorm:"not null"`
+	BoundWalletOutcomeUnknown       bool   `gorm:"not null;default:false"`
 	FailedReserveRevision           int64  `gorm:"column:failed_wallet_reserve_revision;not null;default:0"`
 	SubscriptionPreConsumeRequestID string `gorm:"type:varchar(64)"`
 	FinalizeSubscriptionPreConsume  bool   `gorm:"not null;default:false"`
@@ -341,6 +342,46 @@ func RecordTaskSubmitFailureRecovery(taskID int64, reason string, input BillingS
 	return err
 }
 
+// RecoverBoundWalletRejection preserves the origin of an ambiguous wallet commit
+// so the worker can distinguish an absent debit from an unproved refund.
+func RecoverBoundWalletRejection(ctx context.Context, taskID int64, reason string, refund BillingSettlementInput) error {
+	if DB == nil || refund.Source != BillingSettlementSourceWallet {
+		return ErrTaskSubmitRefundIdentityMismatch
+	}
+	var record TaskSubmitFailureRecovery
+	var err error
+	input := &refund
+	if refund.FundingDelta == 0 && refund.TokenDelta == 0 {
+		requestID, found := strings.CutPrefix(refund.OperationKey, billingRequestOperationPrefix)
+		requestID, suffix := strings.CutSuffix(requestID, billingRequestFinalizeSuffix)
+		if !found || !suffix {
+			return ErrTaskSubmitRefundIdentityMismatch
+		}
+		record, err = taskSubmitFailureStatusRecoveryRecord(taskID, requestID, reason, refund.UserID, refund.TokenID)
+		input = nil
+	} else {
+		record, err = taskSubmitFailureRecoveryRecord(taskID, reason, refund, 0)
+	}
+	if err != nil {
+		return err
+	}
+	record.BoundWalletOutcomeUnknown = true
+	status, err := recordTaskSubmitFailureRecovery(record)
+	if err != nil {
+		if taskSubmitJournalCanRetry(err) && queueDeferredTaskSubmitFailure(DB, record) {
+			return nil
+		}
+		return err
+	}
+	if status == TaskSubmitFailureRecoveryManual {
+		return ErrTaskSubmitFailureRecoveryRequiresReview
+	}
+	if status == TaskSubmitFailureRecoveryPending {
+		_, err = claimTaskSubmitFailureWithSettlementDB(DB.WithContext(ctx), taskID, record.Reason, input, &record, true)
+	}
+	return err
+}
+
 // RecordTaskSubmitFailureRecoveryWithStatus also reports the current durable
 // journal status, including an existing record that still requires review.
 func RecordTaskSubmitFailureRecoveryWithStatus(taskID int64, reason string, input BillingSettlementInput) (string, error) {
@@ -388,7 +429,7 @@ func (record TaskSubmitFailureRecovery) statusOnlyRequestID() (string, error) {
 	return requestID, nil
 }
 
-func verifyTaskSubmitFailureStatusOnly(tx *gorm.DB, task *Task, record TaskSubmitFailureRecovery) error {
+func verifyTaskSubmitFailureStatusOnly(tx *gorm.DB, task *Task, record TaskSubmitFailureRecovery, requireAbsentDebit bool) error {
 	requestID, err := record.statusOnlyRequestID()
 	if err != nil {
 		return err
@@ -416,10 +457,10 @@ func verifyTaskSubmitFailureStatusOnly(tx *gorm.DB, task *Task, record TaskSubmi
 		}
 		return ErrTaskSubmitRefundIdentityMismatch
 	}
-	return verifyTaskSubmitFailureZeroDebit(tx, task, record, requestID)
+	return verifyTaskSubmitFailureZeroDebit(tx, task, record, requestID, requireAbsentDebit)
 }
 
-func verifyTaskSubmitFailureZeroDebit(tx *gorm.DB, task *Task, record TaskSubmitFailureRecovery, requestID string) error {
+func verifyTaskSubmitFailureZeroDebit(tx *gorm.DB, task *Task, record TaskSubmitFailureRecovery, requestID string, requireAbsentDebit bool) error {
 	var selection BillingPreConsumeSelection
 	selectionErr := withRowLock(tx).Where("request_id = ?", requestID).Take(&selection).Error
 	if selectionErr != nil && !errors.Is(selectionErr, gorm.ErrRecordNotFound) {
@@ -430,8 +471,14 @@ func verifyTaskSubmitFailureZeroDebit(tx *gorm.DB, task *Task, record TaskSubmit
 	if debitErr != nil && !errors.Is(debitErr, gorm.ErrRecordNotFound) {
 		return debitErr
 	}
-	if selectionErr != nil && debitErr != nil && task.PrivateData.BillingSource == "" {
-		return nil // The request used no billing session.
+	if requireAbsentDebit {
+		if selectionErr != nil && debitErr != nil {
+			return nil
+		}
+		return ErrTaskSubmitRefundIdentityMismatch
+	}
+	if selectionErr != nil && debitErr != nil && (task.PrivateData.BillingSource == "" || record.BoundWalletOutcomeUnknown) {
+		return nil // No billing session, or the bound wallet debit provably rolled back.
 	}
 	if selectionErr != nil || debitErr != nil || selection.Source != BillingSettlementSourceWallet ||
 		selection.UserID != record.UserID || selection.TokenID != record.TokenID || selection.EffectiveQuota != 0 ||
@@ -468,7 +515,7 @@ func storeTaskSubmitFailureRecovery(ctx context.Context, db *gorm.DB, record Tas
 		if err := withRowLock(tx).First(&existing, "task_id = ?", record.TaskID).Error; err != nil {
 			return err
 		}
-		if existing.refundInput() != record.refundInput() || existing.FailedReserveRevision != record.FailedReserveRevision {
+		if existing.refundInput() != record.refundInput() || existing.FailedReserveRevision != record.FailedReserveRevision || existing.BoundWalletOutcomeUnknown != record.BoundWalletOutcomeUnknown {
 			return ErrBillingSettlementOperationConflict
 		}
 		status = existing.Status
@@ -501,11 +548,15 @@ func QueueTaskSubmitFailureRecovery(taskID int64, requestID, reason string, user
 	if err != nil {
 		return false
 	}
+	return queueDeferredTaskSubmitFailure(db, record)
+}
+
+func queueDeferredTaskSubmitFailure(db *gorm.DB, record TaskSubmitFailureRecovery) bool {
 	deferredTaskSubmitFailures.Lock()
 	defer deferredTaskSubmitFailures.Unlock()
 	for _, item := range deferredTaskSubmitFailures.items {
-		if item.db == db && item.record.TaskID == taskID {
-			return item.record.refundInput() == record.refundInput() && item.record.FailedReserveRevision == record.FailedReserveRevision
+		if item.db == db && item.record.TaskID == record.TaskID {
+			return item.record.refundInput() == record.refundInput() && item.record.FailedReserveRevision == record.FailedReserveRevision && item.record.BoundWalletOutcomeUnknown == record.BoundWalletOutcomeUnknown
 		}
 	}
 	const maxDeferredRejections = 128
@@ -533,18 +584,19 @@ func retryDeferredTaskSubmitFailures(ctx context.Context, db *gorm.DB) {
 		attempt, cancel := context.WithTimeout(ctx, time.Second)
 		_, err := storeTaskSubmitFailureRecovery(attempt, db, item.record)
 		cancel()
-		if taskSubmitJournalCanRetry(err) {
-			continue
-		}
+		retry := taskSubmitJournalCanRetry(err)
 		deferredTaskSubmitFailures.Lock()
 		for i, current := range deferredTaskSubmitFailures.items {
 			if current == item {
 				deferredTaskSubmitFailures.items = append(deferredTaskSubmitFailures.items[:i], deferredTaskSubmitFailures.items[i+1:]...)
+				if retry {
+					deferredTaskSubmitFailures.items = append(deferredTaskSubmitFailures.items, item)
+				}
 				break
 			}
 		}
 		deferredTaskSubmitFailures.Unlock()
-		if err != nil {
+		if err != nil && !retry {
 			common.SysError(fmt.Sprintf("deferred task rejection conflicts with the journal: task_id=%d", item.record.TaskID))
 		}
 	}
@@ -688,7 +740,7 @@ func processPendingTaskSubmitFailures() {
 		cancelClaim()
 		if err != nil {
 			status := TaskSubmitFailureRecoveryPending
-			if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, ErrTaskSubmitRefundIdentityMismatch) ||
+			if errors.Is(err, errTaskPrivateDataUnreadable) || errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, ErrTaskSubmitRefundIdentityMismatch) ||
 				errors.Is(err, ErrBillingSettlementOperationConflict) || errors.Is(err, ErrTaskFinalizeOwned) {
 				status = TaskSubmitFailureRecoveryManual
 			}
@@ -773,7 +825,11 @@ func LookupTaskSubmitFailureReview(ctx context.Context, taskID int64) ([]taskSub
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
-	proof, found, err := lookupRetainedWalletDebit(db, taskID)
+	proof, found, err := lookupRetainedWalletDebit(db, taskID, row.OperationKey, len(results) > 0)
+	if len(results) > 0 && errors.Is(err, errTaskPrivateDataUnreadable) {
+		common.SysError(fmt.Sprintf("manual task review has unreadable wallet evidence: task_id=%d", taskID))
+		return results, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -790,7 +846,7 @@ func LookupTaskSubmitFailureReview(ctx context.Context, taskID int64) ([]taskSub
 	return results, nil
 }
 
-func lookupRetainedWalletDebit(db *gorm.DB, taskID int64) (taskSubmitFailureReviewItem, bool, error) {
+func lookupRetainedWalletDebit(db *gorm.DB, taskID int64, journalOperation string, hasJournal bool) (taskSubmitFailureReviewItem, bool, error) {
 	var proof taskSubmitFailureReviewItem
 	task, err := readTaskSnapshot(db.Where("id = ? AND status = ? AND submit_timeout_retained_funding = ?", taskID, TaskStatusFailure, true))
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -803,6 +859,9 @@ func lookupRetainedWalletDebit(db *gorm.DB, taskID int64) (taskSubmitFailureRevi
 		return proof, false, nil
 	}
 	requestID := task.PrivateData.BillingRequestId
+	if hasJournal && journalOperation != BillingRequestFinalizeOperationKey(requestID) {
+		return proof, false, nil
+	}
 	var debit BillingSettlement
 	err = db.Where("operation_key = ?", billingRequestOperationPrefix+requestID+":pre-consume").Take(&debit).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {

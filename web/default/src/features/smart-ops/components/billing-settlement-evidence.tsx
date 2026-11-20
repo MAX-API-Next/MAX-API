@@ -134,11 +134,12 @@ export function BillingSettlementEvidence(
   const [lookupOpen, setLookupOpen] = useState(false)
   const [manualTaskId, setManualTaskId] = useState('')
   const [requestedTaskId, setRequestedTaskId] = useState('')
+  const validTaskId =
+    /^[1-9][0-9]*$/.test(manualTaskId) &&
+    (manualTaskId.length < 19 ||
+      (manualTaskId.length === 19 && manualTaskId <= '9223372036854775807'))
   const lookupEnabled =
-    props.canCompleteManualTask &&
-    lookupOpen &&
-    requestedTaskId !== '' &&
-    props.data !== undefined
+    lookupOpen && requestedTaskId !== '' && props.data !== undefined
   const manualLookup = useQuery({
     queryKey: [
       ...SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
@@ -168,10 +169,16 @@ export function BillingSettlementEvidence(
         key.length === prefix.length + 1 &&
         prefix.every((part, index) => key[index] === part)
       ) {
-        void refreshManualLookup({ cancelRefetch: false })
+        const query = {
+          queryKey: [...prefix, 'task-submit-failure', requestedTaskId],
+          exact: true,
+        }
+        void queryClient
+          .cancelQueries(query)
+          .then(() => queryClient.refetchQueries({ ...query, type: 'active' }))
       }
     })
-  }, [lookupEnabled, queryClient, refreshManualLookup])
+  }, [lookupEnabled, queryClient, requestedTaskId])
   const [selectedTargets, setSelectedTargets] = useState<
     Map<number, BillingSettlementReviewTarget>
   >(() => new Map())
@@ -612,84 +619,85 @@ export function BillingSettlementEvidence(
               </AlertDescription>
             </Alert>
           )}
-        {props.canCompleteManualTask && (
-          <div>
-            <Button
-              type='button'
-              size='sm'
-              variant='outline'
-              aria-expanded={lookupOpen}
-              onClick={() => setLookupOpen((open) => !open)}
-            >
-              {t('Task ID')}
-            </Button>
-            {lookupOpen && (
-              <>
-                <form
-                  className='mt-2 flex flex-wrap gap-2'
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    if (/^[1-9][0-9]*$/.test(manualTaskId)) {
-                      if (manualTaskId === requestedTaskId)
-                        void refreshManualLookup()
-                      else setRequestedTaskId(manualTaskId)
-                    }
-                  }}
+        <div>
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            aria-expanded={lookupOpen}
+            onClick={() => setLookupOpen((open) => !open)}
+          >
+            {t('Task ID')}
+          </Button>
+          {lookupOpen && (
+            <>
+              <form
+                className='mt-2 flex flex-wrap gap-2'
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  if (validTaskId) {
+                    if (manualTaskId === requestedTaskId)
+                      void refreshManualLookup()
+                    else setRequestedTaskId(manualTaskId)
+                  }
+                }}
+              >
+                <Input
+                  className='h-8 w-full sm:max-w-56'
+                  aria-label={t('Task ID')}
+                  placeholder={t('Task ID')}
+                  inputMode='numeric'
+                  value={manualTaskId}
+                  onChange={(event) =>
+                    setManualTaskId(event.target.value.trim())
+                  }
+                />
+                <Button
+                  type='submit'
+                  size='sm'
+                  variant='outline'
+                  disabled={manualLookup.isFetching || !validTaskId}
                 >
-                  <Input
-                    className='h-8 w-full sm:max-w-56'
-                    aria-label={t('Task ID')}
-                    placeholder={t('Task ID')}
-                    inputMode='numeric'
-                    value={manualTaskId}
-                    onChange={(event) =>
-                      setManualTaskId(event.target.value.trim())
-                    }
-                  />
-                  <Button
-                    type='submit'
-                    size='sm'
-                    variant='outline'
-                    disabled={
-                      manualLookup.isFetching ||
-                      !/^[1-9][0-9]*$/.test(manualTaskId)
-                    }
-                  >
-                    {t('Search')}
-                  </Button>
-                </form>
-                <div role='status'>
-                  {manualLookup.isError &&
-                    t('We could not load billing reconciliation details.')}
-                  {!manualLookup.isFetching &&
-                    manualLookup.isSuccess &&
-                    (manualLookup.data ? (
-                      <div className='flex flex-wrap gap-x-3 text-sm break-words'>
+                  {t('Search')}
+                </Button>
+              </form>
+              <div role='status'>
+                {manualTaskId !== '' &&
+                  !validTaskId &&
+                  t('Count must be between {{min}} and {{max}}', {
+                    min: 1,
+                    max: '9223372036854775807',
+                  })}
+                {manualLookup.isError &&
+                  t('We could not load billing reconciliation details.')}
+                {!manualLookup.isFetching &&
+                  manualLookup.isSuccess &&
+                  (manualLookup.data ? (
+                    <div className='flex flex-wrap gap-x-3 text-sm break-words'>
+                      <span>
+                        {t('Task ID')} {manualLookup.data.task_id}{' '}
+                        {manualLookup.data.last_error}
+                      </span>
+                      {manualLookup.data.request_id && (
                         <span>
-                          {t('Task ID')} {manualLookup.data.task_id}{' '}
-                          {manualLookup.data.last_error}
+                          {t('Request ID')}{' '}
+                          <code>{manualLookup.data.request_id}</code>
                         </span>
-                        {manualLookup.data.request_id && (
-                          <span>
-                            {t('Request ID')}{' '}
-                            <code>{manualLookup.data.request_id}</code>
-                          </span>
-                        )}
-                        {manualLookup.data.wallet_debit && (
-                          <span>
-                            {t('Quota')}{' '}
-                            <code>{manualLookup.data.wallet_debit}</code>
-                          </span>
-                        )}
-                      </div>
-                    ) : (
-                      t('No results found.')
-                    ))}
-                </div>
-              </>
-            )}
-          </div>
-        )}
+                      )}
+                      {manualLookup.data.wallet_debit && (
+                        <span>
+                          {t('Quota')}{' '}
+                          <code>{manualLookup.data.wallet_debit}</code>
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    t('No results found.')
+                  ))}
+              </div>
+            </>
+          )}
+        </div>
 
         {props.data.items.length === 0 ? (
           <Alert>

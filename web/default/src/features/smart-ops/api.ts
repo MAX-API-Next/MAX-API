@@ -128,6 +128,9 @@ export async function getTaskSubmitFailureReview(
 }> {
   const response = await api.get('/api/smart-ops/billing-settlements', {
     params: { task_submit_failure_id: taskId },
+    skipErrorHandler: true,
+    skipBusinessError: true,
+    disableDuplicate: true,
     signal,
   })
   return response.data
