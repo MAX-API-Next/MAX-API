@@ -540,3 +540,62 @@ func TestZeroChargeWalletSessionRecoversDefiniteRejection(t *testing.T) {
 		})
 	}
 }
+
+func TestLateDefiniteRejectionRefundsUnprojectedWalletReservesOnce(t *testing.T) {
+	for _, replay := range []bool{false, true} {
+		t.Run(map[bool]string{false: "direct", true: "journal"}[replay], func(t *testing.T) {
+			isolateTaskPluginBillingDatabase(t)
+			resetTimedOutTaskSweepCursorForTest(t)
+			oldTimeout := constant.TaskTimeoutMinutes
+			constant.TaskTimeoutMinutes = 1
+			t.Cleanup(func() { constant.TaskTimeoutMinutes = oldTimeout })
+			const userID, tokenID = 87, 88
+			const tokenKey = "synthetic-wallet-reserve"
+			const request = "late-wallet-%_reserve"
+			seedUser(t, userID, 1000)
+			seedToken(t, tokenID, userID, tokenKey, 1000)
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			info := &relaycommon.RelayInfo{RequestId: request, UserId: userID, TokenId: tokenID, TokenKey: tokenKey, ForcePreConsume: true,
+				UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+			require.Nil(t, PreConsumeBilling(ctx, 0, info))
+			row := &model.Task{TaskID: request, UserId: userID, Status: model.TaskStatusSubmitted, SubmitTime: time.Now().Add(-2 * time.Minute).Unix(),
+				PrivateData: model.TaskPrivateData{BillingSource: BillingSourceWallet, AwaitingUpstreamID: true, BillingRequestId: request, TokenId: tokenID}}
+			require.NoError(t, model.DB.Create(row).Error)
+			info.PersistedTaskID = row.ID
+			require.NoError(t, info.Billing.Reserve(20))
+			require.NoError(t, info.Billing.Reserve(30))
+			require.EqualValues(t, 970, getUserQuota(t, userID))
+			require.EqualValues(t, 970, getTokenRemainQuota(t, tokenID))
+			sweepTimedOutTasks(t.Context())
+			expired, err := model.GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, err)
+			require.EqualValues(t, model.TaskStatusFailure, expired.Status)
+			require.True(t, expired.SubmitTimeoutRetainedFunding)
+			require.EqualValues(t, 970, getUserQuota(t, userID), "the timeout alone cannot authorize a refund")
+			const reason = "definite rejection after the timeout"
+			if replay {
+				intent, err := info.Billing.(*BillingSession).PrepareRefundSettlement()
+				require.NoError(t, err)
+				require.NotNil(t, intent)
+				require.NoError(t, model.RecordTaskSubmitFailureRecovery(row.ID, reason, *intent))
+				model.ProcessPendingBillingSettlementsOnce()
+				model.ProcessPendingBillingSettlementsOnce()
+			} else {
+				CleanupDefiniteTaskSubmitFailure(ctx, info, reason)
+				CleanupDefiniteTaskSubmitFailure(ctx, info, reason)
+			}
+			stored, err := model.GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, err)
+			require.Equal(t, expired.FinishTime, stored.FinishTime)
+			require.False(t, stored.SubmitTimeoutRetainedFunding)
+			require.Equal(t, reason, stored.FailReason)
+			var refund model.BillingSettlement
+			require.NoError(t, model.DB.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(request)).Take(&refund).Error)
+			require.Equal(t, model.BillingSettlementStatusApplied, refund.Status)
+			require.EqualValues(t, -30, refund.AppliedFundingDelta)
+			require.EqualValues(t, -30, refund.AppliedTokenDelta)
+			require.EqualValues(t, 1000, getUserQuota(t, userID))
+			require.EqualValues(t, 1000, getTokenRemainQuota(t, tokenID))
+		})
+	}
+}

@@ -359,8 +359,12 @@ for (const repair of [
   })
 }
 
-test('a confirmed deletion removes the closed opener before refresh and keeps focus usable', async () => {
+test('a confirmed deletion restores focus from another control in the removed card', async () => {
   const f = fixture()
+  f.state.entries[0] = {
+    ...entry,
+    models: ['one', 'two', 'three', 'four', 'five'],
+  }
   const other = {
     ...entry,
     key: 'other',
@@ -370,7 +374,12 @@ test('a confirmed deletion removes the closed opener before refresh and keeps fo
   }
   f.state.entries.push(other)
   const v = f.view()
-  const opener = await v.findByRole('button', { name: 'Details kling@1.2.0' })
+  const opener = await v.findByRole('button', {
+    name: 'Declared models: +1 kling@1.2.0',
+  })
+  const details = v.getByRole('button', {
+    name: 'Details kling@1.2.0',
+  }) as HTMLButtonElement
   const receipt = deferred<void>()
   const refresh = deferred<Awaited<ReturnType<TaskPluginAPI['read']>>>()
   f.api.read = () => refresh.promise
@@ -396,6 +405,8 @@ test('a confirmed deletion removes the closed opener before refresh and keeps fo
     fireEvent.keyDown(document, { key: 'Escape', code: 'Escape', keyCode: 27 })
     await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
     await waitFor(() => assert.equal(document.activeElement, opener))
+    await act(async () => details.focus())
+    assert.equal(document.activeElement, details)
     receipt.resolve(undefined)
     await v.findByText('Loading...')
     await waitFor(() =>

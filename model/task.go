@@ -1217,7 +1217,15 @@ func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expect
 		return false, err
 	}
 	t.UpdatedAt = updatedAt
+	t.updatedAtWasNull = false
 	return true, nil
+}
+
+// A request can reserve funds before a retry rewrites its zero-quota task.
+func (t *Task) MayHaveUnprojectedSubmissionFunding() bool {
+	private := t.PrivateData
+	return t.Quota == 0 && private.AwaitingUpstreamID && private.BillingRequestId != "" && private.SubscriptionId == 0 &&
+		(private.BillingSource == "" || private.BillingSource == BillingSettlementSourceWallet)
 }
 
 // UpdateWithSettlementIntent persists upstream task identity and the request's
@@ -1424,8 +1432,7 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 				return complete(TaskSubmitFailureStatusRecorded)
 			}
 		}
-		unprojectedRetry := task.PrivateData.AwaitingUpstreamID &&
-			task.Quota == 0 && task.PrivateData.BillingSource == "" && task.PrivateData.SubscriptionId == 0
+		unprojectedRetry := task.MayHaveUnprojectedSubmissionFunding()
 		lateRejection := task.Status == TaskStatusFailure && task.SubmitTimeoutRetainedFunding &&
 			task.PrivateData.AwaitingUpstreamID && (task.Quota > 0 || unprojectedRetry) && (input != nil || statusOnly)
 		if task.Status == TaskStatusSuccess || task.Status == TaskStatusFailure && !lateRejection || task.PrivateData.UpstreamTaskID != "" {
@@ -1438,6 +1445,9 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 				return ErrTaskSubmitRefundIdentityMismatch
 			}
 			if !unprojectedRetry && (input.Source != task.PrivateData.BillingSource || input.SubscriptionID != task.PrivateData.SubscriptionId) {
+				return ErrTaskSubmitRefundIdentityMismatch
+			}
+			if input.Source == BillingSettlementSourceSubscription && input.SubscriptionPreConsumeRequestID != task.PrivateData.BillingRequestId {
 				return ErrTaskSubmitRefundIdentityMismatch
 			}
 		}

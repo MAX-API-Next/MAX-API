@@ -84,6 +84,7 @@ function PluginCard(props: {
   return (
     <article
       aria-label={`${props.entry.name} ${props.entry.version}`}
+      data-task-plugin-entry={`${props.entry.key}@${props.entry.version}`}
       className='bg-card flex min-w-0 flex-col rounded-xl border transition-shadow hover:shadow-sm'
     >
       <div className='flex items-start justify-between gap-3 p-5 pb-3'>
@@ -309,7 +310,10 @@ export function PluginCatalog({ onSearchReady, ...props }: Props) {
               </TableHeader>
               <TableBody>
                 {rows.map((entry) => (
-                  <TableRow key={`${entry.key}@${entry.version}`}>
+                  <TableRow
+                    key={`${entry.key}@${entry.version}`}
+                    data-task-plugin-entry={`${entry.key}@${entry.version}`}
+                  >
                     <TableCell className='min-w-52 py-4'>
                       <PluginIdentity entry={entry} />
                     </TableCell>

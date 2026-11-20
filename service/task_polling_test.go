@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -384,10 +385,12 @@ func TestVideoPollingRecoversAppliedEvidenceWithoutChannelOrTimeout(t *testing.T
 	for _, test := range []struct {
 		name, state, rawURL string
 		wantProxy           bool
+		isVertex            bool
 	}{
 		{name: "applied", state: model.BillingSettlementStatusApplied, rawURL: "https://fixture.invalid/stored"},
 		{name: "empty URL", state: model.BillingSettlementStatusApplied, wantProxy: true},
 		{name: "data URL", state: model.BillingSettlementStatusApplied, rawURL: "data:video/mp4;base64,AA==", wantProxy: true},
+		{name: "Vertex data URL", state: model.BillingSettlementStatusApplied, rawURL: "data:video/mp4;base64,AA==", wantProxy: true, isVertex: true},
 		{name: "manual", state: model.BillingSettlementStatusManual, rawURL: "https://fixture.invalid/stored"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -398,6 +401,9 @@ func TestVideoPollingRecoversAppliedEvidenceWithoutChannelOrTimeout(t *testing.T
 			row := &model.Task{TaskID: "restart-" + test.state, UserId: 71, Quota: 80, ChannelId: 9899, Status: model.TaskStatusInProgress,
 				Data: []byte(`{"provider":"stored"}`), PrivateData: model.TaskPrivateData{PendingTerminalStatus: model.TaskStatusSuccess,
 					PendingTerminalFinishTime: 99, PendingTerminalResultURL: test.rawURL}}
+			if test.isVertex {
+				row.Platform = constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeVertexAi))
+			}
 			require.NoError(t, model.DB.Create(row).Error)
 			key := model.BillingTaskFinalizeOperationKey(row.ID)
 			require.NoError(t, model.DB.Create(&model.BillingSettlement{OperationKey: key, Status: test.state, TaskID: row.ID,
@@ -418,7 +424,7 @@ func TestVideoPollingRecoversAppliedEvidenceWithoutChannelOrTimeout(t *testing.T
 					wantURL = taskcommon.BuildProxyURL(row.TaskID)
 				}
 				require.Equal(t, wantURL, stored.PrivateData.ResultURL)
-				if strings.HasPrefix(test.rawURL, "data:") {
+				if !test.isVertex && strings.HasPrefix(test.rawURL, "data:") {
 					require.Equal(t, test.rawURL, stored.PrivateData.InlineVideoDataURL)
 				} else {
 					require.Empty(t, stored.PrivateData.InlineVideoDataURL)
@@ -456,6 +462,41 @@ func TestVideoProgressPreservesPendingTerminalPayload(t *testing.T) {
 	require.JSONEq(t, `{"result":"stored terminal body"}`, string(stored.Data))
 	require.EqualValues(t, model.TaskStatusSuccess, stored.PrivateData.PendingTerminalStatus)
 	require.Equal(t, "https://fixture.invalid/stored", stored.PrivateData.PendingTerminalResultURL)
+}
+
+func TestVertexCompletionKeepsInlinePayloadOutOfTaskRow(t *testing.T) {
+	inline := "data:video/mp4;base64," + strings.Repeat("AAAA", 4096)
+	for _, test := range []struct {
+		name, statusPath, URLPath, expected string
+		payload                             any
+	}{
+		{name: "object", statusPath: "status", URLPath: "nested.0.video", expected: `{"nested":[{"video":""}],"status":"completed"}`,
+			payload: map[string]any{"nested": []any{map[string]any{"video": inline}}, "status": "completed"}},
+		{name: "array", statusPath: "0.status", URLPath: "0.video", expected: `[{"video":"","status":"completed"}]`,
+			payload: []any{map[string]any{"video": " " + inline + "\n", "status": "completed"}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			truncate(t)
+			task := &model.Task{TaskID: "vertex-retrievable", UserId: 71, Status: model.TaskStatusInProgress,
+				Platform: constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeVertexAi))}
+			require.NoError(t, model.DB.Create(task).Error)
+			body, err := common.Marshal(test.payload)
+			require.NoError(t, err)
+			channel := &model.Channel{Type: constant.ChannelTypeVertexAi}
+			channel.SetOtherSettings(dto.ChannelOtherSettings{TaskProtocol: taskcommon.TaskProtocolGenericVideo,
+				TaskProtocolConfig: &dto.TaskProtocolConfig{StatusPath: test.statusPath, ResultURLPaths: []string{test.URLPath}}})
+			adaptor := &sunoPollingResponseAdaptor{responseBody: string(body)}
+			require.NoError(t, updateVideoSingleTask(t.Context(), adaptor, channel, task.TaskID,
+				map[string]*model.Task{task.TaskID: task}))
+			stored, err := model.GetTaskPlaceholderByID(task.ID)
+			require.NoError(t, err)
+			require.EqualValues(t, model.TaskStatusSuccess, stored.Status)
+			require.Equal(t, taskcommon.BuildProxyURL(task.TaskID), stored.GetResultURL())
+			require.Empty(t, stored.PrivateData.InlineVideoDataURL)
+			require.Empty(t, stored.PrivateData.PendingTerminalResultURL)
+			require.JSONEq(t, test.expected, string(stored.Data))
+		})
+	}
 }
 
 type onFetchTaskPollingAdaptor struct {

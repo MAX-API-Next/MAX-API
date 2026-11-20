@@ -28,6 +28,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -166,7 +167,12 @@ type TaskPluginDeletion struct {
 	Models    taskPluginModelIndex `json:"-"`
 }
 
-type TaskPluginCatalogStore struct{ db *gorm.DB }
+type TaskPluginCatalogStore struct {
+	db *gorm.DB
+
+	identityMu    sync.RWMutex
+	identityCache map[string]string
+}
 
 func NewTaskPluginCatalogStore(db *gorm.DB) *TaskPluginCatalogStore {
 	if db == nil {
@@ -201,7 +207,11 @@ func lockTaskPluginCatalogHead(tx *gorm.DB) error {
 		// Bootstrap only a genuinely empty catalog. A restored orphan must
 		// remain invalid instead of receiving a new revision from an unrelated write.
 		for _, table := range []any{&TaskPluginVersion{}, &TaskPluginDeletion{}} {
-			if !tx.Migrator().HasTable(table) {
+			present, err := taskPluginTableAvailable(tx, table)
+			if err != nil {
+				return err
+			}
+			if !present {
 				continue
 			}
 			var count int64
@@ -227,7 +237,7 @@ func (store *TaskPluginCatalogStore) SchemaReady(ctx context.Context) bool {
 	return db.Migrator().HasTable(&TaskPluginCatalogHead{}) && db.Migrator().HasTable(&TaskPluginVersion{})
 }
 
-func loadTaskPluginVersions(tx *gorm.DB) ([]taskplugin.StoredPackage, []string, error) {
+func (store *TaskPluginCatalogStore) loadTaskPluginVersions(tx *gorm.DB) ([]taskplugin.StoredPackage, []string, error) {
 	var records []TaskPluginVersion
 	if err := tx.Order("identity").Find(&records).Error; err != nil {
 		return nil, nil, err
@@ -238,7 +248,7 @@ func loadTaskPluginVersions(tx *gorm.DB) ([]taskplugin.StoredPackage, []string, 
 		result[i] = taskplugin.StoredPackage{Document: []byte(record.Document), Digest: record.Digest, Active: record.Active, Enabled: record.Enabled, Revoked: record.Revoked}
 	}
 	for i, entry := range result {
-		identity, err := taskPluginStorageIdentityContext(tx.Statement.Context, entry)
+		identity, err := store.retainedIdentity(tx.Statement.Context, entry)
 		if tx.Statement.Context.Err() != nil {
 			return result, nil, errors.Join(taskplugin.ErrCatalogUnavailable, tx.Statement.Context.Err())
 		}
@@ -248,6 +258,40 @@ func loadTaskPluginVersions(tx *gorm.DB) ([]taskplugin.StoredPackage, []string, 
 		identities = append(identities, identity)
 	}
 	return result, identities, nil
+}
+
+// An identity is cached only after full validation. A read still verifies
+// the current bytes and persisted row identity, including after a restore.
+func (store *TaskPluginCatalogStore) retainedIdentity(ctx context.Context, entry taskplugin.StoredPackage) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	store.identityMu.RLock()
+	identity := store.identityCache[entry.Digest]
+	store.identityMu.RUnlock()
+	if identity != "" && len(entry.Document) <= taskplugin.MaxPackageBytes {
+		sum := sha256.Sum256(entry.Document)
+		if hex.EncodeToString(sum[:]) == entry.Digest {
+			return identity, nil
+		}
+	}
+	identity, err := taskPluginStorageIdentityContext(ctx, entry)
+	if err != nil {
+		return "", err
+	}
+	store.identityMu.Lock()
+	if store.identityCache == nil {
+		store.identityCache = make(map[string]string)
+	}
+	if len(store.identityCache) >= 2048 {
+		for digest := range store.identityCache {
+			delete(store.identityCache, digest)
+			break
+		}
+	}
+	store.identityCache[entry.Digest] = identity
+	store.identityMu.Unlock()
+	return identity, nil
 }
 
 func taskPluginStorageIdentity(entry taskplugin.StoredPackage) (string, error) {
@@ -292,7 +336,7 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		}
 		observed := head.Revision
 		observedRevision = &observed
-		rows, _, err := loadTaskPluginVersions(tx)
+		rows, _, err := store.loadTaskPluginVersions(tx)
 		if rows != nil {
 			completedPackages = &rows
 		}
@@ -412,7 +456,7 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 		}
 		// The head write is a current read. MySQL can still retain a caller's
 		// earlier consistent-read snapshot for plain SELECTs in this transaction.
-		previousRows, previousIdentities, err := loadTaskPluginVersions(tx.Clauses(clause.Locking{Strength: "UPDATE"}))
+		previousRows, previousIdentities, err := store.loadTaskPluginVersions(tx.Clauses(clause.Locking{Strength: "UPDATE"}))
 		if err != nil {
 			return err
 		}

@@ -275,8 +275,11 @@ test('only explicit not-committed 503 responses reject a mutation safely', async
       'unknown',
     ],
     [{ committed: false }, 'unknown'],
-    [{ committed: true }, 'unknown'],
-    [{ committed: 'false' }, 'unknown'],
+    [{ code: 'catalog_operation_not_committed', committed: true }, 'unknown'],
+    [
+      { code: 'catalog_operation_not_committed', committed: 'false' },
+      'unknown',
+    ],
     [{}, 'unknown'],
   ] as const) {
     const calls = respond({ success: false, ...payload }, 503)

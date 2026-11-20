@@ -1018,6 +1018,12 @@ func TestTaskPluginPricingRejectsLostReceiptSet(t *testing.T) {
 		err = db.Transaction(func(tx *gorm.DB) error { return (&pricingAuthority{}).readCatalog(tx, lock) })
 		require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
 	}
+	_, err = store.DeleteVersion(t.Context(), 2, "stored", "1.0.0")
+	require.ErrorIs(t, err, taskplugin.ErrCatalogNotCommitted)
+	var observation *taskplugin.CatalogReadObservationError
+	require.ErrorAs(t, err, &observation)
+	require.EqualValues(t, 2, observation.Revision)
+	require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
 }
 
 func TestTaskPluginTaskReferenceRequiresPresentDeletionReceipts(t *testing.T) {
@@ -1499,6 +1505,30 @@ func TestPricingAuthorityReusesValidatedPackageWithinSnapshot(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestIndexedChannelPricingMatchesAdvertisedAndMappedModels(t *testing.T) {
+	invalid := `{"alias":"mapped","broken":7}`
+	mapping := `{"alias":"mapped","hidden":"unadvertised-target"}`
+	base := pricingAuthority{channels: []pricingChannel{
+		{ID: 1, Models: "alias,ordinary", Status: 1, ModelMapping: &mapping, Group: "work,preview"},
+		{ID: 2, Models: "alias,broken", Status: 1, ModelMapping: &invalid},
+		{ID: 3, Models: "mapped", Status: 2},
+	}}
+	models := []string{"alias", "mapped", "unadvertised-target", "unrelated"}
+	indexed := base
+	require.NoError(t, indexed.indexChannelContexts(t.Context(), models))
+	for _, model := range models {
+		want, err := base.contextsContext(t.Context(), model)
+		require.NoError(t, err)
+		got, err := indexed.contextsContext(t.Context(), model)
+		require.NoError(t, err)
+		require.Equal(t, want, got, model)
+	}
+	require.Len(t, indexed.channelContexts["alias"], 2)
+	require.Equal(t, "mapped", indexed.channelContexts["alias"][0].MappedModel)
+	require.Equal(t, "invalid channel model mapping", indexed.channelContexts["alias"][1].Reason)
+	require.Empty(t, indexed.channelContexts["unadvertised-target"])
+}
+
 func TestTaskUpsertConflictPrivateDataUsesReferenceGuard(t *testing.T) {
 	for _, kind := range []string{"literal", "expression", "metadata", "excluded", "raw target"} {
 		t.Run(kind, func(t *testing.T) {
@@ -1750,6 +1780,37 @@ func (ctx *catalogMetadataRuntimeContext) Deadline() (time.Time, bool) {
 	return ctx.Context.Deadline()
 }
 
+func TestTaskPluginStoreReusesValidatedIdentityOnOrdinaryRead(t *testing.T) {
+	db := deletionDB(t)
+	source := `let value=0; for(let i=0;i<50000;i++){value+=i;}
+export const meta={apiVersion:1,key:"cache-control",name:"Validated identity",version:"1.0.0",models:["cache-model"]};
+export function buildSubmitRequest(){return {}} export function parseSubmitResponse(){return {}}
+export function buildQueryRequest(){return {}} export function parseTaskResult(){return {}};`
+	pkg, err := taskplugin.LoadUpload(strings.NewReader(source), "")
+	require.NoError(t, err)
+	entry := taskplugin.StoredPackage{Document: pkg.Document(), Digest: pkg.Digest(), Active: true, Enabled: true}
+	_, err = NewTaskPluginCatalogStore(db).CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	store := NewTaskPluginCatalogStore(db)
+	start := time.Now()
+	catalog, err := taskplugin.OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	cold := time.Since(start)
+	base, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	projection := &catalogMetadataRuntimeContext{Context: base, cancel: cancel}
+	start = time.Now()
+	rows, revision, err := catalog.ManagementSnapshot(projection)
+	require.NoError(t, err)
+	require.Nil(t, projection.timer, "unchanged validated bytes must not re-enter JavaScript metadata evaluation")
+	require.EqualValues(t, 1, revision)
+	require.Len(t, rows, 1)
+	t.Logf("cold validated open %s, warm management read %s", cold, time.Since(start))
+	require.NoError(t, db.Model(&TaskPluginVersion{}).Where("digest = ?", entry.Digest).
+		UpdateColumn("document", taskPluginDocument([]byte(`{}`))).Error)
+	require.ErrorIs(t, catalog.Refresh(t.Context()), taskplugin.ErrCatalogInvalid)
+}
+
 func TestTaskPluginStoreMetadataLoadHonorsDeadline(t *testing.T) {
 	db := deletionDB(t)
 	store := NewTaskPluginCatalogStore(db)
@@ -1948,7 +2009,7 @@ func TestTaskPluginDefaultRemovalHonorsCancellationDuringModelScan(t *testing.T)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	scan := &defaultScanCancelContext{Context: ctx, cancel: cancel}
-	err = rejectTaskPluginDefaultRemoval(db.WithContext(scan), pkg, nil)
+	err = rejectTaskPluginDefaultRemoval(db.WithContext(scan), pkg)
 	require.ErrorIs(t, err, context.Canceled, "even non-tiered model scans must check cancellation")
 }
 

@@ -946,6 +946,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		won, err := task.UpdatePollingProgress(snap.Status)
 		if !won || err != nil {
 			*task = observed
+			body = observed.Data
 			if latest, found, readErr := model.GetUserTaskStatusByID(observed.UserId, observed.TaskID); readErr == nil && found && latest.ID == observed.ID {
 				*task = *latest
 				body = latest.Data

@@ -117,7 +117,10 @@ All management routes require fresh Root authentication:
 | `POST /api/task_plugins/mutate` | Apply exactly one version-guarded administrative operation |
 
 Validation requests may be recorded by the normal administrative audit middleware;
-they do not create/update catalog entries. Mutation audits contain operation,
+they do not create/update catalog entries. A catalog store reuses the canonical
+identity of packages it has already validated after checking the retained bytes
+against their digest. Unrecognized, changed or incomplete observations still
+go through full validation or fail the refresh. Mutation audits contain operation,
 key/version and resulting revision, never the document/source. Error responses
 do not include validator/driver internals. Audit logging follows the existing
 management audit mechanism; it is not a new transactional audit outbox.
@@ -453,6 +456,9 @@ completion time when it replaces the unknown-outcome reason. Status-only
 recovery creates no refund intent. Upgrade all recovery workers together so
 status-only rows are handled automatically. A replay commits the journal
 acknowledgement alongside its status claim and any verified refund intent.
+If a retry reserved wallet funds before writing them to the task, a later
+definite rejection must match the complete original debit and every applied
+reserve receipt before it can refund them.
 If the database cannot save even the recovery record, use the original task
 and reservation records to reconcile the logged task ID after service returns.
 Historical private metadata retains unknown fields, including nested typed

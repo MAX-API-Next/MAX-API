@@ -108,12 +108,15 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		headVerified = true
 		deletions, err := loadTaskPluginDeletions(tx)
 		if err != nil {
+			if errors.Is(err, taskplugin.ErrCatalogInvalid) {
+				return invalidTaskPluginDeletionObservation(head.Revision, err)
+			}
 			return err
 		}
 		if err := validateTaskPluginDeletionHead(head, deletions); err != nil {
-			return err
+			return invalidTaskPluginDeletionObservation(head.Revision, err)
 		}
-		rows, identities, err := loadTaskPluginVersions(tx)
+		rows, identities, err := store.loadTaskPluginVersions(tx)
 		if err != nil {
 			return err
 		}
@@ -152,7 +155,7 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 			nextDeletions = append(nextDeletions, receipt)
 		}
 		nextRows := append(append([]taskplugin.StoredPackage(nil), rows[:index]...), rows[index+1:]...)
-		if err := rejectTaskPluginDefaultRemoval(tx, pkg, nextRows); err != nil {
+		if err := rejectTaskPluginDefaultRemoval(tx, pkg); err != nil {
 			return err
 		}
 		previous := taskplugin.CatalogSnapshot{Revision: revision, Packages: rows, Deletions: deletions}
@@ -194,6 +197,10 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		return nil
 	})
 	if err != nil {
+		var observation *taskplugin.CatalogReadObservationError
+		if errors.As(err, &observation) {
+			return 0, observation
+		}
 		if ctx.Err() != nil {
 			if headVerified && !mutationAttempted {
 				return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, ctx.Err())
@@ -220,6 +227,10 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		return 0, taskplugin.ErrCatalogUnavailable
 	}
 	return revision + 1, nil
+}
+
+func invalidTaskPluginDeletionObservation(revision int64, err error) error {
+	return &taskplugin.CatalogReadObservationError{Revision: revision, Err: errors.Join(taskplugin.ErrCatalogNotCommitted, err)}
 }
 
 func taskPluginTaskReferenceCandidates(tx *gorm.DB, pkg *taskplugin.Package) (*gorm.DB, error) {
@@ -386,7 +397,7 @@ func taskPluginTypedReference(private TaskPrivateData, key, version, digest stri
 // Called under pricing/head locks before changing the catalog. Only reject
 // newly invalid defaults; do not rewrite prices or block removal when another
 // declared source still satisfies the existing configuration contract.
-func rejectTaskPluginDefaultRemoval(tx *gorm.DB, pkg *taskplugin.Package, remaining []taskplugin.StoredPackage) error {
+func rejectTaskPluginDefaultRemoval(tx *gorm.DB, pkg *taskplugin.Package) error {
 	if err := tx.Statement.Context.Err(); err != nil {
 		return errors.Join(taskplugin.ErrCatalogUnavailable, err)
 	}
@@ -414,7 +425,8 @@ func rejectTaskPluginDefaultRemoval(tx *gorm.DB, pkg *taskplugin.Package, remain
 		}
 		overridesByModel[model][composite] = expression
 	}
-	for _, model := range pkg.Manifest().Models {
+	models := pkg.Manifest().Models
+	for _, model := range models {
 		if err := tx.Statement.Context.Err(); err != nil {
 			return errors.Join(taskplugin.ErrCatalogUnavailable, err)
 		}
@@ -440,6 +452,9 @@ func rejectTaskPluginDefaultRemoval(tx *gorm.DB, pkg *taskplugin.Package, remain
 			if err := before.indexPluginSchemas(tx.Statement.Context); err != nil {
 				return err
 			}
+			if err := before.indexChannelContexts(tx.Statement.Context, models); err != nil {
+				return err
+			}
 		}
 		beforeContexts, err := before.contextsContext(tx.Statement.Context, model)
 		if err != nil {
@@ -449,7 +464,6 @@ func rejectTaskPluginDefaultRemoval(tx *gorm.DB, pkg *taskplugin.Package, remain
 			continue // Existing diagnosed drift is not introduced by this deletion.
 		}
 		after := *before
-		after.plugins = remaining
 		after.excludedPluginDigest = pkg.Digest()
 		afterContexts, err := after.contextsContext(tx.Statement.Context, model)
 		if err != nil {

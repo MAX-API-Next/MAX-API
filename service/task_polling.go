@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -257,7 +258,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 			task.Status = model.TaskStatusFailure
 			task.Progress = "100%"
 			task.FinishTime = now
-			unprojectedRetry := task.Quota == 0 && task.PrivateData.BillingSource == "" && task.PrivateData.BillingRequestId != ""
+			unprojectedRetry := task.MayHaveUnprojectedSubmissionFunding()
 			task.SubmitTimeoutRetainedFunding = !isLegacy && isUnconfirmedSubmit && !hasUpstreamID && (task.Quota > 0 || unprojectedRetry)
 			if isLegacy {
 				task.FailReason = legacyReason
@@ -687,7 +688,14 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		return fmt.Errorf("extract task usage failed for task %s: %w", taskId, err)
 	}
 
-	task.Data = redactVideoResponseBody(responseBody)
+	inlineFromVertex := ""
+	if ch.Type == constant.ChannelTypeVertexAi && strings.HasPrefix(taskResult.Url, "data:") {
+		// The content handler can query Vertex again. Keep the large response
+		// out of both the public payload and the persisted terminal evidence.
+		inlineFromVertex = taskResult.Url
+		taskResult.Url = ""
+	}
+	task.Data = redactVideoResponseBody(responseBody, inlineFromVertex)
 
 	logger.LogDebug(ctx, "updateVideoSingleTask taskResult: %+v", taskResult)
 
@@ -895,7 +903,10 @@ func hasPendingVideoTerminalEvidence(task *model.Task) bool {
 func setVideoTaskResult(task *model.Task, providerURL string) {
 	task.PrivateData.InlineVideoDataURL = ""
 	if strings.HasPrefix(providerURL, "data:") {
-		task.PrivateData.InlineVideoDataURL = providerURL
+		platform, _ := strconv.Atoi(string(task.Platform))
+		if platform != constant.ChannelTypeVertexAi {
+			task.PrivateData.InlineVideoDataURL = providerURL
+		}
 		providerURL = ""
 	}
 	if providerURL == "" {
@@ -1187,9 +1198,19 @@ func shouldApplyTaskResultProgress(taskResult *relaycommon.TaskInfo) bool {
 	}
 }
 
-func redactVideoResponseBody(body []byte) []byte {
-	var m map[string]any
-	if err := common.Unmarshal(body, &m); err != nil {
+func redactVideoResponseBody(body []byte, removableInlineURL string) []byte {
+	var payload any
+	if err := common.Unmarshal(body, &payload); err != nil {
+		if removableInlineURL != "" {
+			return nil
+		}
+		return body
+	}
+	if removableInlineURL != "" {
+		payload = removeVideoInlinePayload(payload, removableInlineURL)
+	}
+	m, object := payload.(map[string]any)
+	if !object && removableInlineURL == "" {
 		return body
 	}
 	resp, _ := m["response"].(map[string]any)
@@ -1206,11 +1227,32 @@ func redactVideoResponseBody(body []byte) []byte {
 			}
 		}
 	}
-	b, err := common.Marshal(m)
+	b, err := common.Marshal(payload)
 	if err != nil {
+		if removableInlineURL != "" {
+			return nil
+		}
 		return body
 	}
 	return b
+}
+
+func removeVideoInlinePayload(value any, inlineURL string) any {
+	switch value := value.(type) {
+	case string:
+		if strings.TrimSpace(value) == inlineURL {
+			return ""
+		}
+	case map[string]any:
+		for key, child := range value {
+			value[key] = removeVideoInlinePayload(child, inlineURL)
+		}
+	case []any:
+		for i, child := range value {
+			value[i] = removeVideoInlinePayload(child, inlineURL)
+		}
+	}
+	return value
 }
 
 func truncateBase64(s string) string {

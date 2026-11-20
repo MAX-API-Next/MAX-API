@@ -260,6 +260,25 @@ func TestCatalogGuardResolvesAliasedTableExpression(t *testing.T) {
 	table, resolved := taskPluginStatementTable(&gorm.Statement{Table: "c", TableExpr: &clause.Expr{SQL: "`main`.`channels` AS c"}})
 	require.True(t, resolved)
 	require.Equal(t, "channels", table)
+	for _, expression := range []string{`ONLY public.CHANNELS AS c`, `ONLY ("public"."channels") AS c`} {
+		table, resolved = taskPluginStatementTable(&gorm.Statement{Table: "c", TableExpr: &clause.Expr{SQL: expression}})
+		require.True(t, resolved)
+		require.Equal(t, "channels", table)
+	}
+}
+
+func TestTaskPrivateReferenceWritesRequireTypedUpdates(t *testing.T) {
+	db := deletionDB(t)
+	task := &Task{TaskID: "typed-private-data"}
+	require.NoError(t, db.Create(task).Error)
+	query := db.Table("tasks").Where("id = ?", task.ID)
+	require.ErrorIs(t, query.Updates(map[string]any{"private_data": `{}`}).Error, taskplugin.ErrCatalogInvalid)
+	require.NoError(t, db.Table("tasks").Where("id = ?", task.ID).Select("progress").
+		Updates(map[string]any{"progress": "20%", "private_data": `{}`}).Error)
+	require.NoError(t, db.Model(task).Updates(map[string]any{"private_data": `{}`}).Error)
+	var stored Task
+	require.NoError(t, db.First(&stored, task.ID).Error)
+	require.Equal(t, "20%", stored.Progress)
 }
 
 func TestTypedChannelUpsertChecksConflictAssignments(t *testing.T) {

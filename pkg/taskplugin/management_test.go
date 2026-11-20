@@ -199,6 +199,24 @@ func TestManagementDeletionConflictSuspendsStaleHost(t *testing.T) {
 	}
 }
 
+func TestManagementDeletionObservationSuspendsWithoutAnUnknownWrite(t *testing.T) {
+	store := &conflictingDeletionStore{deleteError: &CatalogReadObservationError{
+		Revision: 1, Err: errors.Join(ErrCatalogInvalid, ErrCatalogNotCommitted),
+	}}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	pkg := testPackage(t, validManifest(), "source")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	require.NotNil(t, catalog.host.state.Load())
+	manifest := pkg.Manifest()
+	err = catalog.MutateExpected(t.Context(), 1, ManagementMutation{Action: "delete", Key: manifest.Key, Version: manifest.Version})
+	require.ErrorIs(t, err, ErrCatalogNotCommitted)
+	require.ErrorIs(t, err, ErrCatalogInvalid)
+	require.Nil(t, catalog.host.state.Load())
+	require.EqualValues(t, 1, store.snapshot.Revision)
+	require.Len(t, store.snapshot.Packages, 1)
+}
+
 func TestManagementExpiredPreflightDoesNotUnpublishHost(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := &memoryCatalogStore{}

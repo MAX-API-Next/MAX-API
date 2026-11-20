@@ -243,10 +243,13 @@ func TestSweepTimedOutAwaitingSubmitHoldsQuotaWithOrWithoutProviderID(t *testing
 	require.Equal(t, 30, reloaded.Quota)
 	require.True(t, reloaded.SubmitTimeoutRetainedFunding)
 	require.Contains(t, reloaded.FailReason, "未自动退款")
-	require.NoError(t, model.DB.First(&withProviderID, withProviderID.ID).Error)
-	require.EqualValues(t, model.TaskStatusFailure, withProviderID.Status)
-	require.Equal(t, 30, withProviderID.Quota)
-	require.False(t, withProviderID.SubmitTimeoutRetainedFunding, "the contradictory provider ID requires manual reconciliation and cannot authorize late auto-refund")
+	var confirmed model.Task
+	require.NoError(t, model.DB.First(&confirmed, withProviderID.ID).Error)
+	require.EqualValues(t, model.TaskStatusFailure, confirmed.Status)
+	require.Equal(t, 30, confirmed.Quota)
+	require.False(t, confirmed.SubmitTimeoutRetainedFunding, "the contradictory provider ID requires manual reconciliation and cannot authorize late auto-refund")
+	require.True(t, confirmed.PrivateData.AwaitingUpstreamID)
+	require.Equal(t, "synthetic-provider-id", confirmed.PrivateData.UpstreamTaskID)
 	var settlementCount int64
 	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Count(&settlementCount).Error)
 	require.Zero(t, settlementCount)

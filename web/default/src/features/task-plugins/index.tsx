@@ -196,16 +196,16 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
         resetValidation()
       }
       if (command.action === 'delete') {
-        if (
-          deletingOpener &&
-          deletingOpener.contains(deletingOpener.ownerDocument.activeElement)
-        ) {
-          catalogSearch.current?.focus()
+        const entryId = `${command.key}@${command.version}`
+        const search = catalogSearch.current
+        const activeEntry = search?.ownerDocument.activeElement?.closest(
+          '[data-task-plugin-entry]'
+        )
+        if (activeEntry?.getAttribute('data-task-plugin-entry') === entryId) {
+          search?.focus()
         }
         if (detailOpener.current === deletingOpener) detailOpener.current = null
-        setSelected((current) =>
-          current === `${command.key}@${command.version}` ? undefined : current
-        )
+        setSelected((current) => (current === entryId ? undefined : current))
       }
     })
   }

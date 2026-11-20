@@ -103,14 +103,20 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 			table = foldTaskPluginTableName(table)
 			statementTable = foldTaskPluginTableName(statementTable)
 		}
-		if !resolved && statementTable == channelTable {
+		if !resolved && (statementTable == channelTable || statementTable == taskTable) {
 			tx.AddError(taskplugin.ErrCatalogInvalid)
 			return
 		}
-		if table != channelTable {
+		var guardedType reflect.Type
+		switch table {
+		case channelTable:
+			guardedType = channelType
+		case taskTable:
+			guardedType = taskType
+		default:
 			return
 		}
-		if tx.Statement.Schema != nil && tx.Statement.Schema.ModelType == channelType {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.ModelType == guardedType {
 			return
 		}
 		if _, explicit := tx.Statement.Clauses["SET"]; explicit {
@@ -122,11 +128,16 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 			tx.AddError(taskplugin.ErrCatalogInvalid)
 			return
 		}
+		selected, restricted := tx.Statement.SelectAndOmitColumns(false, true)
 		for _, key := range value.MapKeys() {
 			column := key.String()
+			if allowed, named := selected[column]; named && !allowed || !named && restricted {
+				continue
+			}
 			column = strings.Trim(column[strings.LastIndexByte(column, '.')+1:], "\"`[]")
-			switch strings.ToLower(column) {
-			case "models", "modelmapping", "model_mapping":
+			column = strings.ToLower(column)
+			if table == channelTable && (column == "models" || column == "modelmapping" || column == "model_mapping") ||
+				table == taskTable && (column == "privatedata" || column == "private_data") {
 				tx.AddError(taskplugin.ErrCatalogInvalid)
 				return
 			}
@@ -140,10 +151,24 @@ func taskPluginStatementTable(statement *gorm.Statement) (string, bool) {
 	}
 	expression := statement.TableExpr
 	parts := strings.Fields(expression.SQL)
+	only := false
+	if len(parts) > 0 && strings.EqualFold(parts[0], "ONLY") {
+		only = true
+		parts = parts[1:]
+	}
 	if len(expression.Vars) != 0 || len(parts) == 0 || len(parts) > 3 || len(parts) == 3 && !strings.EqualFold(parts[1], "AS") {
 		return "", false
 	}
-	return taskPluginPlainTableName(parts[0])
+	name := parts[0]
+	if only && strings.HasPrefix(name, "(") && strings.HasSuffix(name, ")") {
+		name = name[1 : len(name)-1]
+	}
+	table, valid := taskPluginPlainTableName(name)
+	rawBase := name[strings.LastIndexByte(name, '.')+1:]
+	if only && !strings.HasPrefix(rawBase, "\"") {
+		table = strings.ToLower(table) // PostgreSQL folds the unquoted ONLY target.
+	}
+	return table, valid
 }
 
 func taskPluginPlainTableName(name string) (string, bool) {

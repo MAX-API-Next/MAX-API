@@ -470,7 +470,8 @@ func TestSubmitFailureWorkerCanReplayAfterBusySQLiteCommit(t *testing.T) {
 	statusWrites := 0
 	var readerRelease error
 	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("release-reader-during-journal-status-retry", func(tx *gorm.DB) {
-		if tx.Statement.Table == "task_submit_failure_recoveries" {
+		if values, mapUpdate := tx.Statement.Dest.(map[string]any); tx.Statement.Table == "task_submit_failure_recoveries" &&
+			mapUpdate && values["status"] == TaskSubmitFailureRecoveryPending {
 			statusWrites++
 			if statusWrites == 2 {
 				readerRelease = reader.Rollback().Error

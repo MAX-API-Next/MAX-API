@@ -65,6 +65,7 @@ type pricingAuthority struct {
 	// Local to this captured authority; never shared across revisions/nodes.
 	validatedPackages    map[string]*taskplugin.Package
 	pluginSchemas        map[string][]pricingPluginSchema
+	channelContexts      map[string][]ModelPricingContext
 	excludedPluginDigest string
 }
 
@@ -124,7 +125,7 @@ func (a *pricingAuthority) readCatalog(tx *gorm.DB, lock bool) error {
 	if lock {
 		versionQuery = tx.Clauses(clause.Locking{Strength: "UPDATE"})
 	}
-	rows, _, loadErr := loadTaskPluginVersions(versionQuery)
+	rows, _, loadErr := NewTaskPluginCatalogStore(tx).loadTaskPluginVersions(versionQuery)
 	if loadErr != nil {
 		return loadErr
 	}
@@ -184,61 +185,18 @@ func (a *pricingAuthority) contextsContext(ctx context.Context, model string) ([
 		return nil, err
 	}
 	result := []ModelPricingContext{}
-	for _, channel := range a.channels {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		advertised := slices.Contains(strings.Split(channel.Models, ","), model)
-		mapping := map[string]string{}
-		mappingValid := channel.ModelMapping == nil || *channel.ModelMapping == "" || common.UnmarshalJsonStr(*channel.ModelMapping, &mapping) == nil
-		referenced := false
-		for original, target := range mapping {
-			if err := ctx.Err(); err != nil {
+	if a.channelContexts != nil {
+		result = append(result, a.channelContexts[model]...)
+	} else {
+		for _, channel := range a.channels {
+			references, err := channel.pricingModelReferences(ctx)
+			if err != nil {
 				return nil, err
 			}
-			if target == model && slices.Contains(strings.Split(channel.Models, ","), original) {
-				referenced = true
+			if advertised, found := references.models[model]; found {
+				result = append(result, channel.pricingModelContext(model, advertised, references))
 			}
 		}
-		if !advertised && !referenced {
-			continue
-		}
-		context := ModelPricingContext{ID: fmt.Sprintf("channel:%d", channel.ID), ChannelID: channel.ID, MappedModel: model, source: taskpricing.Source{Driver: "go_adapter"}, binding: channel, legacyDefaultConsumer: advertised, Reason: "unsupported host pricing contract"}
-		context.Groups = strings.Split(channel.Group, ",")
-		if channel.Setting != nil {
-			var settings map[string]any
-			if common.UnmarshalJsonStr(*channel.Setting, &settings) == nil {
-				context.Profile, _ = settings["task_pricing_profile"].(string)
-			}
-		}
-		if !mappingValid {
-			context.Reason = "invalid channel model mapping"
-			result = append(result, context)
-			continue
-		}
-		if mapped, exists := mapping[model]; exists && advertised {
-			context.MappedModel = mapped
-		}
-		family := ""
-		switch channel.Type {
-		case constant.ChannelTypeMiniMax:
-			family = "hailuo"
-		case constant.ChannelTypeKling:
-			family = "kling"
-		case constant.ChannelTypeDoubaoVideo, constant.ChannelTypeVolcEngine:
-			family = "doubao"
-		}
-		if contract, ok := taskpricing.KnownContract(family, context.MappedModel); ok {
-			context.legacyDefaultConsumer = false
-			context.Contract = &contract
-			context.Schema = contract.UsageSchema
-			context.Available = channel.Status == 1 && advertised
-			context.Reason = ""
-			if !context.Available {
-				context.Reason = "channel disabled or mapped-target-only; quote its advertised alias"
-			}
-		}
-		result = append(result, context)
 	}
 	if a.pluginSchemas != nil {
 		for _, schema := range a.pluginSchemas[model] {
@@ -277,6 +235,96 @@ func (a *pricingAuthority) contextsContext(ctx context.Context, model string) ([
 		return nil, err
 	}
 	return result, nil
+}
+
+type pricingChannelReferences struct {
+	models       map[string]bool // Value records whether the model is directly advertised.
+	mapping      map[string]string
+	mappingValid bool
+}
+
+func (channel pricingChannel) pricingModelReferences(ctx context.Context) (pricingChannelReferences, error) {
+	references := pricingChannelReferences{models: make(map[string]bool), mapping: make(map[string]string)}
+	for _, model := range strings.Split(channel.Models, ",") {
+		if err := ctx.Err(); err != nil {
+			return references, err
+		}
+		references.models[model] = true
+	}
+	references.mappingValid = channel.ModelMapping == nil || *channel.ModelMapping == "" ||
+		common.UnmarshalJsonStr(*channel.ModelMapping, &references.mapping) == nil
+	for original, target := range references.mapping {
+		if err := ctx.Err(); err != nil {
+			return references, err
+		}
+		if references.models[original] && !references.models[target] {
+			references.models[target] = false
+		}
+	}
+	return references, ctx.Err()
+}
+
+func (channel pricingChannel) pricingModelContext(model string, advertised bool, references pricingChannelReferences) ModelPricingContext {
+	result := ModelPricingContext{ID: fmt.Sprintf("channel:%d", channel.ID), ChannelID: channel.ID, MappedModel: model,
+		source: taskpricing.Source{Driver: "go_adapter"}, binding: channel, legacyDefaultConsumer: advertised, Reason: "unsupported host pricing contract"}
+	result.Groups = strings.Split(channel.Group, ",")
+	if channel.Setting != nil {
+		var settings map[string]any
+		if common.UnmarshalJsonStr(*channel.Setting, &settings) == nil {
+			result.Profile, _ = settings["task_pricing_profile"].(string)
+		}
+	}
+	if !references.mappingValid {
+		result.Reason = "invalid channel model mapping"
+		return result
+	}
+	if mapped, exists := references.mapping[model]; exists && advertised {
+		result.MappedModel = mapped
+	}
+	family := ""
+	switch channel.Type {
+	case constant.ChannelTypeMiniMax:
+		family = "hailuo"
+	case constant.ChannelTypeKling:
+		family = "kling"
+	case constant.ChannelTypeDoubaoVideo, constant.ChannelTypeVolcEngine:
+		family = "doubao"
+	}
+	if contract, ok := taskpricing.KnownContract(family, result.MappedModel); ok {
+		result.legacyDefaultConsumer = false
+		result.Contract = &contract
+		result.Schema = contract.UsageSchema
+		result.Available = channel.Status == 1 && advertised
+		result.Reason = ""
+		if !result.Available {
+			result.Reason = "channel disabled or mapped-target-only; quote its advertised alias"
+		}
+	}
+	return result
+}
+
+func (a *pricingAuthority) indexChannelContexts(ctx context.Context, models []string) error {
+	relevant := make(map[string]bool, len(models))
+	for _, model := range models {
+		relevant[model] = true
+	}
+	index := make(map[string][]ModelPricingContext, len(models))
+	for _, channel := range a.channels {
+		references, err := channel.pricingModelReferences(ctx)
+		if err != nil {
+			return err
+		}
+		for model, advertised := range references.models {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if relevant[model] {
+				index[model] = append(index[model], channel.pricingModelContext(model, advertised, references))
+			}
+		}
+	}
+	a.channelContexts = index
+	return ctx.Err()
 }
 
 type pricingPluginSchema struct {

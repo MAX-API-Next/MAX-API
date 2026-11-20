@@ -7,6 +7,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -100,26 +102,17 @@ func verifyUnprojectedTaskRetryRefund(tx *gorm.DB, requestID string, input Billi
 		}
 		return err
 	}
-	if selection.UserID != input.UserID || selection.TokenID != input.TokenID ||
-		selection.Source != input.Source || selection.EffectiveQuota <= 0 || selection.EffectiveQuota != -input.FundingDelta {
+	if selection.RequestID != requestID || selection.UserID != input.UserID || selection.TokenID != input.TokenID ||
+		selection.Source != input.Source || selection.EffectiveQuota < 0 {
 		return ErrTaskSubmitRefundIdentityMismatch
 	}
 	switch input.Source {
 	case BillingSettlementSourceWallet:
-		var debit BillingSettlement
-		if err := tx.Where("operation_key = ?", billingRequestOperationPrefix+requestID+":pre-consume").Take(&debit).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrTaskSubmitRefundIdentityMismatch
-			}
-			return err
-		}
-		if debit.Status == BillingSettlementStatusApplied && debit.Source == input.Source &&
-			debit.PreConsumeRequestID == requestID && debit.UserID == input.UserID && debit.TokenID == input.TokenID &&
-			debit.AppliedFundingDelta == selection.EffectiveQuota && debit.AppliedTokenDelta == -input.TokenDelta &&
-			input.SubscriptionID == 0 && input.SubscriptionPreConsumeRequestID == "" && !input.FinalizeSubscriptionPreConsume {
-			return nil
-		}
+		return verifyUnprojectedWalletRefund(tx, selection, input)
 	case BillingSettlementSourceSubscription:
+		if selection.EffectiveQuota <= 0 || selection.EffectiveQuota != -input.FundingDelta {
+			return ErrTaskSubmitRefundIdentityMismatch
+		}
 		var debit SubscriptionPreConsumeRecord
 		if err := tx.Where("request_id = ?", requestID).Take(&debit).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -135,6 +128,56 @@ func verifyUnprojectedTaskRetryRefund(tx *gorm.DB, requestID string, input Billi
 		}
 	}
 	return ErrTaskSubmitRefundIdentityMismatch
+}
+
+func verifyUnprojectedWalletRefund(tx *gorm.DB, selection BillingPreConsumeSelection, input BillingSettlementInput) error {
+	if input.SubscriptionID != 0 || input.SubscriptionPreConsumeRequestID != "" || input.FinalizeSubscriptionPreConsume {
+		return ErrTaskSubmitRefundIdentityMismatch
+	}
+	prefix := billingRequestOperationPrefix + selection.RequestID
+	var initial BillingSettlement
+	if err := withRowLock(tx).Where("operation_key = ?", prefix+":pre-consume").Take(&initial).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrTaskSubmitRefundIdentityMismatch
+		}
+		return err
+	}
+	if initial.OperationKey != prefix+":pre-consume" || initial.PreConsumeRequestID != selection.RequestID ||
+		initial.AppliedFundingDelta != selection.EffectiveQuota || !isAppliedWalletSubmitDebit(initial, input) {
+		return ErrTaskSubmitRefundIdentityMismatch
+	}
+	funding, token := initial.AppliedFundingDelta, initial.AppliedTokenDelta
+	prefix += ":reserve:"
+	pattern := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(prefix) + "%"
+	var reserves []BillingSettlement
+	if err := withRowLock(tx).Where("operation_key LIKE ? ESCAPE '!'", pattern).Find(&reserves).Error; err != nil {
+		return err
+	}
+	revisions := make(map[uint64]bool, len(reserves))
+	for _, reserve := range reserves {
+		suffix, sameRequest := strings.CutPrefix(reserve.OperationKey, prefix)
+		revision, parseErr := strconv.ParseUint(suffix, 10, 64)
+		if !sameRequest || parseErr != nil || revision == 0 || strconv.FormatUint(revision, 10) != suffix ||
+			revision > uint64(len(reserves)) || revisions[revision] || reserve.PreConsumeRequestID != "" ||
+			reserve.AppliedFundingDelta <= 0 || !isAppliedWalletSubmitDebit(reserve, input) ||
+			reserve.AppliedFundingDelta > math.MaxInt64-funding || reserve.AppliedTokenDelta > math.MaxInt64-token {
+			return ErrTaskSubmitRefundIdentityMismatch
+		}
+		revisions[revision] = true
+		funding += reserve.AppliedFundingDelta
+		token += reserve.AppliedTokenDelta
+	}
+	if funding != -input.FundingDelta || token != -input.TokenDelta {
+		return ErrTaskSubmitRefundIdentityMismatch
+	}
+	return nil
+}
+
+func isAppliedWalletSubmitDebit(debit BillingSettlement, input BillingSettlementInput) bool {
+	return debit.Status == BillingSettlementStatusApplied && debit.Source == BillingSettlementSourceWallet &&
+		debit.UserID == input.UserID && debit.TokenID == input.TokenID && debit.TaskID == 0 && debit.SubscriptionID == 0 &&
+		debit.AppliedFundingDelta >= 0 && debit.AppliedFundingDelta == debit.FundingDelta &&
+		debit.AppliedTokenDelta >= 0 && debit.AppliedTokenDelta == debit.TokenDelta
 }
 
 // RecordTaskSubmitFailureRecovery is a trusted-host seam. It records a definite

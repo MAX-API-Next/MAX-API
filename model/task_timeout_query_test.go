@@ -196,6 +196,7 @@ func TestManualSettlementCASPreservesTimestampNullability(t *testing.T) {
 				require.Zero(t, records[0].AppliedFundingDelta)
 				require.Equal(t, TaskStatus(TaskStatusSuccess), stored.PrivateData.PendingTerminalStatus)
 				require.Equal(t, "https://example.invalid/new-evidence", stored.PrivateData.PendingTerminalResultURL)
+				require.False(t, observed.updatedAtWasNull)
 			}
 		})
 	}

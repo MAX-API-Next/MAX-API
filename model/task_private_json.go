@@ -17,6 +17,10 @@ import (
 type taskPrivateUnmodeled struct{ fields map[string]any }
 type taskPrivateNested struct{ value any }
 type taskPrivateMap map[string]any
+type taskPrivateBillingPlanHistory struct {
+	configHash string
+	fields     map[string]any
+}
 type taskPrivateArray struct {
 	original, preserved []any
 	typ                 reflect.Type
@@ -154,6 +158,10 @@ func unknownTaskPrivateValue(value any, typ reflect.Type) any {
 	if object, ok := value.(map[string]any); ok {
 		if typ.Kind() == reflect.Struct {
 			if fields := unknownTaskPrivateFields(object, typ); len(fields) != 0 {
+				if typ == reflect.TypeFor[types.TaskBillingPlan]() {
+					hash, _ := canonicalTaskPrivateFields(object, typ)["config_hash"].(string)
+					return taskPrivateBillingPlanHistory{configHash: hash, fields: fields}
+				}
 				return fields
 			}
 		} else if typ.Kind() == reflect.Map {
@@ -213,6 +221,14 @@ func mergeTaskPrivateFields(unknown, current map[string]any) (map[string]any, er
 }
 
 func mergeTaskPrivateValue(unknown, current any) (any, error) {
+	if plan, ok := unknown.(taskPrivateBillingPlanHistory); ok {
+		next, object := current.(map[string]any)
+		hash, _ := next["config_hash"].(string)
+		if !object || hash != plan.configHash {
+			return nil, errors.New("cannot move unmodeled task private history to a different billing plan")
+		}
+		return mergeTaskPrivateFields(plan.fields, next)
+	}
 	if previous, ok := unknown.(taskPrivateMap); ok {
 		if next, ok := current.(map[string]any); ok {
 			merged := make(map[string]any, len(next))

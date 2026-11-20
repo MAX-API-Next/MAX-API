@@ -153,6 +153,12 @@ func (catalog *Catalog) deleteExpected(ctx context.Context, expected int64, key,
 	}
 	revision, err := store.DeleteVersion(ctx, expected, key, version)
 	if err != nil {
+		var observation *CatalogReadObservationError
+		if errors.As(err, &observation) {
+			catalog.observeRevision(observation.Revision)
+			catalog.host.state.Store(nil)
+			return err
+		}
 		if errors.Is(err, ErrCatalogConflict) {
 			catalog.host.state.Store(nil)
 			return ErrCatalogConflict

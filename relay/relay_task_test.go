@@ -133,6 +133,19 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	require.Equal(t, before+1, providerCalls.Load(), "the public reload cannot dispatch again")
 	_, _, err = model.GetByTaskId(stored.UserId, stored.TaskID)
 	require.Error(t, err, "the strict billing lookup rejects the same broken private data")
+	const readHook = "synthetic:fail-realtime-status-reread"
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register(readHook, func(tx *gorm.DB) {
+		if tx.Statement.Table == "tasks" {
+			_ = tx.AddError(errors.New("synthetic task read outage"))
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(readHook) })
+	observed := *terminal
+	observed.Status, observed.Progress, observed.UpdatedAt = model.TaskStatusInProgress, "15%", 100
+	response = tryRealtimeFetch(&observed, false)
+	require.Contains(t, string(response), `"format":"video/webm"`)
+	require.Equal(t, "15%", observed.Progress)
+	require.Equal(t, before+2, providerCalls.Load())
 }
 
 func placeholderSnapshotInQuery(tx *gorm.DB) *model.Task {

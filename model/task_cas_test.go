@@ -353,6 +353,35 @@ func TestSubmitFailureClaimAcceptsOnlyRefundDirection(t *testing.T) {
 	require.EqualValues(t, -20, refund.TokenDelta)
 }
 
+func TestSubmitFailureProjectedSubscriptionRefundUsesSameRequest(t *testing.T) {
+	truncateTables(t)
+	const request = "projected-subscription"
+	row := &Task{TaskID: request, UserId: 7, Status: TaskStatusSubmitted, Quota: 20,
+		PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingSource: BillingSettlementSourceSubscription,
+			BillingRequestId: request, SubscriptionId: 9, TokenId: 8}}
+	insertTask(t, row)
+	input := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey(request), Source: BillingSettlementSourceSubscription,
+		UserID: 7, TokenID: 8, SubscriptionID: 9, FundingDelta: -20, TokenDelta: -20, FinalizeSubscriptionPreConsume: true,
+		SubscriptionPreConsumeRequestID: "different-projected-request"}
+	won, err := ClaimTaskSubmitFailureWithSettlement(row.ID, "definite rejection", &input)
+	require.False(t, won)
+	require.ErrorIs(t, err, ErrTaskSubmitRefundIdentityMismatch)
+	stored, err := GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, TaskStatusSubmitted, stored.Status)
+	require.Equal(t, 20, stored.Quota)
+	_, found, err := GetBillingSettlementStatus(input.OperationKey)
+	require.NoError(t, err)
+	require.False(t, found)
+	input.SubscriptionPreConsumeRequestID = request
+	won, err = ClaimTaskSubmitFailureWithSettlement(row.ID, "definite rejection", &input)
+	require.NoError(t, err)
+	require.True(t, won)
+	var refund BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", input.OperationKey).Take(&refund).Error)
+	require.Equal(t, request, refund.SubscriptionPreConsumeRequestID)
+}
+
 func TestTaskTerminalSettlementIntentChecksObservedQuota(t *testing.T) {
 	for _, change := range []string{"unchanged", "same-version quota", "NULL quota becomes zero"} {
 		t.Run(change, func(t *testing.T) {
