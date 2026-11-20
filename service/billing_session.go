@@ -25,24 +25,24 @@ import (
 // BillingSession 封装单次请求的预扣费/结算/退款生命周期。
 // 实现 relaycommon.BillingSettler 接口。
 type BillingSession struct {
-	relayInfo                   *relaycommon.RelayInfo
-	funding                     FundingSource
-	preConsumedQuota            int   // 实际预扣额度（信任用户可能为 0）
-	tokenConsumed               int   // 令牌额度实际扣减量
-	extraReserved               int   // 发送前补充预扣的额度（订阅退款时需要单独回滚）
-	trusted                     bool  // 是否命中信任额度旁路
-	fundingSettled              bool  // funding.Settle 已成功，资金来源已提交
-	appliedFundingDelta         int64 // 已提交、尚未完成令牌对账的资金差额
-	compensationFailed          bool  // 资金补偿返回错误且结果不确定；后续仅重试令牌
-	fundingReconcilePending     bool  // 已知部分补偿已生效；重试令牌前先补齐资金差额
-	reserveRevision             int64 // 单次请求内累计预留的单调修订号
-	failedWalletReserveRevision int64
-	settled                     bool // Settle 全部完成（资金 + 令牌）
-	refunded                    bool // Refund 已调用
-	refundInFlight              bool
-	settleInFlight              bool
-	fundingOutcomeUnknown       bool
-	mu                          sync.Mutex
+	relayInfo               *relaycommon.RelayInfo
+	funding                 FundingSource
+	preConsumedQuota        int   // 实际预扣额度（信任用户可能为 0）
+	tokenConsumed           int   // 令牌额度实际扣减量
+	extraReserved           int   // 发送前补充预扣的额度（订阅退款时需要单独回滚）
+	trusted                 bool  // 是否命中信任额度旁路
+	fundingSettled          bool  // funding.Settle 已成功，资金来源已提交
+	appliedFundingDelta     int64 // 已提交、尚未完成令牌对账的资金差额
+	compensationFailed      bool  // 资金补偿返回错误且结果不确定；后续仅重试令牌
+	fundingReconcilePending bool  // 已知部分补偿已生效；重试令牌前先补齐资金差额
+	reserveRevision         int64 // 单次请求内累计预留的单调修订号
+	failedReserveRevision   int64
+	settled                 bool // Settle 全部完成（资金 + 令牌）
+	refunded                bool // Refund 已调用
+	refundInFlight          bool
+	settleInFlight          bool
+	fundingOutcomeUnknown   bool
+	mu                      sync.Mutex
 }
 
 // ErrBillingFundingOutcomeUnknown means a non-durable funding mutation did
@@ -591,7 +591,7 @@ func (s *BillingSession) PrepareRefundSettlement() (*model.BillingSettlementInpu
 func (s *BillingSession) prepareTaskSubmitFailureRefund() (*model.BillingSettlementInput, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	failed := s.failedWalletReserveRevision
+	failed := s.failedReserveRevision
 	if s.settled || s.refunded || s.refundInFlight || s.settleInFlight || s.fundingSettled {
 		return nil, 0, nil
 	}
@@ -619,7 +619,7 @@ func (s *BillingSession) isUnsettledZeroChargeTask(info *relaycommon.RelayInfo) 
 	return ok && wallet != nil && wallet.userId == info.UserId && s.relayInfo != nil &&
 		s.relayInfo.RequestId == info.RequestId && s.relayInfo.TokenId == info.TokenId &&
 		wallet.consumed == 0 && s.preConsumedQuota == 0 && s.tokenConsumed == 0 &&
-		s.extraReserved == 0 && s.reserveRevision == 0 && s.failedWalletReserveRevision == 0 && s.appliedFundingDelta == 0 &&
+		s.extraReserved == 0 && s.reserveRevision == 0 && s.failedReserveRevision == 0 && s.appliedFundingDelta == 0 &&
 		!s.settled && !s.refunded && !s.refundInFlight && !s.settleInFlight && !s.fundingSettled &&
 		!s.fundingOutcomeUnknown && !s.compensationFailed && !s.fundingReconcilePending
 }
@@ -711,7 +711,7 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.fundingOutcomeUnknown || s.failedWalletReserveRevision != 0 {
+	if s.fundingOutcomeUnknown || s.failedReserveRevision != 0 {
 		return ErrBillingFundingOutcomeUnknown
 	}
 	if s.settled || s.refunded || s.trusted || targetQuota <= s.preConsumedQuota {
@@ -743,8 +743,8 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 				SubscriptionPreConsumeRequestID: subscriptionPreConsumeRequestID(s.funding),
 				ManualOnFailure:                 true,
 			}); err != nil {
-				if source == model.BillingSettlementSourceWallet && s.relayInfo.PersistedTaskID > 0 {
-					s.failedWalletReserveRevision = nextRevision
+				if s.relayInfo.TaskRelayInfo != nil && s.relayInfo.PersistedTaskID > 0 {
+					s.failedReserveRevision = nextRevision
 				}
 				return err
 			}

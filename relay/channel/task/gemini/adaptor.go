@@ -198,7 +198,7 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	url := fmt.Sprintf("%s/%s/%s", baseUrl, version, upstreamName)
 	url = taskcommon.BuildTaskQueryURL(baseUrl, body, url)
 
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(taskcommon.TaskQueryContext(body), http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -270,7 +270,7 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	uri := fmt.Sprintf("%s/v1/videos/%s", baseUrl, taskID)
 	uri = taskcommon.BuildTaskQueryURL(baseUrl, body, uri)
 
-	req, err := http.NewRequest(http.MethodGet, uri, nil)
+	req, err := http.NewRequestWithContext(taskcommon.TaskQueryContext(body), http.MethodGet, uri, nil)
 	if err != nil {
 		return nil, err
 	}

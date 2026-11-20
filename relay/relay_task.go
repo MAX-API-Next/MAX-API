@@ -942,7 +942,13 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	// Terminal transitions must go through the polling settlement path. The
 	// realtime fetch may report terminal data to this caller, but must not make
 	// that state durable without the matching refund/final-settlement intent.
-	if !isTerminalTaskStatus(task.Status) && !snap.Equal(task.Snapshot()) {
+	if isTerminalTaskStatus(task.Status) {
+		if latest, found, readErr := model.GetUserTaskStatusByID(observed.UserId, observed.TaskID); readErr == nil && found &&
+			latest.ID == observed.ID && isTerminalTaskStatus(latest.Status) {
+			*task = *latest
+			body = latest.Data
+		}
+	} else if !snap.Equal(task.Snapshot()) {
 		won, err := task.UpdatePollingProgress(snap.Status)
 		if !won || err != nil {
 			*task = observed

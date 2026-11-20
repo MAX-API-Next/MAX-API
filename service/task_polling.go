@@ -1255,7 +1255,7 @@ func removeVideoInlinePayload(value any, selectedInlineURL string, textDepth int
 			}
 		}
 		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
-			if textDepth < 8 && strings.Contains(strings.ToLower(trimmed), "data:") {
+			if textDepth < 8 {
 				var nested any
 				if common.UnmarshalUseNumber([]byte(trimmed), &nested) == nil {
 					if result, removed := removeVideoInlinePayload(nested, selectedInlineURL, textDepth+1); removed {

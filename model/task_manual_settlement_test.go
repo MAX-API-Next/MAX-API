@@ -1,7 +1,10 @@
 package model
 
 import (
+	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -138,6 +141,18 @@ func TestSubmitFailurePreservesOpenTaskFinalizeDecision(t *testing.T) {
 }
 
 func TestSubmitFailureAndManualDecisionHaveOneOwner(t *testing.T) {
+	const child = "MAX_API_TEST_COMPETING_TASK_CLAIM_CHILD"
+	if os.Getenv(child) != "1" {
+		exe, err := os.Executable()
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, exe, "-test.run=^TestSubmitFailureAndManualDecisionHaveOneOwner$", "-test.timeout=15s")
+		cmd.Env = append(os.Environ(), child+"=1")
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+		return
+	}
 	truncateTables(t)
 	row := &Task{TaskID: "failure-manual-race", Status: TaskStatusSubmitted, Quota: 20, PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: "original"}}
 	insertTask(t, row)

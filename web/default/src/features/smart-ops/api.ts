@@ -113,6 +113,16 @@ export async function getBillingSettlementReconciliation(): Promise<BillingSettl
   return response.data
 }
 
+export async function getTaskSubmitFailureReview(taskId: string): Promise<{
+  success: boolean
+  data?: { task_id: string; last_error: string; updated_at: number }[]
+}> {
+  const response = await api.get('/api/smart-ops/billing-settlements', {
+    params: { task_submit_failure_id: taskId },
+  })
+  return response.data
+}
+
 export async function updateBillingSettlementBlockingPolicy(
   blockUserByDefault: boolean
 ): Promise<BillingSettlementMutationResponse> {

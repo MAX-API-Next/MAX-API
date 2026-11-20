@@ -384,6 +384,7 @@ func InitLogDB() (err error) {
 }
 
 func migrateDB() error {
+	newBillingSettlementTable := DB.Dialector.Name() == "postgres" && !DB.Migrator().HasTable(&BillingSettlement{})
 	// Capture whether the policy columns existed before AutoMigrate so legacy
 	// rows can be initialized to the historical allow-wallet default instead of
 	// inheriting a bool zero value when the column is first introduced.
@@ -454,7 +455,7 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
-	if err := migrateBillingSettlementReserveLookup(DB); err != nil {
+	if err := checkBillingSettlementReserveLookup(DB, newBillingSettlementTable); err != nil {
 		return err
 	}
 	if err := migrateUserSubscriptionPolicyDefaults(userSubscriptionsTableExisted, userSubscriptionWalletColumnExisted, userSubscriptionDowngradeColumnExisted); err != nil {

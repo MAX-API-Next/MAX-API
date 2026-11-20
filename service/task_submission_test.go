@@ -2,8 +2,11 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -29,6 +32,18 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 	for _, funding := range []string{"wallet_only", "subscription_only"} {
 		for _, outcome := range []string{"manual-first", "failure-first", "read-error", "pending-restart", "intent-write-error", "concurrent-cleanup", "identity-mismatch", "read-error-recovery", "intent-write-error-recovery", "task-write-error-recovery", "timeout-before-rejection", "timeout-task-write-error-recovery", "timeout-h3-retry-reserve", "timeout-free-to-paid", "timeout-free-to-paid-null", "free-to-paid-null", "free-to-paid-task-write-error-recovery", "different-terminal-failure"} {
 			t.Run(funding+"/"+outcome, func(t *testing.T) {
+				const child = "MAX_API_TEST_CONCURRENT_SUBMIT_CLEANUP_CHILD"
+				if outcome == "concurrent-cleanup" && os.Getenv(child) != "1" {
+					exe, err := os.Executable()
+					require.NoError(t, err)
+					ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
+					defer cancel()
+					cmd := exec.CommandContext(ctx, exe, "-test.run=^TestTaskSubmitFailureCleanupCoordinatesRealFunding$/^"+funding+"$/^concurrent-cleanup$", "-test.timeout=20s")
+					cmd.Env = append(os.Environ(), child+"=1")
+					output, err := cmd.CombinedOutput()
+					require.NoError(t, err, "%s", output)
+					return
+				}
 				db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "cleanup.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 				require.NoError(t, err)
 				oldDB, oldLog := model.DB, model.LOG_DB
@@ -659,7 +674,7 @@ func TestDefiniteRejectionReconcilesFailedWalletReserve(t *testing.T) {
 				var journal model.TaskSubmitFailureRecovery
 				require.NoError(t, model.DB.First(&journal, "task_id = ?", row.ID).Error)
 				require.Equal(t, model.TaskSubmitFailureRecoveryPending, journal.Status)
-				require.EqualValues(t, 1, journal.FailedWalletReserveRevision)
+				require.EqualValues(t, 1, journal.FailedReserveRevision)
 			}
 			model.ProcessPendingBillingSettlementsOnce()
 			model.ProcessPendingBillingSettlementsOnce()
@@ -726,4 +741,41 @@ func TestBoundTaskWalletPreConsumeReadFailureLeavesNoReplayDebit(t *testing.T) {
 	require.False(t, found)
 	require.EqualValues(t, 1000, getUserQuota(t, userID))
 	require.EqualValues(t, 1000, getTokenRemainQuota(t, tokenID))
+}
+
+func TestDefiniteRejectionRecoversSubscriptionAfterFailedReserve(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
+	const user, token, subscription = 91, 92, 94
+	const request = "synthetic-subscription-reserve-failure"
+	seedUser(t, user, 1000)
+	seedToken(t, token, user, request, 1000)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 93, Title: "fixture", Enabled: true,
+		TotalAmount: 120, QuotaResetPeriod: model.SubscriptionResetNever}).Error)
+	now := time.Now().Unix()
+	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: subscription, UserId: user, PlanId: 93, AmountTotal: 120,
+		Status: "active", StartTime: now - 60, EndTime: now + 3600}).Error)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{RequestId: request, UserId: user, TokenId: token, TokenKey: request, ForcePreConsume: true,
+		UserSetting: dto.UserSetting{BillingPreference: "subscription_only"}, TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+	require.Nil(t, PreConsumeBilling(ctx, 100, info))
+	row := &model.Task{TaskID: request, UserId: user, Quota: 100, Status: model.TaskStatusSubmitted,
+		PrivateData: model.TaskPrivateData{BillingRequestId: request, AwaitingUpstreamID: true, BillingSource: BillingSourceSubscription,
+			SubscriptionId: subscription, TokenId: token}}
+	require.NoError(t, model.DB.Create(row).Error)
+	info.PersistedTaskID = row.ID
+	require.ErrorIs(t, info.Billing.Reserve(150), model.ErrSubscriptionQuotaInsufficient)
+	require.EqualValues(t, 100, getSubscriptionUsed(t, subscription))
+	CleanupDefiniteTaskSubmitFailure(ctx, info, "retry not sent")
+	model.ProcessPendingBillingSettlementsOnce()
+	model.ProcessPendingBillingSettlementsOnce()
+	require.Zero(t, getSubscriptionUsed(t, subscription))
+	require.EqualValues(t, 1000, getTokenRemainQuota(t, token))
+	stored, err := model.GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, model.TaskStatusFailure, stored.Status)
+	require.Zero(t, stored.Quota)
+	status, found, err := model.GetBillingSettlementStatus("request:" + request + ":reserve:1")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "cancelled", status)
 }

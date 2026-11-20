@@ -460,17 +460,40 @@ If a retry reserved wallet funds before writing them to the task, a later
 definite rejection must match the complete original debit and every applied
 reserve receipt before it can refund them.
 Upgrade the recovery journal with `failed_wallet_reserve_revision` before
-starting new task and settlement workers. A definite rejection can reconcile
-one failed wallet reserve attempt by its durable revision. It cancels a
-verified unapplied reserve in the same transaction that claims the rejection.
-If the reserve applied first, the recorded refund includes it. Cancellation
-and refund authority still require a verified request, wallet and token.
+starting new task and settlement workers. That existing column records the
+failed reserve revision for either wallet or subscription. A definite
+rejection cancels a verified unapplied reserve in the same transaction that
+claims the rejection. If the reserve applied first, the refund includes it.
+Cancellation and refund authority require a verified request, funding source
+and token.
 When an existing free placeholder first retries on a paid wallet route,
 creation of the initial debit record and the wallet/token charge are atomic.
 A failed transaction leaves no new debit for a worker to replay.
-The PostgreSQL migration builds the reserve lookup index concurrently. If a
-previous index build left an invalid index, repair that index before restarting
-the migration.
+
+### PostgreSQL reserve index for upgrades
+
+Before starting the new master on an existing PostgreSQL settlement ledger,
+run the following in its application schema using a deployment connection
+outside any explicit transaction. The deployment session bounds lock waiting
+and the total statement time. A new installation creates the index on its
+newly created ledger table within a bounded startup step.
+
+```sql
+SET lock_timeout = '5s';
+SET statement_timeout = '15min';
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_billing_settlements_operation_key_pattern
+  ON billing_settlements (operation_key varchar_pattern_ops);
+SELECT i.indisvalid
+FROM pg_index i
+WHERE i.indexrelid = to_regclass('idx_billing_settlements_operation_key_pattern')
+  AND i.indrelid = to_regclass('billing_settlements');
+```
+
+Continue once the query returns `true`. If it returns `false` after a failed
+build, verify that the invalid index belongs to this ledger and stop other
+deployment jobs for the same index. Run `DROP INDEX CONCURRENTLY
+idx_billing_settlements_operation_key_pattern` outside a transaction and retry
+the bounded creation. Retain the existing unique index on `operation_key`.
 If the database cannot save even the recovery record, use the original task
 and reservation records to reconcile the logged task ID after service returns.
 Historical private metadata retains unknown fields, including nested typed

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/glebarez/sqlite"
@@ -34,21 +35,34 @@ func TestPostgresReserveLookupUsesPatternIndex(t *testing.T) {
 	var nonC int64
 	require.NoError(t, db.Raw("SELECT count(*) FROM pg_collation WHERE collname = 'en-US-x-icu'").Scan(&nonC).Error)
 	require.Positive(t, nonC, "the matrix must exercise a non-C collation")
-	require.NoError(t, db.Exec(`ALTER TABLE billing_settlements ALTER COLUMN operation_key TYPE varchar(191) COLLATE "en-US-x-icu"`).Error)
-	require.NoError(t, db.Exec(`INSERT INTO billing_settlements (operation_key, source, created_at, updated_at)
-		SELECT 'plan-fixture:' || i, 'wallet', 1, 1 FROM generate_series(1, 50000) AS i`).Error)
-	require.NoError(t, db.Exec(`INSERT INTO billing_settlements (operation_key, source, created_at, updated_at)
-		VALUES ('request:plan-_fixture:reserve:1', 'wallet', 1, 1)`).Error)
-	require.NoError(t, db.Exec("ANALYZE billing_settlements").Error)
-	require.NoError(t, migrateBillingSettlementReserveLookup(db))
-	require.NoError(t, migrateBillingSettlementReserveLookup(db))
-	pattern := taskSubmitWalletReservePattern("request:plan-_fixture:reserve:")
-	var plan []string
-	require.NoError(t, db.Raw("EXPLAIN SELECT id FROM billing_settlements WHERE operation_key LIKE ? ESCAPE '!'", pattern).Scan(&plan).Error)
-	require.Contains(t, strings.Join(plan, "\n"), "idx_billing_settlements_operation_key_pattern")
-	var found []string
-	require.NoError(t, db.Raw("SELECT operation_key FROM billing_settlements WHERE operation_key LIKE ? ESCAPE '!'", pattern).Scan(&found).Error)
-	require.Equal(t, []string{"request:plan-_fixture:reserve:1"}, found)
+	schemaName := fmt.Sprintf("reserve_fixture_%d", time.Now().UnixNano())
+	require.NoError(t, db.Exec("CREATE SCHEMA "+schemaName).Error)
+	t.Cleanup(func() { require.NoError(t, db.Exec("DROP SCHEMA "+schemaName+" CASCADE").Error) })
+	require.NoError(t, db.Connection(func(db *gorm.DB) error {
+		require.NoError(t, db.Exec("SET search_path TO "+schemaName).Error)
+		defer db.Exec("RESET search_path")
+		require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+		require.NoError(t, db.Exec(`ALTER TABLE billing_settlements ALTER COLUMN operation_key TYPE varchar(191) COLLATE pg_catalog."en-US-x-icu"`).Error)
+		require.ErrorContains(t, checkBillingSettlementReserveLookup(db, false), "missing or invalid")
+		require.NoError(t, checkBillingSettlementReserveLookup(db, true))
+		require.NoError(t, db.Exec("DROP INDEX idx_billing_settlements_operation_key_pattern").Error)
+		require.NoError(t, db.Exec(`INSERT INTO billing_settlements (operation_key, source, created_at, updated_at)
+			SELECT 'plan-fixture:' || i, 'wallet', 1, 1 FROM generate_series(1, 50000) AS i`).Error)
+		require.NoError(t, db.Exec(`INSERT INTO billing_settlements (operation_key, source, created_at, updated_at)
+			VALUES ('request:plan-_fixture:reserve:1', 'wallet', 1, 1), ('request:plan-Xfixture:reserve:1', 'wallet', 1, 1)`).Error)
+		require.NoError(t, db.Exec("ANALYZE billing_settlements").Error)
+		require.NoError(t, db.Exec("CREATE INDEX CONCURRENTLY idx_billing_settlements_operation_key_pattern ON billing_settlements (operation_key varchar_pattern_ops)").Error)
+		require.NoError(t, checkBillingSettlementReserveLookup(db, false))
+		require.NoError(t, checkBillingSettlementReserveLookup(db, false))
+		pattern := taskSubmitWalletReservePattern("request:plan-_fixture:reserve:")
+		var plan []string
+		require.NoError(t, db.Raw("EXPLAIN SELECT id FROM billing_settlements WHERE operation_key LIKE ? ESCAPE '!'", pattern).Scan(&plan).Error)
+		require.Contains(t, strings.Join(plan, "\n"), "idx_billing_settlements_operation_key_pattern")
+		var found []string
+		require.NoError(t, db.Raw("SELECT operation_key FROM billing_settlements WHERE operation_key LIKE ? ESCAPE '!'", pattern).Scan(&found).Error)
+		require.Equal(t, []string{"request:plan-_fixture:reserve:1"}, found)
+		return nil
+	}))
 }
 
 func TestPollingBatchQuarantinesUnadvanceableVersions(t *testing.T) {

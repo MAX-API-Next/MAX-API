@@ -56,6 +56,15 @@ const originalTimeout = api.defaults.timeout
 const requestTimeoutMs = 3000
 const requestWait = { timeout: requestTimeoutMs + 1000 }
 const mutationAndRefreshWait = { timeout: 2 * requestTimeoutMs + 1000 }
+// The isolated wire tests include login, setup reads/writes, and cleanup in
+// addition to the UI request and mutation waits. Keep each step bounded.
+const wireTestOptions = {
+  skip: !endpoint,
+  timeout:
+    5 * requestTimeoutMs +
+    2 * requestWait.timeout +
+    mutationAndRefreshWait.timeout,
+}
 api.defaults.timeout = requestTimeoutMs
 const { taskPluginAPI } = await import('./api')
 const { useAuthStore } = await import('@/stores/auth-store')
@@ -171,7 +180,7 @@ function packageDocument(key: string, name: string, model: string) {
 
 test(
   'the mounted UI imports without an external hash through actual Root API and SQLite catalog',
-  { skip: !endpoint },
+  wireTestOptions,
   async () => {
     await withRootFixture(async (mount) => {
       const before = await taskPluginAPI.read()
@@ -254,7 +263,7 @@ test(
 
 test(
   'the mounted UI disables an installed version through actual Root API and SQLite catalog',
-  { skip: !endpoint },
+  wireTestOptions,
   async () => {
     await withRootFixture(async (mount) => {
       const before = await taskPluginAPI.read()
@@ -283,7 +292,9 @@ test(
       fireEvent.click(within(card).getByRole('button', { name: /^Details\b/ }))
       const details = within(await view.findByRole('dialog'))
       fireEvent.click(await details.findByRole('button', { name: 'Disable' }))
-      fireEvent.click(details.getByRole('button', { name: 'Confirm' }))
+      fireEvent.click(
+        await details.findByRole('button', { name: 'Confirm' }, requestWait)
+      )
       await details.findByRole(
         'button',
         { name: 'Enable' },

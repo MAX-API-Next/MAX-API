@@ -149,6 +149,13 @@ func TestTaskSubmitFailureJournalOnlyManualItemsAreVisible(t *testing.T) {
 	require.Equal(t, "9007199254740993", item.TaskID)
 	require.NotContains(t, item.LastError, "synthetic-only")
 	require.Contains(t, item.LastError, "query failed")
+	found, err := LookupTaskSubmitFailureReview(t.Context(), 1)
+	require.NoError(t, err)
+	require.Len(t, found, 1)
+	require.Equal(t, "1", found[0].TaskID)
+	hidden, err := LookupTaskSubmitFailureReview(t.Context(), 2)
+	require.NoError(t, err)
+	require.Empty(t, hidden)
 }
 
 func TestBoundWalletPreConsumeBusyCommitReleasesSQLiteWriter(t *testing.T) {

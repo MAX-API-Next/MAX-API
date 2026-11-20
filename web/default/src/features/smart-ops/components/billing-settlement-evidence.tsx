@@ -33,11 +33,13 @@ import {
   FieldDescription,
   FieldTitle,
 } from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
   completeManualTaskBillingSettlement,
+  getTaskSubmitFailureReview,
   reviewBillingSettlements,
   updateBillingSettlementBlockingPolicy,
 } from '../api'
@@ -128,6 +130,16 @@ export function BillingSettlementEvidence(
   props: BillingSettlementEvidenceProps
 ): ReactElement {
   const { t, i18n } = useTranslation()
+  const [manualTaskId, setManualTaskId] = useState('')
+  const manualLookup = useMutation({
+    mutationFn: async (taskId: string) => {
+      const result = await getTaskSubmitFailureReview(taskId)
+      if (!result.success || !Array.isArray(result.data)) {
+        throw new Error(t('We could not load billing reconciliation details.'))
+      }
+      return result.data.find((item) => item.task_id === taskId)
+    },
+  })
   const [selectedTargets, setSelectedTargets] = useState<
     Map<number, BillingSettlementReviewTarget>
   >(() => new Map())
@@ -566,6 +578,45 @@ export function BillingSettlementEvidence(
                     </li>
                   ))}
                 </ul>
+                <form
+                  className='mt-2 flex flex-wrap gap-2'
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    if (/^[1-9][0-9]*$/.test(manualTaskId)) {
+                      manualLookup.mutate(manualTaskId)
+                    }
+                  }}
+                >
+                  <Input
+                    className='h-8 w-full sm:max-w-56'
+                    aria-label={t('Task ID')}
+                    placeholder={t('Task ID')}
+                    inputMode='numeric'
+                    value={manualTaskId}
+                    onChange={(event) =>
+                      setManualTaskId(event.target.value.trim())
+                    }
+                  />
+                  <Button
+                    type='submit'
+                    size='sm'
+                    variant='outline'
+                    disabled={
+                      manualLookup.isPending ||
+                      !/^[1-9][0-9]*$/.test(manualTaskId)
+                    }
+                  >
+                    {t('Search')}
+                  </Button>
+                </form>
+                <div role='status'>
+                  {manualLookup.isError
+                    ? t('We could not load billing reconciliation details.')
+                    : manualLookup.isSuccess &&
+                      (manualLookup.data
+                        ? `${t('Task ID')} ${manualLookup.data.task_id} ${manualLookup.data.last_error}`
+                        : t('No results found.'))}
+                </div>
               </AlertDescription>
             </Alert>
           )}

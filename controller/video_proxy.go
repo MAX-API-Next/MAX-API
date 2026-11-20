@@ -15,6 +15,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 
@@ -121,7 +122,7 @@ func VideoProxy(c *gin.Context) {
 			videoProxyError(c, http.StatusInternalServerError, "server_error", "API key not stored for task")
 			return
 		}
-		videoURL, err = getGeminiVideoURL(channel, task, apiKey)
+		videoURL, err = getGeminiVideoURL(ctx, channel, task, apiKey)
 		if err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to resolve Gemini video URL for task %s: %s", taskID, err.Error()))
 			videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to resolve Gemini video URL")
@@ -129,20 +130,25 @@ func VideoProxy(c *gin.Context) {
 		}
 		req.Header.Set("x-goog-api-key", apiKey)
 	case constant.ChannelTypeVertexAi:
-		videoURL, err = getVertexVideoURL(channel, task)
+		videoURL, err = getVertexVideoURL(ctx, channel, task)
 		if err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to resolve Vertex video URL for task %s: %s", taskID, err.Error()))
 			videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to resolve Vertex video URL")
 			return
 		}
 	case constant.ChannelTypeOpenAI, constant.ChannelTypeSora:
-		videoURL = fmt.Sprintf("%s/v1/videos/%s/content", baseURL, task.GetUpstreamTaskID())
-		req.Header.Set("Authorization", "Bearer "+channel.Key)
+		if taskcommon.UseConfiguredTaskProtocol(channel.GetOtherSettings()) {
+			videoURL, _ = fetchVideoTaskResultURL(ctx, channel, task)
+		}
+		if videoURL == "" {
+			videoURL = fmt.Sprintf("%s/v1/videos/%s/content", baseURL, task.GetUpstreamTaskID())
+			req.Header.Set("Authorization", "Bearer "+channel.Key)
+		}
 	default:
 		// Video URL is stored in PrivateData.ResultURL (fallback to FailReason for old data)
 		videoURL = task.GetResultURL()
 		if isTaskProxyContentURL(videoURL, task.TaskID) {
-			videoURL, err = fetchVideoTaskResultURL(channel, task)
+			videoURL, err = fetchVideoTaskResultURL(ctx, channel, task)
 			if err != nil {
 				logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to re-fetch video result for task %s: %s", taskID, err.Error()))
 				videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to fetch video content")

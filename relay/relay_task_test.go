@@ -45,8 +45,13 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.Channel{}))
 	service.InitHttpClient()
 	var providerCalls atomic.Int32
+	var providerDone atomic.Bool
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		providerCalls.Add(1)
+		if providerDone.Load() {
+			_, _ = io.WriteString(w, `{"name":"models/synthetic/operations/one","done":true}`)
+			return
+		}
 		_, _ = io.WriteString(w, `{"name":"models/synthetic/operations/one","done":false}`)
 	}))
 	defer provider.Close()
@@ -92,6 +97,11 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	require.Equal(t, "80%", stored.Progress)
 	require.Equal(t, progress.UpdatedAt, stored.UpdatedAt)
 	require.NoError(t, db.Model(stored).UpdateColumn("status", model.TaskStatusFailure).Error)
+	providerDone.Store(true)
+	staleTerminal := stale
+	require.Contains(t, string(tryRealtimeFetch(&staleTerminal, false)), `"status":"failed"`, "the settled status wins over a stale realtime success")
+	require.Equal(t, model.TaskStatus(model.TaskStatusFailure), staleTerminal.Status)
+	providerDone.Store(false)
 	terminal, err := model.GetTaskPlaceholderByID(task.ID)
 	require.NoError(t, err)
 	before := providerCalls.Load()

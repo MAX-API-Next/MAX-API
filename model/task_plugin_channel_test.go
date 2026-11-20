@@ -303,6 +303,17 @@ func TestCatalogGuardUsesConfiguredSchema(t *testing.T) {
 	require.NoError(t, db.Table("main.audit_notes").Create(map[string]any{"models": "fixture"}).Error)
 }
 
+func TestCatalogGuardAllowsExplicitQuotedAuditTable(t *testing.T) {
+	db := deletionDB(t)
+	require.NoError(t, db.Exec(`CREATE TABLE "audit archive" (name TEXT)`).Error)
+	table := clause.Table{Name: "audit archive"}
+	require.NoError(t, db.Table("unused").Clauses(clause.Insert{Table: table}).Create(map[string]any{"name": "initial"}).Error)
+	require.NoError(t, db.Table("unused").Clauses(clause.Update{Table: table}).Where("name = ?", "initial").Update("name", "updated").Error)
+	var name string
+	require.NoError(t, db.Raw(`SELECT name FROM "audit archive"`).Scan(&name).Error)
+	require.Equal(t, "updated", name)
+}
+
 func TestTypedChannelUpsertChecksConflictAssignments(t *testing.T) {
 	for _, kind := range []string{"models", "model_mapping", "expression", "raw target", "metadata", "update-all", "reused-update-all"} {
 		t.Run(kind, func(t *testing.T) {

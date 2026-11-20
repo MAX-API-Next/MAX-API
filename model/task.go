@@ -17,6 +17,7 @@ import (
 	commonRelay "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type TaskStatus string
@@ -128,6 +129,34 @@ func decodeTaskListRows(rows []taskWorkerRow) []*Task {
 		}
 	}
 	return decoded
+}
+
+func selectTaskHistory(query *gorm.DB, includeChannel bool) *gorm.DB {
+	statement := &gorm.Statement{DB: query}
+	if err := statement.Parse(&Task{}); err != nil {
+		query.AddError(err)
+		return query
+	}
+	var private string
+	switch query.Dialector.Name() {
+	case "postgres":
+		private = "CASE json_typeof(private_data) WHEN 'object' THEN (private_data::jsonb - 'inline_video_data_url' - 'pending_terminal_result_url')::text WHEN 'null' THEN NULL ELSE CASE WHEN private_data IS NULL THEN NULL ELSE '[]' END END"
+	case "mysql":
+		private = "JSON_REMOVE(private_data, '$.inline_video_data_url', '$.pending_terminal_result_url')"
+	default:
+		private = "CASE WHEN private_data IS NULL THEN NULL WHEN json_valid(private_data) THEN json_remove(private_data, '$.inline_video_data_url', '$.pending_terminal_result_url') ELSE '[]' END"
+	}
+	columns := make([]string, 0, len(statement.Schema.DBNames))
+	for _, name := range statement.Schema.DBNames {
+		switch {
+		case name == "private_data":
+			columns = append(columns, private+" AS private_data")
+		case name == "channel_id" && !includeChannel:
+		default:
+			columns = append(columns, statement.Quote(clause.Column{Name: name}))
+		}
+	}
+	return query.Select(strings.Join(columns, ", "))
 }
 
 // IsMiniMaxH3Task reports whether the persisted task has an explicit,
@@ -399,7 +428,7 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 	}
 
 	// 获取数据
-	err = query.Omit("channel_id").Order("id desc").Limit(num).Offset(startIdx).Find(&rows).Error
+	err = selectTaskHistory(query, false).Order("id desc").Limit(num).Offset(startIdx).Find(&rows).Error
 	if err != nil {
 		return nil
 	}
@@ -445,7 +474,7 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 	}
 
 	// 获取数据
-	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&rows).Error
+	err = selectTaskHistory(query, true).Order("id desc").Limit(num).Offset(startIdx).Find(&rows).Error
 	if err != nil {
 		return nil
 	}
@@ -1318,9 +1347,9 @@ func ClaimTaskSubmitFailureWithSettlementContext(ctx context.Context, taskID int
 	return claimTaskSubmitFailureWithSettlementDB(DB.WithContext(ctx), taskID, reason, input, nil, false)
 }
 
-// ClaimTaskSubmitFailureAfterWalletReserveError verifies the last reserve under
+// ClaimTaskSubmitFailureAfterReserveError verifies the last reserve under
 // the refund transaction. On success, input contains the recorded refund amount.
-func ClaimTaskSubmitFailureAfterWalletReserveError(ctx context.Context, taskID int64, reason string, input *BillingSettlementInput, failedReserve int64) (bool, error) {
+func ClaimTaskSubmitFailureAfterReserveError(ctx context.Context, taskID int64, reason string, input *BillingSettlementInput, failedReserve int64) (bool, error) {
 	if DB == nil || input == nil || failedReserve <= 0 {
 		return false, ErrTaskSubmitRefundIdentityMismatch
 	}
@@ -1351,7 +1380,7 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 	}
 	var failedReserve int64
 	if recovery != nil {
-		failedReserve = recovery.FailedWalletReserveRevision
+		failedReserve = recovery.FailedReserveRevision
 	}
 	if input != nil {
 		if err := validateTaskSubmitFailureRefundShape(*input, failedReserve); err != nil {
@@ -1408,7 +1437,7 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 					observed = *input
 					observed.TokenKey = ""
 				}
-				if journal.refundInput() != observed || journal.FailedWalletReserveRevision != failedReserve {
+				if journal.refundInput() != observed || journal.FailedReserveRevision != failedReserve {
 					return ErrBillingSettlementOperationConflict
 				}
 				pendingJournal = &journal

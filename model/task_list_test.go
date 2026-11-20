@@ -12,6 +12,8 @@ func TestTaskListsIsolateUnreadableMetadataAndKeepScope(t *testing.T) {
 		t.Run(map[bool]string{true: "text", false: "blob"}[asText], func(t *testing.T) {
 			truncateTables(t)
 			healthy := &Task{TaskID: "healthy-list", UserId: 11, ChannelId: 77, Quota: 7, Status: TaskStatusSubmitted, PrivateData: TaskPrivateData{UpstreamTaskID: "healthy-provider"}}
+			healthy.PrivateData.ResultURL = "/v1/videos/healthy-list/content"
+			healthy.PrivateData.InlineVideoDataURL = "data:video/mp4;base64,AA=="
 			bad := &Task{TaskID: "bad-list", UserId: 11, Quota: 9, Status: TaskStatusSubmitted, FailReason: "public failure"}
 			foreign := &Task{TaskID: "foreign-list", UserId: 12, ChannelId: 78, Quota: 8}
 			for _, row := range []*Task{healthy, bad, foreign} {
@@ -33,11 +35,14 @@ func TestTaskListsIsolateUnreadableMetadataAndKeepScope(t *testing.T) {
 			require.Equal(t, healthy.ID, userRows[1].ID)
 			require.Zero(t, userRows[1].ChannelId, "user list must retain its channel_id omission")
 			require.Equal(t, 7, userRows[1].Quota)
+			require.Empty(t, userRows[1].PrivateData.InlineVideoDataURL)
+			require.Equal(t, healthy.PrivateData.ResultURL, userRows[1].GetResultURL())
 			adminRows := TaskGetAllTasks(0, 10, SyncTaskQueryParams{})
 			require.Len(t, adminRows, 3)
 			require.Equal(t, foreign.ID, adminRows[0].ID)
 			require.Equal(t, bad.ID, adminRows[1].ID)
 			require.Equal(t, 77, adminRows[2].ChannelId)
+			require.Empty(t, adminRows[2].PrivateData.InlineVideoDataURL)
 			require.Len(t, TaskGetAllTasks(0, 10, SyncTaskQueryParams{TaskID: "bad-list"}), 1)
 			require.Len(t, TaskGetAllUserTask(12, 0, 10, SyncTaskQueryParams{TaskID: "bad-list"}), 0)
 			filtered := TaskGetAllTasks(0, 10, SyncTaskQueryParams{UserIDs: []int{11}, TaskID: "healthy-list"})
@@ -73,6 +78,10 @@ func TestTaskListsIsolateUnreadableMetadataAndKeepScope(t *testing.T) {
 				}
 			}
 			require.Contains(t, ids, healthy.ID)
+			content, exists, err := GetByTaskId(healthy.UserId, healthy.TaskID)
+			require.NoError(t, err)
+			require.True(t, exists)
+			require.Equal(t, healthy.PrivateData.InlineVideoDataURL, content.PrivateData.InlineVideoDataURL)
 			require.Contains(t, ids, bad.ID)
 			var strict Task
 			require.Error(t, DB.First(&strict, bad.ID).Error, "single-task financial reads remain strict")

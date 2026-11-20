@@ -43,7 +43,7 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 				return
 			}
 			if name := insert.Table.Name; name != "" && name != clause.CurrentTable {
-				table, resolved = taskPluginPlainTableName(name)
+				table, resolved = name, true // GORM quotes this identifier as a whole.
 			}
 		}
 		if !resolved {
@@ -91,11 +91,7 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 				return
 			}
 			if name := update.Table.Name; name != "" && name != clause.CurrentTable {
-				table, resolved = taskPluginPlainTableName(name)
-				if !resolved {
-					tx.AddError(taskplugin.ErrCatalogInvalid)
-					return
-				}
+				table, resolved = name, true
 			}
 		}
 		statementTable := tx.Statement.Table

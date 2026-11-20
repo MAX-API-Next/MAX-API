@@ -252,7 +252,12 @@ func TestTaskPluginSaveFallbackRetainsReferenceLock(t *testing.T) {
 			if kind == "task" {
 				target = db.NamingStrategy.TableName("Task")
 			}
-			var updateTransaction, insertTransaction gorm.ConnPool
+			var updateTransaction, insertTransaction, headTransaction gorm.ConnPool
+			require.NoError(t, db.Callback().Update().After("gorm:update").Register("observe_channel_reference_head_lock", func(tx *gorm.DB) {
+				if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginCatalogHead") && tx.Error == nil && tx.RowsAffected == 1 {
+					headTransaction = tx.Statement.ConnPool
+				}
+			}))
 			require.NoError(t, db.Callback().Update().After("gorm:commit_or_rollback_transaction").Register("observe_missing_row_fallback", func(tx *gorm.DB) {
 				if tx.Statement.Table != target || tx.RowsAffected != 0 || tx.Error != nil {
 					return
@@ -279,6 +284,10 @@ func TestTaskPluginSaveFallbackRetainsReferenceLock(t *testing.T) {
 				} else {
 					err = channel.SaveWithoutKey()
 				}
+			}
+			if kind != "task" {
+				require.NotNil(t, headTransaction, "channel references acquire the head lock before Save's fallback")
+				require.Same(t, updateTransaction, headTransaction)
 			}
 			if kind == "channel_without_key" {
 				require.ErrorContains(t, err, "channels.key", "missing-row fallback must preserve the NOT NULL key failure")

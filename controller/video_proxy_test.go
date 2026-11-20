@@ -1,16 +1,19 @@
 package controller
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -83,14 +86,20 @@ func TestWriteVideoDataURLAllowsVideoPayload(t *testing.T) {
 }
 
 func TestVideoProxyFallsBackToProviderAfterStoredValidationFails(t *testing.T) {
+	const fixtureVideo = "provider video"
+	service.InitHttpClient()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/videos/provider-video/content" {
+		switch r.URL.Path {
+		case "/v1/videos/native-video/content":
+			w.Header().Set("Content-Type", "video/webm")
+			w.Header().Set("Cache-Control", "public")
+			_, _ = w.Write([]byte(fixtureVideo))
+		case "/jobs/configured-video":
+			encoded := base64.StdEncoding.EncodeToString([]byte(fixtureVideo))
+			_, _ = w.Write([]byte(`{"status":"completed","result":{"url":"data:video/webm;base64,` + encoded + `"}}`))
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		w.Header().Set("Content-Type", "video/webm")
-		w.Header().Set("Cache-Control", "public")
-		_, _ = w.Write([]byte("provider video"))
 	}))
 	defer server.Close()
 	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/provider-video.db"), &gorm.Config{})
@@ -107,20 +116,84 @@ func TestVideoProxyFallsBackToProviderAfterStoredValidationFails(t *testing.T) {
 		_ = pool.Close()
 	})
 	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.Channel{}))
-	channel := &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &server.URL, Key: "fixture"}
-	require.NoError(t, db.Create(channel).Error)
-	task := &model.Task{TaskID: "fallback-video", UserId: 71, ChannelId: channel.Id, Status: model.TaskStatusSuccess,
-		PrivateData: model.TaskPrivateData{UpstreamTaskID: "provider-video", InlineVideoDataURL: "data:application/octet-stream;base64,AA=="}}
-	require.NoError(t, db.Create(task).Error)
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/videos/fallback-video/content", nil)
-	ctx.Set("id", 71)
-	ctx.Params = gin.Params{{Key: "task_id", Value: task.TaskID}}
-	VideoProxy(ctx)
-	require.Equal(t, http.StatusOK, recorder.Code)
-	require.Equal(t, "provider video", recorder.Body.String())
-	require.Equal(t, "private, no-store", recorder.Header().Get("Cache-Control"))
+	for _, tc := range []struct {
+		name, settings string
+		channelType    int
+	}{
+		{name: "native", channelType: constant.ChannelTypeOpenAI},
+		{name: "configured", channelType: constant.ChannelTypeSora, settings: `{"task_protocol":"generic_video_task","task_protocol_config":{"query_path":"/jobs/{task_id}","result_url_paths":["result.url"]}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			channel := &model.Channel{Type: tc.channelType, BaseURL: &server.URL, Key: "fixture", OtherSettings: tc.settings}
+			require.NoError(t, db.Create(channel).Error)
+			task := &model.Task{TaskID: "fallback-" + tc.name, UserId: 71, ChannelId: channel.Id, Status: model.TaskStatusSuccess,
+				PrivateData: model.TaskPrivateData{UpstreamTaskID: tc.name + "-video", InlineVideoDataURL: "data:application/octet-stream;base64,AA=="}}
+			require.NoError(t, db.Create(task).Error)
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/videos/"+task.TaskID+"/content", nil)
+			ctx.Set("id", 71)
+			ctx.Params = gin.Params{{Key: "task_id", Value: task.TaskID}}
+			VideoProxy(ctx)
+			require.Equal(t, http.StatusOK, recorder.Code)
+			require.Equal(t, fixtureVideo, recorder.Body.String())
+			require.Equal(t, "video/webm", recorder.Header().Get("Content-Type"))
+			require.Equal(t, "private, no-store", recorder.Header().Get("Cache-Control"))
+		})
+	}
+}
+
+func TestVideoProxyDistinguishesLocalContentAndBoundsStatusReads(t *testing.T) {
+	previous := system_setting.ServerAddress
+	system_setting.ServerAddress = "https://gateway.invalid/console"
+	t.Cleanup(func() { system_setting.ServerAddress = previous })
+	require.True(t, isTaskProxyContentURL("/v1/videos/task_demo/content", "task_demo"))
+	require.True(t, isTaskProxyContentURL("https://gateway.invalid/console/v1/videos/task_demo/content", "task_demo"))
+	require.False(t, isTaskProxyContentURL("https://provider.invalid/console/v1/videos/task_demo/content", "task_demo"))
+	require.False(t, isTaskProxyContentURL("https://gateway.invalid/console/v1/videos/task_demo/content.mp4", "task_demo"))
+	body, err := readVideoProviderStatus(strings.NewReader(`{"status":"complete"}`))
+	require.NoError(t, err)
+	require.JSONEq(t, `{"status":"complete"}`, string(body))
+	previousLimit := maxVideoDataURLDecodedBytes
+	maxVideoDataURLDecodedBytes = 8
+	t.Cleanup(func() { maxVideoDataURLDecodedBytes = previousLimit })
+	_, err = readVideoProviderStatus(strings.NewReader(strings.Repeat("x", (1<<20)+13)))
+	require.ErrorContains(t, err, "size limit")
+}
+
+func TestVideoProviderStatusHonorsRequestCancellation(t *testing.T) {
+	service.InitHttpClient()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := fetchVideoTaskResultURL(ctx, &model.Channel{Type: constant.ChannelTypeVidu, BaseURL: &server.URL, Key: "fixture"},
+			&model.Task{PrivateData: model.TaskPrivateData{UpstreamTaskID: "fixture"}})
+		result <- err
+	}()
+	select {
+	case <-started:
+		cancel()
+	case <-ctx.Done():
+		t.Fatal("fixture did not receive status request")
+	}
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("cancelled status request remained open")
+	}
 }
 
 func TestWriteVideoDataURLRejectsNonVideoPayload(t *testing.T) {

@@ -237,7 +237,7 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 		return nil, errors.Wrap(err, "marshal fetch task payload failed")
 	}
 
-	req, err := http.NewRequest(http.MethodPost, uri, bytes.NewBuffer(payloadBytes))
+	req, err := http.NewRequestWithContext(taskcommon.TaskQueryContext(body), http.MethodPost, uri, bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		return nil, err
 	}

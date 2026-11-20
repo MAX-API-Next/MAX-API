@@ -33,6 +33,29 @@ func TestTaskPrivateHistoricalContainerNamesRetainCase(t *testing.T) {
 	require.Error(t, private.Scan(`{"billing_context":{"model_price":1},"Billing_Context":{"model_price":2}}`))
 }
 
+func TestTaskUsageEvidenceMovesReplaceableEnvelopeHistoryToArchive(t *testing.T) {
+	var private TaskPrivateData
+	require.NoError(t, private.Scan(`{"billing_context":{"task_usage_envelope":{"evidence_digest":"old","historical_receipt":{"first":7}}}}`))
+	before, err := common.Marshal(private)
+	require.NoError(t, err)
+	require.Contains(t, string(before), "historical_receipt")
+	private.BillingContext.TaskUsageEnvelope.EvidenceDigest = "new"
+	encoded, err := common.Marshal(private)
+	require.NoError(t, err)
+	var decoded struct {
+		BillingContext struct {
+			Active  map[string]any   `json:"task_usage_envelope"`
+			Archive []map[string]any `json:"previous_task_usage_envelopes"`
+		} `json:"billing_context"`
+	}
+	require.NoError(t, common.Unmarshal(encoded, &decoded))
+	require.Equal(t, "new", decoded.BillingContext.Active["evidence_digest"])
+	require.NotContains(t, decoded.BillingContext.Active, "historical_receipt")
+	require.Len(t, decoded.BillingContext.Archive, 1)
+	require.Equal(t, "old", decoded.BillingContext.Archive[0]["evidence_digest"])
+	require.Contains(t, decoded.BillingContext.Archive[0], "historical_receipt")
+}
+
 func TestBillingPlanHistoryStaysWithItsOriginalConfig(t *testing.T) {
 	var private TaskPrivateData
 	require.NoError(t, private.Scan(`{"billing_context":{"task_billing_plan":{"config_hash":"original","reserve_quota":-0,"historical_receipt":{"retained":true}}}}`))

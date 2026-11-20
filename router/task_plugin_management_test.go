@@ -465,15 +465,31 @@ func TestTaskPluginManagementOptionalUploadPin(t *testing.T) {
 			require.NoError(t, db.Model(&model.TaskPluginVersion{}).Count(&count).Error)
 			require.EqualValues(t, 1, count)
 			if kind == "bom-json" {
-				activate := map[string]any{"action": "activate", "key": "custom-upload", "version": "1.0.0", "expected_revision": "1"}
-				require.Equal(t, 400, request("/api/task_plugins/mutate", activate).Code)
-				activate["bom_nodes_ready"] = true
-				require.Equal(t, 200, request("/api/task_plugins/mutate", activate).Code)
 				catalog, err := service.CurrentTaskPluginCatalog()
 				require.NoError(t, err)
-				entries, _, err := catalog.ManagementSnapshot(t.Context())
+				next := []byte(strings.ReplaceAll(strings.TrimPrefix(document, "\ufeff"), "1.0.0", "2.0.0"))
+				plain, err := taskplugin.LoadPackage(bytes.NewReader(next), fmt.Sprintf("%x", sha256.Sum256(next)))
 				require.NoError(t, err)
-				require.True(t, entries[0].BOMPrefixed)
+				require.NoError(t, catalog.Install(t.Context(), plain))
+				activate := map[string]any{"action": "activate", "key": "custom-upload", "version": "1.0.0", "expected_revision": "2"}
+				require.Equal(t, 400, request("/api/task_plugins/mutate", activate).Code)
+				assertBOM := func(wantRevision int64, active bool) {
+					entries, revision, err := catalog.ManagementSnapshot(t.Context())
+					require.NoError(t, err)
+					require.Equal(t, wantRevision, revision)
+					require.Len(t, entries, 2)
+					for _, entry := range entries {
+						if entry.BOMPrefixed {
+							require.Equal(t, active, entry.Active)
+							return
+						}
+					}
+					t.Fatal("missing BOM package")
+				}
+				assertBOM(2, false)
+				activate["bom_nodes_ready"] = true
+				require.Equal(t, 200, request("/api/task_plugins/mutate", activate).Code)
+				assertBOM(3, true)
 			}
 		})
 	}

@@ -508,6 +508,9 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 				}
 			}
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		readyToCommit = true
 		return nil
 	}

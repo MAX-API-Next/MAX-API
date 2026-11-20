@@ -55,7 +55,7 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 			if statusOnly {
 				won, err = model.ClaimTaskSubmitFailureStatusContext(claimCtx, info.PersistedTaskID, info.RequestId, reason, info.UserId, info.TokenId)
 			} else if failedReserve != 0 {
-				won, err = model.ClaimTaskSubmitFailureAfterWalletReserveError(claimCtx, info.PersistedTaskID, reason, intent, failedReserve)
+				won, err = model.ClaimTaskSubmitFailureAfterReserveError(claimCtx, info.PersistedTaskID, reason, intent, failedReserve)
 			} else {
 				won, err = model.ClaimTaskSubmitFailureWithSettlementContext(claimCtx, info.PersistedTaskID, reason, intent)
 			}

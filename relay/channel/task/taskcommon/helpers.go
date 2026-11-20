@@ -1,6 +1,7 @@
 package taskcommon
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 
@@ -10,6 +11,22 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
+
+const taskQueryContextKey = "_max_task_query_context"
+
+// WithTaskQueryContext carries an internal context through the task query
+// parameters. Adapters use it only when constructing their HTTP request.
+func WithTaskQueryContext(ctx context.Context, body map[string]any) map[string]any {
+	body[taskQueryContextKey] = ctx
+	return body
+}
+
+func TaskQueryContext(body map[string]any) context.Context {
+	if ctx, ok := body[taskQueryContextKey].(context.Context); ok && ctx != nil {
+		return ctx
+	}
+	return context.Background()
+}
 
 // UnmarshalMetadata converts a map[string]any metadata to a typed struct via JSON round-trip.
 // This replaces the repeated pattern: json.Marshal(metadata) → json.Unmarshal(bytes, &target).

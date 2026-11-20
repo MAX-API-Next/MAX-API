@@ -22,6 +22,11 @@ type taskPrivateBillingPlanHistory struct {
 	estimateQuota, reserveQuota int64
 	fields                      map[string]any
 }
+type taskPrivateUsageHistory struct {
+	digest   string
+	original map[string]any
+	fields   map[string]any
+}
 type taskPrivateArray struct {
 	original, preserved []any
 	typ                 reflect.Type
@@ -165,6 +170,11 @@ func unknownTaskPrivateValue(value any, typ reflect.Type) any {
 					return taskPrivateBillingPlanHistory{configHash: hash, estimateQuota: taskPrivatePlanQuota(plan["estimate_quota"]),
 						reserveQuota: taskPrivatePlanQuota(plan["reserve_quota"]), fields: fields}
 				}
+				if typ == reflect.TypeFor[types.TaskUsageEnvelope]() {
+					envelope := canonicalTaskPrivateFields(object, typ)
+					digest, _ := envelope["evidence_digest"].(string)
+					return taskPrivateUsageHistory{digest: digest, original: object, fields: fields}
+				}
 				return fields
 			}
 		} else if typ.Kind() == reflect.Map {
@@ -205,10 +215,19 @@ func mergeTaskPrivateFields(unknown, current map[string]any) (map[string]any, er
 				continue
 			}
 			if nested, ok := previous.(taskPrivateNested); ok {
-				var err error
-				value, err = mergeTaskPrivateValue(nested.value, value)
-				if err != nil {
-					return nil, err
+				if usage, tracked := nested.value.(taskPrivateUsageHistory); tracked && usage.digest != taskPrivateUsageDigest(value) {
+					const archiveKey = "previous_task_usage_envelopes"
+					archive, _ := merged[archiveKey].([]any)
+					if original := merged[archiveKey]; original != nil && archive == nil {
+						archive = []any{original}
+					}
+					merged[archiveKey] = append(append([]any(nil), archive...), usage.original)
+				} else {
+					var err error
+					value, err = mergeTaskPrivateValue(nested.value, value)
+					if err != nil {
+						return nil, err
+					}
 				}
 			}
 			delete(merged, storedKey)
@@ -223,7 +242,16 @@ func mergeTaskPrivateFields(unknown, current map[string]any) (map[string]any, er
 	return merged, nil
 }
 
+func taskPrivateUsageDigest(value any) string {
+	envelope, _ := value.(map[string]any)
+	digest, _ := envelope["evidence_digest"].(string)
+	return digest
+}
+
 func mergeTaskPrivateValue(unknown, current any) (any, error) {
+	if usage, ok := unknown.(taskPrivateUsageHistory); ok {
+		unknown = usage.fields
+	}
 	if plan, ok := unknown.(taskPrivateBillingPlanHistory); ok {
 		next, object := current.(map[string]any)
 		hash, _ := next["config_hash"].(string)

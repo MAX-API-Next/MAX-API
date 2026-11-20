@@ -476,7 +476,7 @@ func TestVertexCompletionKeepsInlinePayloadOutOfTaskRow(t *testing.T) {
 			payload: []any{map[string]any{"video": " " + inline + "\n", "status": "completed", "asset_id": int64(9007199254740993)},
 				map[string]any{"video": "data:video/webm;base64,QQ=="}, map[string]any{"video": "https://fixture.invalid/video"}}},
 		{name: "JSON descriptor", statusPath: "status", URLPath: "descriptor", expected: `{"descriptor":"{\"asset_id\":9007199254740993,\"url\":\"\"}","status":"completed"}`,
-			payload: map[string]any{"descriptor": `{"url":"` + inline + `","asset_id":9007199254740993}`, "status": "completed"}},
+			payload: map[string]any{"descriptor": `{"url":"\u0064` + inline[1:] + `","asset_id":9007199254740993}`, "status": "completed"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			truncate(t)

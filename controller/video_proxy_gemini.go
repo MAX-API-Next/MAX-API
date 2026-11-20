@@ -1,8 +1,12 @@
 package controller
 
 import (
+	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -13,7 +17,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 )
 
-func getGeminiVideoURL(channel *model.Channel, task *model.Task, apiKey string) (string, error) {
+func getGeminiVideoURL(ctx context.Context, channel *model.Channel, task *model.Task, apiKey string) (string, error) {
 	if channel == nil || task == nil {
 		return "", fmt.Errorf("invalid channel or task")
 	}
@@ -37,17 +41,21 @@ func getGeminiVideoURL(channel *model.Channel, task *model.Task, apiKey string) 
 	}
 
 	proxy := channel.GetSetting().Proxy
-	resp, err := adaptor.FetchTask(baseURL, apiKey, taskcommon.WithTaskProtocolConfig(map[string]any{
+	query := taskcommon.WithTaskQueryContext(ctx, map[string]any{
 		"task_id": task.GetUpstreamTaskID(),
 		"action":  task.Action,
 		"model":   task.Properties.UpstreamModelName,
-	}, channel.GetOtherSettings()), proxy)
+	})
+	resp, err := adaptor.FetchTask(baseURL, apiKey, taskcommon.WithTaskProtocolConfig(query, channel.GetOtherSettings()), proxy)
 	if err != nil {
 		return "", fmt.Errorf("fetch task failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("video status endpoint returned %d", resp.StatusCode)
+	}
+	body, err := readVideoProviderStatus(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("read task response failed: %w", err)
 	}
@@ -156,7 +164,7 @@ func extractGeminiVideoURLFromGeneratedSamples(gvr map[string]any) string {
 	return ""
 }
 
-func getVertexVideoURL(channel *model.Channel, task *model.Task) (string, error) {
+func getVertexVideoURL(ctx context.Context, channel *model.Channel, task *model.Task) (string, error) {
 	if channel == nil || task == nil {
 		return "", fmt.Errorf("invalid channel or task")
 	}
@@ -166,10 +174,10 @@ func getVertexVideoURL(channel *model.Channel, task *model.Task) (string, error)
 	if url := extractVertexVideoURLFromTaskData(task); url != "" {
 		return url, nil
 	}
-	return fetchVideoTaskResultURL(channel, task)
+	return fetchVideoTaskResultURL(ctx, channel, task)
 }
 
-func fetchVideoTaskResultURL(channel *model.Channel, task *model.Task) (string, error) {
+func fetchVideoTaskResultURL(ctx context.Context, channel *model.Channel, task *model.Task) (string, error) {
 	baseURL := constant.ChannelBaseURLs[channel.Type]
 	if channel.GetBaseURL() != "" {
 		baseURL = channel.GetBaseURL()
@@ -185,17 +193,21 @@ func fetchVideoTaskResultURL(channel *model.Channel, task *model.Task) (string, 
 		return "", fmt.Errorf("video provider key not available for task")
 	}
 
-	resp, err := adaptor.FetchTask(baseURL, key, taskcommon.WithTaskProtocolConfig(map[string]any{
+	query := taskcommon.WithTaskQueryContext(ctx, map[string]any{
 		"task_id": task.GetUpstreamTaskID(),
 		"action":  task.Action,
 		"model":   task.Properties.UpstreamModelName,
-	}, channel.GetOtherSettings()), channel.GetSetting().Proxy)
+	})
+	resp, err := adaptor.FetchTask(baseURL, key, taskcommon.WithTaskProtocolConfig(query, channel.GetOtherSettings()), channel.GetSetting().Proxy)
 	if err != nil {
 		return "", fmt.Errorf("fetch task failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("video status endpoint returned %d", resp.StatusCode)
+	}
+	body, err := readVideoProviderStatus(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("read task response failed: %w", err)
 	}
@@ -221,11 +233,29 @@ func fetchVideoTaskResultURL(channel *model.Channel, task *model.Task) (string, 
 	return "", fmt.Errorf("video result URL not found")
 }
 
-func isTaskProxyContentURL(url string, taskID string) bool {
-	if strings.TrimSpace(url) == "" || strings.TrimSpace(taskID) == "" {
+func readVideoProviderStatus(reader io.Reader) ([]byte, error) {
+	limit := int64(base64.StdEncoding.EncodedLen(maxVideoDataURLDecodedBytes)) + (1 << 20)
+	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("video status response exceeds size limit")
+	}
+	return body, nil
+}
+
+func isTaskProxyContentURL(raw string, taskID string) bool {
+	result, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || taskID == "" {
 		return false
 	}
-	return strings.Contains(url, "/v1/videos/"+taskID+"/content")
+	if result.Scheme == "" && result.Host == "" {
+		return result.Path == "/v1/videos/"+taskID+"/content"
+	}
+	local, err := url.Parse(taskcommon.BuildProxyURL(taskID))
+	return err == nil && local.Host != "" && result.Path == local.Path &&
+		strings.EqualFold(result.Scheme, local.Scheme) && strings.EqualFold(result.Host, local.Host)
 }
 
 func getVertexTaskKey(channel *model.Channel, task *model.Task) string {
