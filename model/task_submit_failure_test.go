@@ -63,6 +63,55 @@ func TestSlowTaskSubmitFailureClaimDoesNotBlockLaterRecovery(t *testing.T) {
 	require.Equal(t, journal[1].OperationKey, intents[0].OperationKey)
 }
 
+func TestTaskSubmitFailureAcknowledgementCommitsWithClaim(t *testing.T) {
+	db := deletionDB(t)
+	require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+	previous, oldSQLite := DB, common.UsingSQLite
+	DB, common.UsingSQLite = db, true
+	t.Cleanup(func() { DB, common.UsingSQLite = previous, oldSQLite })
+	const request = "journal-atomic-claim"
+	row := &Task{TaskID: request, Status: TaskStatusSubmitted, Quota: 80, UserId: 71,
+		PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingSource: BillingSettlementSourceWallet, BillingRequestId: request, TokenId: 72}}
+	require.NoError(t, db.Create(row).Error)
+	input := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey(request), Source: BillingSettlementSourceWallet,
+		UserID: 71, TokenID: 72, FundingDelta: -80, TokenDelta: -80}
+	const reason = "definite rejection"
+	require.NoError(t, RecordTaskSubmitFailureRecovery(row.ID, reason, input))
+	var stale TaskSubmitFailureRecovery
+	require.NoError(t, db.First(&stale, "task_id = ?", row.ID).Error)
+	forced := errors.New("synthetic journal ack failure")
+	const hook = "synthetic:journal-ack-failure"
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register(hook, func(tx *gorm.DB) {
+		if values, mapUpdate := tx.Statement.Dest.(map[string]any); tx.Statement.Table == "task_submit_failure_recoveries" &&
+			mapUpdate && values["status"] == TaskSubmitFailureRecoveryRecorded {
+			_ = tx.AddError(forced)
+		}
+	}))
+	won, err := ClaimTaskSubmitFailureWithSettlement(row.ID, reason, &input)
+	require.ErrorIs(t, err, forced)
+	require.False(t, won)
+	stored, err := GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, TaskStatusSubmitted, stored.Status)
+	require.Equal(t, 80, stored.Quota)
+	_, found, err := GetBillingSettlementStatus(input.OperationKey)
+	require.NoError(t, err)
+	require.False(t, found)
+	require.NoError(t, db.Callback().Update().Remove(hook))
+	processPendingTaskSubmitFailures()
+	updateTaskSubmitFailureRecovery(stale, TaskSubmitFailureRecoveryManual, ErrTaskSubmitRefundIdentityMismatch)
+	var journal TaskSubmitFailureRecovery
+	require.NoError(t, db.First(&journal, "task_id = ?", row.ID).Error)
+	require.Equal(t, TaskSubmitFailureRecoveryRecorded, journal.Status)
+	require.Equal(t, 1, journal.Attempts)
+	stored, err = GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, TaskStatusFailure, stored.Status)
+	var records int64
+	require.NoError(t, db.Model(&BillingSettlement{}).Where("operation_key = ?", journal.OperationKey).Count(&records).Error)
+	require.EqualValues(t, 1, records)
+}
+
 func TestTaskSubmitFailureRecoveryMetadataUsesPassDeadline(t *testing.T) {
 	db := deletionDB(t)
 	previous := DB

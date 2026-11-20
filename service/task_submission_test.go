@@ -470,3 +470,73 @@ func TestFreeTaskDefiniteRejectionAfterTimeout(t *testing.T) {
 		})
 	}
 }
+
+func TestZeroChargeWalletSessionRecoversDefiniteRejection(t *testing.T) {
+	for _, mode := range []string{"replay", "competing reserve", "settlement in flight"} {
+		t.Run(mode, func(t *testing.T) {
+			isolateTaskPluginBillingDatabase(t)
+			const userID, tokenID = 85, 86
+			const tokenKey = "synthetic-zero-charge-wallet"
+			seedUser(t, userID, 1000)
+			seedToken(t, tokenID, userID, tokenKey, 1000)
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			request := "verified-wallet-zero"
+			info := &relaycommon.RelayInfo{RequestId: request, UserId: userID, TokenId: tokenID, TokenKey: tokenKey,
+				UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+			require.Nil(t, PreConsumeBilling(ctx, 0, info))
+			require.NotNil(t, info.Billing)
+			require.Equal(t, BillingSourceWallet, info.BillingSource)
+			row := &model.Task{TaskID: request, UserId: userID, Status: model.TaskStatusSubmitted, PrivateData: model.TaskPrivateData{
+				BillingSource: info.BillingSource, AwaitingUpstreamID: true, BillingRequestId: request, TokenId: tokenID,
+			}}
+			require.NoError(t, model.DB.Create(row).Error)
+			info.PersistedTaskID = row.ID
+			const hook = "synthetic:zero-wallet-task-write"
+			require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(hook, func(tx *gorm.DB) {
+				if tx.Statement.Table == "tasks" {
+					_ = tx.AddError(errors.New("synthetic task write outage"))
+				}
+			}))
+			if mode == "settlement in flight" {
+				info.Billing.(*BillingSession).settleInFlight = true
+			}
+			CleanupDefiniteTaskSubmitFailure(ctx, info, "definite wallet rejection")
+			require.NoError(t, model.DB.Callback().Update().Remove(hook))
+			var journal model.TaskSubmitFailureRecovery
+			err := model.DB.Where("task_id = ?", row.ID).Take(&journal).Error
+			if mode == "settlement in flight" {
+				require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+				stored, err := model.GetTaskPlaceholderByID(row.ID)
+				require.NoError(t, err)
+				require.EqualValues(t, model.TaskStatusSubmitted, stored.Status)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, model.TaskSubmitFailureRecoveryPending, journal.Status)
+			require.Zero(t, journal.FundingDelta)
+			if mode == "competing reserve" {
+				require.NoError(t, model.DB.Create(&model.BillingSettlement{
+					OperationKey: "request:" + request + ":reserve:1",
+					Status:       model.BillingSettlementStatusManual, UserID: userID, TokenID: tokenID,
+					Source: model.BillingSettlementSourceWallet, FundingDelta: 20, TokenDelta: 20,
+				}).Error)
+			}
+			model.ProcessPendingBillingSettlementsOnce()
+			require.NoError(t, model.DB.Where("task_id = ?", row.ID).Take(&journal).Error)
+			stored, err := model.GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, err)
+			if mode == "replay" {
+				require.Equal(t, model.TaskSubmitFailureStatusRecorded, journal.Status)
+				require.EqualValues(t, model.TaskStatusFailure, stored.Status)
+			} else {
+				require.Equal(t, model.TaskSubmitFailureRecoveryManual, journal.Status)
+				require.EqualValues(t, model.TaskStatusSubmitted, stored.Status)
+			}
+			var refundOwners int64
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Where("operation_key = ?", journal.OperationKey).Count(&refundOwners).Error)
+			require.Zero(t, refundOwners)
+			require.EqualValues(t, 1000, getUserQuota(t, userID))
+			require.EqualValues(t, 1000, getTokenRemainQuota(t, tokenID))
+		})
+	}
+}

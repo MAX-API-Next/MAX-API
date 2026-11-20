@@ -418,6 +418,11 @@ func TestVideoPollingRecoversAppliedEvidenceWithoutChannelOrTimeout(t *testing.T
 					wantURL = taskcommon.BuildProxyURL(row.TaskID)
 				}
 				require.Equal(t, wantURL, stored.PrivateData.ResultURL)
+				if strings.HasPrefix(test.rawURL, "data:") {
+					require.Equal(t, test.rawURL, stored.PrivateData.InlineVideoDataURL)
+				} else {
+					require.Empty(t, stored.PrivateData.InlineVideoDataURL)
+				}
 				require.Empty(t, stored.PrivateData.PendingTerminalStatus)
 			}
 			require.JSONEq(t, `{"provider":"stored"}`, string(stored.Data))
@@ -427,6 +432,30 @@ func TestVideoPollingRecoversAppliedEvidenceWithoutChannelOrTimeout(t *testing.T
 			require.EqualValues(t, 1, records)
 		})
 	}
+}
+
+func TestVideoProgressPreservesPendingTerminalPayload(t *testing.T) {
+	truncate(t)
+	task := &model.Task{
+		TaskID: "pending-terminal-payload", UserId: 71, Quota: 80,
+		Status: model.TaskStatusInProgress, Progress: "10%",
+		Data: []byte(`{"result":"stored terminal body"}`),
+		PrivateData: model.TaskPrivateData{PendingTerminalStatus: model.TaskStatusSuccess,
+			PendingTerminalResultURL: "https://fixture.invalid/stored"},
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+	require.NoError(t, model.DB.Create(&model.BillingSettlement{OperationKey: model.BillingTaskFinalizeOperationKey(task.ID),
+		Status: model.BillingSettlementStatusPending, TaskID: task.ID, UserID: task.UserId,
+		Source: model.BillingSettlementSourceWallet, TaskQuota: 80, TaskQuotaTarget: 80}).Error)
+	adaptor := &h3TerminalPollingAdaptor{result: &relaycommon.TaskInfo{Status: model.TaskStatusInProgress, Progress: "50%"}}
+	require.NoError(t, updateVideoSingleTask(t.Context(), adaptor, &model.Channel{Type: constant.ChannelTypeMiniMax}, task.TaskID,
+		map[string]*model.Task{task.TaskID: task}))
+	stored, err := model.GetTaskPlaceholderByID(task.ID)
+	require.NoError(t, err)
+	require.Equal(t, "50%", stored.Progress)
+	require.JSONEq(t, `{"result":"stored terminal body"}`, string(stored.Data))
+	require.EqualValues(t, model.TaskStatusSuccess, stored.PrivateData.PendingTerminalStatus)
+	require.Equal(t, "https://fixture.invalid/stored", stored.PrivateData.PendingTerminalResultURL)
 }
 
 type onFetchTaskPollingAdaptor struct {

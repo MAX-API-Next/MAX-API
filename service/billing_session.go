@@ -587,6 +587,18 @@ func (s *BillingSession) PrepareRefundSettlement() (*model.BillingSettlementInpu
 	return s.refundSettlementInputLocked()
 }
 
+func (s *BillingSession) isUnsettledZeroChargeTask(info *relaycommon.RelayInfo) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	wallet, ok := s.funding.(*WalletFunding)
+	return ok && wallet != nil && wallet.userId == info.UserId && s.relayInfo != nil &&
+		s.relayInfo.RequestId == info.RequestId && s.relayInfo.TokenId == info.TokenId &&
+		wallet.consumed == 0 && s.preConsumedQuota == 0 && s.tokenConsumed == 0 &&
+		s.extraReserved == 0 && s.reserveRevision == 0 && s.appliedFundingDelta == 0 &&
+		!s.settled && !s.refunded && !s.refundInFlight && !s.settleInFlight && !s.fundingSettled &&
+		!s.fundingOutcomeUnknown && !s.compensationFailed && !s.fundingReconcilePending
+}
+
 func (s *BillingSession) finishRefundIntent(applied bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

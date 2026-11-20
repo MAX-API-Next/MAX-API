@@ -446,11 +446,13 @@ positive quota on `FAILURE` rows and on nonterminal rows with a manual
 task-finalize settlement. Reconcile the upstream task and the original
 reservation using the stored billing request ID.
 Definite rejections of free submissions can use a status-only recovery journal.
-Both immediate recording and replay verify the original request, task state and
-absence of a funding reservation. A late rejection preserves the original
+Both immediate recording and replay verify the original request and task state.
+A wallet session with a verified zero debit can use status-only recovery.
+A late rejection preserves the original
 completion time when it replaces the unknown-outcome reason. Status-only
 recovery creates no refund intent. Upgrade all recovery workers together so
-status-only rows are handled automatically.
+status-only rows are handled automatically. A replay commits the journal
+acknowledgement alongside its status claim and any verified refund intent.
 If the database cannot save even the recovery record, use the original task
 and reservation records to reconcile the logged task ID after service returns.
 Historical private metadata retains unknown fields, including nested typed

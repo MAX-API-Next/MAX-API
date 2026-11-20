@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -251,16 +252,21 @@ func TestTaskPluginSaveFallbackRetainsReferenceLock(t *testing.T) {
 			if kind == "task" {
 				target = db.NamingStrategy.TableName("Task")
 			}
-			observed, locked := false, false
+			var updateTransaction, insertTransaction gorm.ConnPool
 			require.NoError(t, db.Callback().Update().After("gorm:commit_or_rollback_transaction").Register("observe_missing_row_fallback", func(tx *gorm.DB) {
 				if tx.Statement.Table != target || tx.RowsAffected != 0 || tx.Error != nil {
 					return
 				}
-				observed = true
-				_, locked = tx.Statement.ConnPool.(gorm.TxCommitter)
+				updateTransaction = tx.Statement.ConnPool
+				_, locked := updateTransaction.(gorm.TxCommitter)
 				if !locked {
 					_, err := store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
 					tx.AddError(err)
+				}
+			}))
+			require.NoError(t, db.Callback().Create().Before("gorm:create").Register("observe_fallback_insert_transaction", func(tx *gorm.DB) {
+				if tx.Statement.Table == target {
+					insertTransaction = tx.Statement.ConnPool
 				}
 			}))
 			if kind == "task" {
@@ -279,11 +285,13 @@ func TestTaskPluginSaveFallbackRetainsReferenceLock(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			require.True(t, observed, "exercise the actual zero-row update before GORM fallback insert")
+			require.NotNil(t, updateTransaction, "exercise the actual zero-row update")
+			require.NotNil(t, insertTransaction, "exercise the actual fallback insert")
+			require.Implements(t, (*gorm.TxCommitter)(nil), updateTransaction)
 			snapshot, err := store.Load(t.Context())
 			require.NoError(t, err)
 			require.Len(t, snapshot.Packages, 1, "a restored reference must not outlive the package deleted between Save transactions")
-			require.True(t, locked, "the guarded update must retain its transaction through fallback insert")
+			require.Same(t, updateTransaction, insertTransaction, "the guarded insert must reuse the update transaction")
 			_, err = store.DeleteVersion(t.Context(), snapshot.Revision, "stored", "1.0.0")
 			if kind == "channel_without_key" {
 				require.NoError(t, err, "the failed fallback must not leave a channel reference")
@@ -698,7 +706,7 @@ func TestTaskPluginDeletionOwnsSnapshotBoundary(t *testing.T) {
 }
 
 func TestTaskPluginCatalogInheritedCASProtectsOuterTransaction(t *testing.T) {
-	for _, kind := range []string{"disabled", "canceled", "success"} {
+	for _, kind := range []string{"disabled", "canceled", "success", "prepared"} {
 		t.Run(kind, func(t *testing.T) {
 			db := deletionDB(t)
 			store := NewTaskPluginCatalogStore(db)
@@ -717,7 +725,7 @@ func TestTaskPluginCatalogInheritedCASProtectsOuterTransaction(t *testing.T) {
 					}
 				}
 			}))
-			outer := db.Begin()
+			outer := db.Session(&gorm.Session{PrepareStmt: kind == "prepared"}).Begin()
 			require.NoError(t, outer.Error)
 			t.Cleanup(func() { _ = outer.Rollback().Error })
 			inherited := outer.Session(&gorm.Session{DisableNestedTransaction: kind == "disabled"})
@@ -730,14 +738,14 @@ func TestTaskPluginCatalogInheritedCASProtectsOuterTransaction(t *testing.T) {
 				require.Error(t, err)
 				require.ErrorIs(t, ctx.Err(), context.Canceled)
 				require.True(t, headUpdated, "the provisional head write must have succeeded before cancellation")
-			case "success":
+			case "success", "prepared":
 				require.NoError(t, err)
 				require.EqualValues(t, 2, revision)
 			}
 			require.NoError(t, outer.Commit().Error)
 			current, err := store.Load(t.Context())
 			require.NoError(t, err)
-			if kind == "success" {
+			if kind == "success" || kind == "prepared" {
 				require.EqualValues(t, 2, current.Revision)
 				require.Len(t, current.Packages, 2)
 			} else {
@@ -745,6 +753,36 @@ func TestTaskPluginCatalogInheritedCASProtectsOuterTransaction(t *testing.T) {
 				require.Equal(t, []taskplugin.StoredPackage{first}, current.Packages)
 			}
 		})
+	}
+}
+
+func TestTaskPluginInvalidHeadCannotAdvanceOrPoisonRepair(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	pkg, entry := catalogFixture(t, "stored", "1.0.0", "head-repair")
+	catalog, err := taskplugin.OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	var original TaskPluginCatalogHead
+	require.NoError(t, db.First(&original).Error)
+	for _, changes := range []map[string]any{
+		{"revision": 100, "last_deletion_revision": 101},
+		{"revision": 100, "mutation_id": ""},
+	} {
+		require.NoError(t, db.Model(&TaskPluginCatalogHead{}).Where("id = ?", 1).Updates(changes).Error)
+		err = catalog.Refresh(t.Context())
+		require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+		var observation *taskplugin.CatalogReadObservationError
+		require.NotErrorAs(t, err, &observation)
+		_, err = store.CompareAndSwap(t.Context(), 100, []taskplugin.StoredPackage{entry})
+		require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+		var corrupt TaskPluginCatalogHead
+		require.NoError(t, db.First(&corrupt).Error)
+		require.EqualValues(t, 100, corrupt.Revision)
+		require.NoError(t, db.Model(&TaskPluginCatalogHead{}).Where("id = ?", 1).Updates(map[string]any{
+			"revision": original.Revision, "mutation_id": original.MutationID, "last_deletion_revision": original.LastDeletionRevision,
+		}).Error)
+		require.NoError(t, catalog.Refresh(t.Context()))
 	}
 }
 
@@ -824,8 +862,18 @@ func TestTaskPluginSerializedLegacyReferencesRespectDeletion(t *testing.T) {
 				after, err := store.Load(t.Context())
 				require.NoError(t, err)
 				require.Equal(t, before, after, "rejection leaves head, source and deletion receipts unchanged")
+				assertStatusAndEmptyPrivate := func(status TaskStatus) {
+					t.Helper()
+					var saved Task
+					require.NoError(t, db.First(&saved, task.ID).Error)
+					require.Equal(t, status, saved.Status)
+					require.NoError(t, db.Model(&Task{}).Select("private_data").Where("id = ?", task.ID).Scan(&persisted).Error)
+					require.Equal(t, `{}`, persisted)
+				}
 				require.NoError(t, db.Model(&task).Select("status").Updates(map[string]any{"status": TaskStatusSuccess, "private_data": value}).Error)
-				require.NoError(t, db.Model(&task).Omit("private_data").Updates(map[string]any{"status": TaskStatusSuccess, "private_data": value}).Error)
+				assertStatusAndEmptyPrivate(TaskStatusSuccess)
+				require.NoError(t, db.Model(&task).Omit("private_data").Updates(map[string]any{"status": TaskStatusFailure, "private_data": value}).Error)
+				assertStatusAndEmptyPrivate(TaskStatusFailure)
 				_, err = store.CompareAndSwap(t.Context(), 2, []taskplugin.StoredPackage{entry})
 				require.NoError(t, err)
 				require.NoError(t, write(), "identical explicit reinstall permits references despite the retained receipt")
@@ -1678,6 +1726,30 @@ func TestTaskPluginRetainedDeclarationsAreMetadataReferences(t *testing.T) {
 	require.ErrorIs(t, err, taskplugin.ErrBindingRejected, "metadata acceptance does not enable a retired route")
 }
 
+type catalogMetadataRuntimeContext struct {
+	context.Context
+	cancel context.CancelFunc
+	timer  *time.Timer
+}
+
+func (ctx *catalogMetadataRuntimeContext) Deadline() (time.Time, bool) {
+	if ctx.timer == nil {
+		var stack [24]uintptr
+		frames := runtime.CallersFrames(stack[:runtime.Callers(2, stack[:])])
+		for more := true; more; {
+			var frame runtime.Frame
+			frame, more = frames.Next()
+			if strings.HasSuffix(frame.Function, "/pkg/taskplugin.(*Program).runInEnvironment") {
+				// Only the runtime's own deadline setup arms this timer.
+				// GORM reads and source compilation cannot signal it.
+				ctx.timer = time.AfterFunc(75*time.Millisecond, ctx.cancel)
+				break
+			}
+		}
+	}
+	return ctx.Context.Deadline()
+}
+
 func TestTaskPluginStoreMetadataLoadHonorsDeadline(t *testing.T) {
 	db := deletionDB(t)
 	store := NewTaskPluginCatalogStore(db)
@@ -1695,18 +1767,16 @@ func TestTaskPluginStoreMetadataLoadHonorsDeadline(t *testing.T) {
 	raw, err := common.Marshal(document)
 	require.NoError(t, err)
 	require.NoError(t, db.Model(&TaskPluginVersion{}).Where("identity = ?", taskPluginIdentity("stored", "1.0.0")).Updates(map[string]any{"document": taskPluginDocument(raw), "digest": fmt.Sprintf("%x", sha256.Sum256(raw))}).Error)
-	var sourceRead atomic.Bool
-	require.NoError(t, db.Callback().Query().After("gorm:query").Register("observe-loop-source", func(tx *gorm.DB) {
-		if tx.Statement.Table == db.NamingStrategy.TableName("TaskPluginVersion") && tx.Error == nil {
-			sourceRead.Store(true)
-		}
-	}))
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	bounded, stop := context.WithTimeout(t.Context(), 3*time.Second)
+	defer stop()
+	base, cancel := context.WithCancel(bounded)
 	defer cancel()
+	ctx := &catalogMetadataRuntimeContext{Context: base, cancel: cancel}
 	started := time.Now()
 	_, err = store.Load(ctx)
-	require.True(t, sourceRead.Load(), "the stored loop source must reach metadata validation")
-	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+	require.NotNil(t, ctx.timer, "the stored source must enter its metadata runtime")
+	defer ctx.timer.Stop()
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
 	require.ErrorIs(t, err, taskplugin.ErrCatalogUnavailable)
 	require.Less(t, time.Since(started), 2*time.Second, "storage-side metadata validation shares the caller budget")
 }

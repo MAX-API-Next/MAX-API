@@ -32,9 +32,15 @@ func (catalog *Catalog) ManagementSnapshot(ctx context.Context) ([]ManagementEnt
 	entries := make([]ManagementEntry, 0, len(catalog.snapshot.Packages))
 	byDigest := make(map[string]*Package, len(catalog.state.history))
 	for _, pkg := range catalog.state.history {
+		if err := managementContextError(ctx); err != nil {
+			return nil, 0, err
+		}
 		byDigest[pkg.digest] = pkg
 	}
 	for _, row := range catalog.snapshot.Packages {
+		if err := managementContextError(ctx); err != nil {
+			return nil, 0, err
+		}
 		// The published generation already validated these exact immutable bytes.
 		pkg := byDigest[row.Digest]
 		entries = append(entries, ManagementEntry{Manifest: pkg.Manifest(), Digest: row.Digest, SourceDigest: pkg.SourceDigest(), FormatVersion: pkg.FormatVersion(), BOMPrefixed: pkg.BOMPrefixed(), Active: row.Active, Enabled: row.Enabled, Revoked: row.Revoked})
@@ -45,6 +51,9 @@ func (catalog *Catalog) ManagementSnapshot(ctx context.Context) ([]ManagementEnt
 		}
 		return entries[i].Manifest.Version < entries[j].Manifest.Version
 	})
+	if err := managementContextError(ctx); err != nil {
+		return nil, 0, err
+	}
 	return entries, catalog.snapshot.Revision, nil
 }
 

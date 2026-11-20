@@ -64,6 +64,13 @@ func VideoProxy(c *gin.Context) {
 			fmt.Sprintf("Task is not completed yet, current status: %s", task.Status))
 		return
 	}
+	if source := task.PrivateData.InlineVideoDataURL; source != "" {
+		if err := writeVideoDataURL(c, source); err != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to decode stored video for task %s: %s", taskID, err.Error()))
+			videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to fetch video content")
+		}
+		return
+	}
 
 	channel, err := model.CacheGetChannel(task.ChannelId)
 	if err != nil {

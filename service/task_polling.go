@@ -714,6 +714,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		}
 	}
 	providerTerminal := taskResult.Status == string(model.TaskStatusSuccess) || taskResult.Status == string(model.TaskStatusFailure)
+	keepTerminalPayload := !providerTerminal && hasPendingVideoTerminalEvidence(task)
+	if keepTerminalPayload {
+		task.Data = snap.Data
+	}
 	pending, taskFinalizeApplied, settlementErr := taskTerminalSettlementState(task, providerTerminal)
 	if settlementErr != nil {
 		return fmt.Errorf("load task submission settlement for task %s: %w", task.TaskID, settlementErr)
@@ -801,7 +805,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		if task.FinishTime == 0 {
 			task.FinishTime = now
 		}
-		task.PrivateData.ResultURL = videoTaskResultURL(task.TaskID, taskResult.Url)
+		setVideoTaskResult(task, taskResult.Url)
 		shouldSettle = true
 	case model.TaskStatusFailure:
 		logger.LogJson(ctx, fmt.Sprintf("Task %s failed", taskId), task)
@@ -863,7 +867,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			transitionWon = true
 		}
 	} else if !snap.Equal(task.Snapshot()) {
-		if _, err := task.UpdatePollingProgress(snap.Status); err != nil {
+		var err error
+		if keepTerminalPayload {
+			_, err = task.UpdatePollingProgressPreservingData(snap.Status)
+		} else {
+			_, err = task.UpdatePollingProgress(snap.Status)
+		}
+		if err != nil {
 			logger.LogError(ctx, fmt.Sprintf("Failed to update task %s: %s", task.TaskID, err.Error()))
 		}
 	} else {
@@ -882,11 +892,16 @@ func hasPendingVideoTerminalEvidence(task *model.Task) bool {
 	return task != nil && (task.PrivateData.PendingTerminalStatus == model.TaskStatusSuccess || task.PrivateData.PendingTerminalStatus == model.TaskStatusFailure)
 }
 
-func videoTaskResultURL(taskID, providerURL string) string {
-	if providerURL == "" || strings.HasPrefix(providerURL, "data:") {
-		return taskcommon.BuildProxyURL(taskID)
+func setVideoTaskResult(task *model.Task, providerURL string) {
+	task.PrivateData.InlineVideoDataURL = ""
+	if strings.HasPrefix(providerURL, "data:") {
+		task.PrivateData.InlineVideoDataURL = providerURL
+		providerURL = ""
 	}
-	return providerURL
+	if providerURL == "" {
+		providerURL = taskcommon.BuildProxyURL(task.TaskID)
+	}
+	task.PrivateData.ResultURL = providerURL
 }
 
 func recoverAppliedVideoTaskFromStore(task *model.Task) (bool, error) {
@@ -949,7 +964,7 @@ func recoverAppliedTaskTerminalEvidence(task *model.Task) (appliedTaskRecoveryOu
 	}
 	candidate.FailReason = candidate.PrivateData.PendingTerminalReason
 	if pending == model.TaskStatusSuccess {
-		candidate.PrivateData.ResultURL = videoTaskResultURL(candidate.TaskID, candidate.PrivateData.PendingTerminalResultURL)
+		setVideoTaskResult(&candidate, candidate.PrivateData.PendingTerminalResultURL)
 	}
 	clearPendingTaskTerminalEvidence(&candidate)
 	won, err := candidate.PublishRecoveredTaskTerminalStatus(oldStatus, task.UpdatedAt)

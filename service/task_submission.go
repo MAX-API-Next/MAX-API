@@ -22,6 +22,7 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 	}
 	if info.TaskRelayInfo != nil && info.PersistedTaskID > 0 {
 		var intent *model.BillingSettlementInput
+		statusOnly := info.Billing == nil
 		if info.Billing != nil {
 			preparer, ok := info.Billing.(RefundSettlementPreparer)
 			if !ok {
@@ -34,12 +35,18 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 				common.SysError("task submit refund preparation requires reconciliation: " + err.Error())
 				return
 			}
+			if session, ok := info.Billing.(*BillingSession); intent == nil && ok {
+				statusOnly = session.isUnsettledZeroChargeTask(info)
+			}
+		}
+		if intent == nil && !statusOnly {
+			return // The session can still have an in-flight or completed owner.
 		}
 		var won bool
 		var err error
 		claimCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		for attempt := 0; attempt < 3; attempt++ {
-			if info.Billing == nil {
+			if statusOnly {
 				won, err = model.ClaimTaskSubmitFailureStatusContext(claimCtx, info.PersistedTaskID, info.RequestId, reason, info.UserId, info.TokenId)
 			} else {
 				won, err = model.ClaimTaskSubmitFailureWithSettlementContext(claimCtx, info.PersistedTaskID, reason, intent)
@@ -62,7 +69,7 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 				default:
 					common.SysError(fmt.Sprintf("task submit rejection still requires manual review: task_id=%d", info.PersistedTaskID))
 				}
-			} else if info.Billing == nil {
+			} else {
 				status, journalErr := model.RecordTaskSubmitFailureStatusRecovery(info.PersistedTaskID, info.RequestId, reason, info.UserId, info.TokenId)
 				if journalErr != nil {
 					common.SysError(fmt.Sprintf("task submit rejection status recovery could not be verified: task_id=%d", info.PersistedTaskID))
@@ -71,12 +78,10 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 				} else if status == model.TaskSubmitFailureRecoveryManual {
 					common.SysError(fmt.Sprintf("task submit rejection status still requires manual review: task_id=%d", info.PersistedTaskID))
 				}
-			} else {
-				common.SysError(fmt.Sprintf("task submit failure ownership could not be determined: task_id=%d", info.PersistedTaskID))
 			}
 			return
 		}
-		if !won {
+		if !won || statusOnly {
 			return
 		}
 	}

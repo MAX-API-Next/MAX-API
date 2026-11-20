@@ -263,7 +263,7 @@ func TestCatalogGuardResolvesAliasedTableExpression(t *testing.T) {
 }
 
 func TestTypedChannelUpsertChecksConflictAssignments(t *testing.T) {
-	for _, kind := range []string{"models", "model_mapping", "expression", "metadata", "update-all", "reused-update-all"} {
+	for _, kind := range []string{"models", "model_mapping", "expression", "raw target", "metadata", "update-all", "reused-update-all"} {
 		t.Run(kind, func(t *testing.T) {
 			db := deletionDB(t)
 			catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
@@ -283,6 +283,9 @@ func TestTypedChannelUpsertChecksConflictAssignments(t *testing.T) {
 				values["models"] = gorm.Expr("?", "catalog-model")
 			}
 			conflict := clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.Assignments(values)}
+			if kind == "raw target" {
+				conflict.DoUpdates = append(conflict.DoUpdates, clause.Assignment{Column: clause.Column{Name: "models", Raw: true}, Value: "ordinary"})
+			}
 			if kind == "update-all" || kind == "reused-update-all" {
 				conflict = clause.OnConflict{UpdateAll: true}
 			}
@@ -295,7 +298,7 @@ func TestTypedChannelUpsertChecksConflictAssignments(t *testing.T) {
 			switch kind {
 			case "models", "model_mapping":
 				require.ErrorIs(t, err, taskplugin.ErrBindingRejected)
-			case "expression":
+			case "expression", "raw target":
 				require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
 			default:
 				require.NoError(t, err)

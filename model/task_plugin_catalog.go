@@ -267,6 +267,11 @@ func taskPluginStorageIdentityContext(ctx context.Context, entry taskplugin.Stor
 	return hex.EncodeToString(digest[:]), nil
 }
 
+func validTaskPluginCatalogHead(head TaskPluginCatalogHead) bool {
+	return head.Revision > 0 && head.MutationID != "" &&
+		head.LastDeletionRevision >= 0 && head.LastDeletionRevision <= head.Revision
+}
+
 func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.CatalogSnapshot, error) {
 	if store == nil || store.db == nil || ctx == nil {
 		return taskplugin.CatalogSnapshot{}, taskplugin.ErrCatalogUnavailable
@@ -282,7 +287,7 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		if err != nil && !missing {
 			return err
 		}
-		if !missing && (head.Revision <= 0 || head.MutationID == "") {
+		if !missing && !validTaskPluginCatalogHead(head) {
 			return taskplugin.ErrCatalogInvalid
 		}
 		observed := head.Revision
@@ -301,8 +306,11 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		completedData = &taskplugin.CatalogSnapshot{Revision: head.Revision, Packages: rows, Deletions: deletions}
 		var after TaskPluginCatalogHead
 		err = tx.First(&after, 1).Error
-		if err == nil && after.Revision > *observedRevision && after.MutationID != "" {
-			*observedRevision = after.Revision
+		if err == nil {
+			if !validTaskPluginCatalogHead(after) {
+				return taskplugin.ErrCatalogInvalid
+			}
+			*observedRevision = max(*observedRevision, after.Revision)
 		}
 		if err != nil && ctx.Err() != nil {
 			if validateTaskPluginDeletionHead(head, deletions) != nil {
@@ -385,11 +393,20 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 			}
 		} else {
 			result := tx.Model(&TaskPluginCatalogHead{}).Where("id = ? AND revision = ?", 1, revision).
+				Where("mutation_id <> ? AND last_deletion_revision BETWEEN 0 AND revision", "").
 				Updates(map[string]any{"revision": revision + 1, "mutation_id": mutationID})
 			if result.Error != nil {
 				return result.Error
 			}
 			if result.RowsAffected != 1 {
+				var current TaskPluginCatalogHead
+				err := withRowLock(tx).First(&current, 1).Error
+				if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+					return err
+				}
+				if err == nil && current.Revision == revision && !validTaskPluginCatalogHead(current) {
+					return taskplugin.ErrCatalogInvalid
+				}
 				return taskplugin.ErrCatalogConflict
 			}
 		}
@@ -470,7 +487,11 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 // The savepoint name comes from the internal mutation UUID. Run cleanup with
 // time for rollback even if the CAS request expires while its outer transaction is live.
 func withTaskPluginCatalogSavepoint(db *gorm.DB, name string, write func(*gorm.DB) error) (err error) {
-	if err := db.Exec("SAVEPOINT " + name).Error; err != nil {
+	conn := db.Statement.ConnPool
+	if prepared, ok := conn.(*gorm.PreparedStmtTX); ok {
+		conn = prepared.Tx
+	}
+	if _, err := conn.ExecContext(db.Statement.Context, "SAVEPOINT "+name); err != nil {
 		return err
 	}
 	success := false
@@ -480,11 +501,10 @@ func withTaskPluginCatalogSavepoint(db *gorm.DB, name string, write func(*gorm.D
 		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(db.Statement.Context), time.Second)
 		defer cancel()
-		cleanup := db.WithContext(ctx)
-		if cleanup.Exec("ROLLBACK TO SAVEPOINT "+name).Error != nil {
+		if _, rollbackErr := conn.ExecContext(ctx, "ROLLBACK TO SAVEPOINT "+name); rollbackErr != nil {
 			// An unverified rollback cannot leave the outer transaction able to
 			// commit our provisional generation.
-			_ = cleanup.Rollback().Error
+			_ = db.Rollback().Error
 			err = taskplugin.ErrCatalogUnavailable
 		}
 	}()

@@ -194,16 +194,8 @@ func verifyTaskSubmitFailureStatusOnly(tx *gorm.DB, task *Task, record TaskSubmi
 	}
 	private := task.PrivateData
 	if task.UserId != record.UserID || private.TokenId != record.TokenID || private.BillingRequestId != requestID ||
-		task.Quota != 0 || private.BillingSource != "" || private.SubscriptionId != 0 || private.UpstreamTaskID != "" || !private.AwaitingUpstreamID {
-		return ErrTaskSubmitRefundIdentityMismatch
-	}
-	// Check the canonical funding selection and older durable debit records.
-	// A status-only item has no authority over even an unapplied reservation.
-	var selection BillingPreConsumeSelection
-	if err := withRowLock(tx).Select("request_id").Where("request_id = ?", requestID).Take(&selection).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
-		if err != nil {
-			return err
-		}
+		task.Quota != 0 || private.BillingSource != "" && private.BillingSource != BillingSettlementSourceWallet ||
+		private.SubscriptionId != 0 || private.UpstreamTaskID != "" || !private.AwaitingUpstreamID {
 		return ErrTaskSubmitRefundIdentityMismatch
 	}
 	var subscription SubscriptionPreConsumeRecord
@@ -214,11 +206,39 @@ func verifyTaskSubmitFailureStatusOnly(tx *gorm.DB, task *Task, record TaskSubmi
 		return ErrTaskSubmitRefundIdentityMismatch
 	}
 	var settlement BillingSettlement
-	operationKeys := []string{billingRequestOperationPrefix + requestID + ":pre-consume", record.OperationKey, BillingTaskFinalizeOperationKey(task.ID)}
+	// A supported wallet reserve sequence starts at revision one. Any
+	// finalize or attempted reserve has its own ownership and must reconcile.
+	operationKeys := []string{billingRequestOperationPrefix + requestID + ":reserve:1", record.OperationKey, BillingTaskFinalizeOperationKey(task.ID)}
 	if err := withRowLock(tx).Select("id").Where("operation_key IN ?", operationKeys).Take(&settlement).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
 		if err != nil {
 			return err
 		}
+		return ErrTaskSubmitRefundIdentityMismatch
+	}
+	return verifyTaskSubmitFailureZeroDebit(tx, task, record, requestID)
+}
+
+func verifyTaskSubmitFailureZeroDebit(tx *gorm.DB, task *Task, record TaskSubmitFailureRecovery, requestID string) error {
+	var selection BillingPreConsumeSelection
+	selectionErr := withRowLock(tx).Where("request_id = ?", requestID).Take(&selection).Error
+	if selectionErr != nil && !errors.Is(selectionErr, gorm.ErrRecordNotFound) {
+		return selectionErr
+	}
+	var debit BillingSettlement
+	debitErr := withRowLock(tx).Where("operation_key = ?", billingRequestOperationPrefix+requestID+":pre-consume").Take(&debit).Error
+	if debitErr != nil && !errors.Is(debitErr, gorm.ErrRecordNotFound) {
+		return debitErr
+	}
+	if selectionErr != nil && debitErr != nil && task.PrivateData.BillingSource == "" {
+		return nil // The request used no billing session.
+	}
+	if selectionErr != nil || debitErr != nil || selection.Source != BillingSettlementSourceWallet ||
+		selection.UserID != record.UserID || selection.TokenID != record.TokenID || selection.EffectiveQuota != 0 ||
+		debit.Status != BillingSettlementStatusApplied || debit.Source != selection.Source ||
+		debit.UserID != selection.UserID || debit.TokenID != selection.TokenID || debit.PreConsumeRequestID != requestID ||
+		debit.PreConsumeEffectiveQuota != 0 || debit.PreConsumeRequestedQuota != selection.RequestedQuota ||
+		debit.FundingDelta != 0 || debit.TokenDelta != 0 || debit.AppliedFundingDelta != 0 || debit.AppliedTokenDelta != 0 ||
+		debit.TaskID != 0 || debit.SubscriptionID != 0 {
 		return ErrTaskSubmitRefundIdentityMismatch
 	}
 	return nil
@@ -397,27 +417,9 @@ func processPendingTaskSubmitFailures() {
 			updateTaskSubmitFailureRecovery(record, status, err)
 			continue
 		}
-		if input == nil {
-			if won {
-				updateTaskSubmitFailureRecovery(record, TaskSubmitFailureStatusRecorded, nil)
-			} else {
-				updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryManual, ErrTaskFinalizeOwned)
-			}
-			continue
-		}
 		if !won {
-			var settlement BillingSettlement
-			err := db.Where("operation_key = ?", input.OperationKey).First(&settlement).Error
-			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-				updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryPending, err)
-				continue
-			}
-			if err != nil || validateBillingSettlement(settlement, *input) != nil {
-				updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryManual, ErrTaskFinalizeOwned)
-				continue
-			}
+			updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryManual, ErrTaskFinalizeOwned)
 		}
-		updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryRecorded, nil)
 	}
 }
 
@@ -425,6 +427,15 @@ func updateTaskSubmitFailureRecovery(record TaskSubmitFailureRecovery, status st
 	// A claim may use up its deadline while the journal is still writable.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	err := retryTaskSubmitFailureTransaction(DB.WithContext(ctx), func(conn *gorm.DB) error {
+		return writePendingTaskSubmitFailureDisposition(conn, record, status, cause).Error
+	})
+	if err != nil {
+		common.SysError("failed to update task submit failure recovery journal")
+	}
+}
+
+func writePendingTaskSubmitFailureDisposition(db *gorm.DB, record TaskSubmitFailureRecovery, status string, cause error) *gorm.DB {
 	next, message := int64(0), ""
 	if cause != nil {
 		message = common.SanitizePersistedLogContent(cause.Error())
@@ -432,11 +443,6 @@ func updateTaskSubmitFailureRecovery(record TaskSubmitFailureRecovery, status st
 	if status == TaskSubmitFailureRecoveryPending {
 		next = time.Now().Add(time.Duration(1<<min(record.Attempts+1, 6)) * time.Second).Unix()
 	}
-	err := retryTaskSubmitFailureTransaction(DB.WithContext(ctx), func(conn *gorm.DB) error {
-		return conn.Model(&TaskSubmitFailureRecovery{}).Where("task_id = ? AND status = ?", record.TaskID, TaskSubmitFailureRecoveryPending).
-			Updates(map[string]any{"status": status, "attempts": gorm.Expr("attempts + 1"), "last_error": message, "next_attempt": next, "updated_at": time.Now().Unix()}).Error
-	})
-	if err != nil {
-		common.SysError("failed to update task submit failure recovery journal")
-	}
+	return db.Model(&TaskSubmitFailureRecovery{}).Where("task_id = ? AND status = ?", record.TaskID, TaskSubmitFailureRecoveryPending).
+		Updates(map[string]any{"status": status, "attempts": gorm.Expr("attempts + 1"), "last_error": message, "next_attempt": next, "updated_at": time.Now().Unix()})
 }

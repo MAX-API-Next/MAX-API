@@ -640,9 +640,44 @@ func TestPreflightSnapshotOrderDoesNotSuspendUnchangedHost(t *testing.T) {
 
 type cancelAfterCatalogRead struct {
 	context.Context
-	cancel context.CancelFunc
-	armed  bool
-	checks int
+	cancel            context.CancelFunc
+	armed             bool
+	checks            int
+	cancelAfterChecks int
+}
+
+func TestManagementMutationRefreshOutageHasKnownNoWrite(t *testing.T) {
+	store := &installValidationStore{}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	pkg := testPackage(t, validManifest(), "source")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	before := cloneCatalogSnapshot(store.snapshot)
+	store.loadErrors = []error{ErrCatalogUnavailable}
+	err = catalog.MutateExpected(t.Context(), 1, ManagementMutation{Action: "disable", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version})
+	require.ErrorIs(t, err, ErrCatalogNotCommitted)
+	require.ErrorIs(t, err, ErrCatalogUnavailable)
+	require.Equal(t, 1, store.writes)
+	require.Equal(t, before, store.snapshot)
+}
+
+func TestManagementSnapshotCancellationKeepsValidatedPublication(t *testing.T) {
+	store := &memoryCatalogStore{}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	pkg := testPackage(t, validManifest(), "source")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	published := catalog.host.state.Load()
+	ctx := newCancelAfterCatalogRead(t)
+	// The one-package equality check consumes five context checks after the
+	// store read. Cancel when management begins building its response.
+	ctx.cancelAfterChecks = 5
+	store.onLoad = func(int) { ctx.armed = true }
+	entries, revision, err := catalog.ManagementSnapshot(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, entries)
+	require.Zero(t, revision)
+	require.Same(t, published, catalog.host.state.Load())
 }
 
 func TestManagementDeletionRefreshCancellationIsNotCommitted(t *testing.T) {
@@ -684,7 +719,7 @@ func newCancelAfterCatalogRead(t *testing.T) *cancelAfterCatalogRead {
 func (ctx *cancelAfterCatalogRead) Err() error {
 	if ctx.armed {
 		ctx.checks++
-		if ctx.checks > 1 {
+		if ctx.checks > max(1, ctx.cancelAfterChecks) {
 			ctx.cancel()
 		}
 	}

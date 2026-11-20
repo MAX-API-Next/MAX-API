@@ -95,9 +95,17 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	terminal, err := model.GetTaskPlaceholderByID(task.ID)
 	require.NoError(t, err)
 	before := providerCalls.Load()
-	require.Nil(t, tryRealtimeFetch(terminal, false))
+	require.Contains(t, string(tryRealtimeFetch(terminal, false)), `"status":"failed"`)
+	terminal.PrivateData.ResultURL = "https://fixture.invalid/stored.webm"
+	require.NoError(t, model.DB.Model(terminal).UpdateColumns(map[string]any{
+		"status": model.TaskStatusSuccess, "data": []byte(`{"response":{"videos":[{"mimeType":"video/webm"}]}}`), "private_data": terminal.PrivateData,
+	}).Error)
+	terminal, err = model.GetTaskPlaceholderByID(task.ID)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"code":"success","message":"","data":{"error":null,"format":"video/webm","metadata":null,"status":"succeeded","task_id":"realtime-local","url":"https://fixture.invalid/stored.webm"}}`, string(tryRealtimeFetch(terminal, false)))
+	require.Nil(t, tryRealtimeFetch(terminal, true))
 	require.Equal(t, before, providerCalls.Load())
-	require.EqualValues(t, model.TaskStatusFailure, terminal.Status)
+	require.EqualValues(t, model.TaskStatusSuccess, terminal.Status)
 
 	require.NoError(t, db.Model(stored).UpdateColumns(map[string]any{
 		"status": model.TaskStatusInProgress, "private_data": `{"upstream_task_id":42}`,
@@ -115,6 +123,14 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	require.Equal(t, "80%", public.Data.Progress)
 	require.Empty(t, public.Data.ResultURL)
 	require.Equal(t, before, providerCalls.Load(), "unreadable private metadata cannot dispatch")
+	older := *terminal
+	older.Status, older.Progress, older.UpdatedAt = model.TaskStatusInProgress, "15%", 100
+	response = tryRealtimeFetch(&older, false)
+	require.Contains(t, string(response), `"status":"processing"`)
+	require.Contains(t, string(response), `"url":""`)
+	require.Equal(t, "80%", older.Progress)
+	require.True(t, older.PrivateDataUnreadable())
+	require.Equal(t, before+1, providerCalls.Load(), "the public reload cannot dispatch again")
 	_, _, err = model.GetByTaskId(stored.UserId, stored.TaskID)
 	require.Error(t, err, "the strict billing lookup rejects the same broken private data")
 }

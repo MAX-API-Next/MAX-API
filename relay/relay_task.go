@@ -861,14 +861,27 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 // 仅当渠道类型为 Gemini 或 Vertex 时触发；其他渠道或出错时返回 nil。
 // 当非 OpenAI Video API 时，还会构建自定义格式的响应体。
 func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
-	if isTerminalTaskStatus(task.Status) || task.PrivateDataUnreadable() || task.CapturePrivateDataForStatusUpdate() != nil {
+	terminal := isTerminalTaskStatus(task.Status)
+	if task.PrivateDataUnreadable() || terminal && isOpenAIVideoAPI {
 		return nil
+	}
+	if terminal {
+		platform, _ := strconv.Atoi(string(task.Platform))
+		if platform == constant.ChannelTypeVertexAi || platform == constant.ChannelTypeGemini {
+			return renderRealtimeVideoStatus(task, task.Data)
+		}
 	}
 	channelModel, err := model.GetChannelById(task.ChannelId, true)
 	if err != nil {
 		return nil
 	}
 	if channelModel.Type != constant.ChannelTypeVertexAi && channelModel.Type != constant.ChannelTypeGemini {
+		return nil
+	}
+	if terminal {
+		return renderRealtimeVideoStatus(task, task.Data)
+	}
+	if task.CapturePrivateDataForStatusUpdate() != nil {
 		return nil
 	}
 
@@ -933,8 +946,9 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		won, err := task.UpdatePollingProgress(snap.Status)
 		if !won || err != nil {
 			*task = observed
-			if latest, found, readErr := model.GetByTaskId(observed.UserId, observed.TaskID); readErr == nil && found && latest.ID == observed.ID {
+			if latest, found, readErr := model.GetUserTaskStatusByID(observed.UserId, observed.TaskID); readErr == nil && found && latest.ID == observed.ID {
 				*task = *latest
+				body = latest.Data
 			}
 		}
 	}
@@ -943,7 +957,10 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	if isOpenAIVideoAPI {
 		return nil
 	}
+	return renderRealtimeVideoStatus(task, body)
+}
 
+func renderRealtimeVideoStatus(task *model.Task, body []byte) []byte {
 	// 非 OpenAI Video API: 构建自定义格式响应
 	format := detectVideoFormat(body)
 	out := map[string]any{

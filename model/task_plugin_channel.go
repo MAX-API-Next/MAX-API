@@ -211,6 +211,9 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 	}
 	if conflict, ok := statement.Clauses["ON CONFLICT"].Expression.(clause.OnConflict); ok {
 		for _, assignment := range conflict.DoUpdates {
+			if assignment.Column.Raw {
+				return taskplugin.ErrCatalogInvalid
+			}
 			column := assignment.Column.Name
 			if !strings.EqualFold(column, "models") && !strings.EqualFold(column, "model_mapping") {
 				continue
@@ -228,7 +231,7 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 				}
 				text = *value
 			case clause.Column:
-				if value.Table == "excluded" && strings.EqualFold(value.Name, column) {
+				if !value.Raw && value.Table == "excluded" && strings.EqualFold(value.Name, column) {
 					continue // GORM UpdateAll reuses the already-validated inserted column.
 				}
 				return taskplugin.ErrCatalogInvalid
@@ -360,7 +363,7 @@ func validateChannelReferenceSet(tx *gorm.DB, updates []channelEmittedReferences
 func taskPluginChannelHead(tx *gorm.DB) (TaskPluginCatalogHead, error) {
 	var head TaskPluginCatalogHead
 	err := tx.Session(&gorm.Session{NewDB: true}).Clauses(clause.Locking{Strength: "UPDATE"}).First(&head, 1).Error
-	if err == nil && (head.Revision <= 0 || head.MutationID == "") {
+	if err == nil && !validTaskPluginCatalogHead(head) {
 		err = taskplugin.ErrCatalogInvalid
 	}
 	return head, err

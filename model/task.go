@@ -207,6 +207,7 @@ type TaskPrivateData struct {
 	// legacy rows where TaskID itself is the provider task identifier.
 	AwaitingUpstreamID bool   `json:"awaiting_upstream_id,omitempty"`
 	ResultURL          string `json:"result_url,omitempty"` // 任务成功后的结果 URL（视频地址等）
+	InlineVideoDataURL string `json:"inline_video_data_url,omitempty"`
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
 	BillingSource    string              `json:"billing_source,omitempty"`     // "wallet" 或 "subscription"
 	BillingRequestId string              `json:"billing_request_id,omitempty"` // 原始预扣 request id，用于跨周期安全结算
@@ -901,11 +902,22 @@ func (t *Task) UpdateWithStatusSnapshot(fromStatus TaskStatus, expectedUpdatedAt
 // UpdatePollingProgress advances the version on every observed provider change,
 // including polls that keep the current status.
 func (t *Task) UpdatePollingProgress(fromStatus TaskStatus) (bool, error) {
+	return t.updatePollingProgress(fromStatus, false)
+}
+
+func (t *Task) UpdatePollingProgressPreservingData(fromStatus TaskStatus) (bool, error) {
+	return t.updatePollingProgress(fromStatus, true)
+}
+
+func (t *Task) updatePollingProgress(fromStatus TaskStatus, preserveData bool) (bool, error) {
 	if t == nil || t.ID <= 0 || t.UpdatedAt < 0 || t.UpdatedAt == 1<<63-1 {
 		return false, errors.New("persisted task and advanceable snapshot are required")
 	}
 	nextVersion := max(time.Now().Unix(), t.UpdatedAt+1)
 	values := t.statusUpdateValues()
+	if preserveData {
+		delete(values, "data")
+	}
 	values["updated_at"] = nextVersion
 	query := DB.Model(&Task{ID: t.ID}).Where("status = ?", fromStatus)
 	result := t.whereQuotaSnapshot(t.whereTimestampSnapshot(query, t.UpdatedAt)).Updates(values)
@@ -1341,6 +1353,7 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 		if err != nil {
 			return err
 		}
+		var pendingJournal *TaskSubmitFailureRecovery
 		if input != nil || statusOnly {
 			// Lock in task-before-journal order, as task writers also consult
 			// the journal while holding the task row. A worker's earlier scan
@@ -1370,15 +1383,45 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 				if journal.refundInput() != observed {
 					return ErrBillingSettlementOperationConflict
 				}
+				pendingJournal = &journal
 			}
+		}
+		complete := func(status string) error {
+			if pendingJournal != nil {
+				result := writePendingTaskSubmitFailureDisposition(tx, *pendingJournal, status, nil)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 {
+					return ErrTaskSubmitFailureRecoveryRequiresReview
+				}
+			}
+			won = true
+			return nil
+		}
+		replayExistingIntent := func() error {
+			if !journalReplay || input == nil {
+				return nil
+			}
+			var existing BillingSettlement
+			err := withRowLock(tx).Where("operation_key = ?", input.OperationKey).Take(&existing).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if validateBillingSettlement(existing, *input) != nil {
+				return ErrBillingSettlementOperationConflict
+			}
+			return complete(TaskSubmitFailureRecoveryRecorded)
 		}
 		if statusOnly {
 			if err := verifyTaskSubmitFailureStatusOnly(tx, task, *recovery); err != nil {
 				return err
 			}
 			if task.Status == TaskStatusFailure && !task.SubmitTimeoutRetainedFunding && task.FailReason == reason {
-				won = true // The status write already committed before journal acknowledgement.
-				return nil
+				return complete(TaskSubmitFailureStatusRecorded)
 			}
 		}
 		unprojectedRetry := task.PrivateData.AwaitingUpstreamID &&
@@ -1386,7 +1429,7 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 		lateRejection := task.Status == TaskStatusFailure && task.SubmitTimeoutRetainedFunding &&
 			task.PrivateData.AwaitingUpstreamID && (task.Quota > 0 || unprojectedRetry) && (input != nil || statusOnly)
 		if task.Status == TaskStatusSuccess || task.Status == TaskStatusFailure && !lateRejection || task.PrivateData.UpstreamTaskID != "" {
-			return nil
+			return replayExistingIntent()
 		}
 		if input != nil {
 			if input.UserID != task.UserId || input.TokenID != task.PrivateData.TokenId || task.PrivateData.BillingRequestId == "" ||
@@ -1432,13 +1475,16 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 		if result.Error != nil {
 			return result.Error
 		}
-		won = result.RowsAffected == 1
-		if won && input != nil {
+		if result.RowsAffected == 0 {
+			return replayExistingIntent()
+		}
+		if input != nil {
 			if _, _, err := ensureBillingSettlementRecordDB(tx, *input); err != nil {
 				return err
 			}
+			return complete(TaskSubmitFailureRecoveryRecorded)
 		}
-		return nil
+		return complete(TaskSubmitFailureStatusRecorded)
 	}
 	_, err := taskSubmitFailureTransaction(db, claim)
 	return won && err == nil, err
