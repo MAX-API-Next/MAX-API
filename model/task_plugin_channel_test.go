@@ -8,9 +8,11 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/schema"
 )
 
 func TestChannelSettingsRepairDoesNotRewriteMalformedMapping(t *testing.T) {
@@ -259,11 +261,11 @@ func TestChannelTableMetadataUpdateStillWorksWithGuard(t *testing.T) {
 func TestCatalogGuardResolvesAliasedTableExpression(t *testing.T) {
 	table, resolved := taskPluginStatementTable(&gorm.Statement{Table: "c", TableExpr: &clause.Expr{SQL: "`main`.`channels` AS c"}})
 	require.True(t, resolved)
-	require.Equal(t, "channels", table)
+	require.Equal(t, "main.channels", table)
 	for _, expression := range []string{`ONLY public.CHANNELS AS c`, `ONLY ("public"."channels") AS c`} {
 		table, resolved = taskPluginStatementTable(&gorm.Statement{Table: "c", TableExpr: &clause.Expr{SQL: expression}})
 		require.True(t, resolved)
-		require.Equal(t, "channels", table)
+		require.Equal(t, "public.channels", table)
 	}
 }
 
@@ -279,6 +281,23 @@ func TestTaskPrivateReferenceWritesRequireTypedUpdates(t *testing.T) {
 	var stored Task
 	require.NoError(t, db.First(&stored, task.ID).Error)
 	require.Equal(t, "20%", stored.Progress)
+}
+
+func TestCatalogGuardUsesConfiguredSchema(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/qualified.db"), &gorm.Config{
+		NamingStrategy: schema.NamingStrategy{TablePrefix: "main."},
+	})
+	require.NoError(t, err)
+	pool, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pool.Close() })
+	require.NoError(t, registerTaskPluginTypedCreateGuard(db))
+	require.NoError(t, db.Exec("CREATE TABLE main.channels (models TEXT)").Error)
+	require.NoError(t, db.Exec("CREATE TABLE main.tasks (private_data TEXT)").Error)
+	require.NoError(t, db.Exec("CREATE TABLE main.audit_notes (models TEXT)").Error)
+	require.ErrorIs(t, db.Table("main.channels").Create(map[string]any{"models": "fixture"}).Error, taskplugin.ErrCatalogInvalid)
+	require.ErrorIs(t, db.Table("main.tasks").Where("1=1").Update("private_data", "{}").Error, taskplugin.ErrCatalogInvalid)
+	require.NoError(t, db.Table("main.audit_notes").Create(map[string]any{"models": "fixture"}).Error)
 }
 
 func TestTypedChannelUpsertChecksConflictAssignments(t *testing.T) {

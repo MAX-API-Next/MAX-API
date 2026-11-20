@@ -688,14 +688,14 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		return fmt.Errorf("extract task usage failed for task %s: %w", taskId, err)
 	}
 
-	inlineFromVertex := ""
-	if ch.Type == constant.ChannelTypeVertexAi && strings.HasPrefix(taskResult.Url, "data:") {
+	vertex := ch.Type == constant.ChannelTypeVertexAi
+	inlineResult := ""
+	if vertex && strings.HasPrefix(taskResult.Url, "data:") {
 		// The content handler can query Vertex again. Keep the large response
 		// out of both the public payload and the persisted terminal evidence.
-		inlineFromVertex = taskResult.Url
-		taskResult.Url = ""
+		inlineResult, taskResult.Url = taskResult.Url, ""
 	}
-	task.Data = redactVideoResponseBody(responseBody, inlineFromVertex)
+	task.Data = redactVideoResponseBody(responseBody, vertex, inlineResult)
 
 	logger.LogDebug(ctx, "updateVideoSingleTask taskResult: %+v", taskResult)
 
@@ -1198,19 +1198,19 @@ func shouldApplyTaskResultProgress(taskResult *relaycommon.TaskInfo) bool {
 	}
 }
 
-func redactVideoResponseBody(body []byte, removableInlineURL string) []byte {
+func redactVideoResponseBody(body []byte, removeInlineVideo bool, selectedInlineURL string) []byte {
 	var payload any
 	if err := common.Unmarshal(body, &payload); err != nil {
-		if removableInlineURL != "" {
+		if removeInlineVideo {
 			return nil
 		}
 		return body
 	}
-	if removableInlineURL != "" {
-		payload = removeVideoInlinePayload(payload, removableInlineURL)
+	if removeInlineVideo {
+		payload = removeVideoInlinePayload(payload, selectedInlineURL)
 	}
 	m, object := payload.(map[string]any)
-	if !object && removableInlineURL == "" {
+	if !object && !removeInlineVideo {
 		return body
 	}
 	resp, _ := m["response"].(map[string]any)
@@ -1229,7 +1229,7 @@ func redactVideoResponseBody(body []byte, removableInlineURL string) []byte {
 	}
 	b, err := common.Marshal(payload)
 	if err != nil {
-		if removableInlineURL != "" {
+		if removeInlineVideo {
 			return nil
 		}
 		return body
@@ -1237,19 +1237,25 @@ func redactVideoResponseBody(body []byte, removableInlineURL string) []byte {
 	return b
 }
 
-func removeVideoInlinePayload(value any, inlineURL string) any {
+func removeVideoInlinePayload(value any, selectedInlineURL string) any {
 	switch value := value.(type) {
 	case string:
-		if strings.TrimSpace(value) == inlineURL {
-			return ""
+		trimmed := strings.TrimSpace(value)
+		if len(trimmed) >= len("data:") && strings.EqualFold(trimmed[:len("data:")], "data:") {
+			header, _, valid := strings.Cut(trimmed, ",")
+			const video = "data:video/"
+			if trimmed == selectedInlineURL || valid && (strings.EqualFold(header, "data:;base64") ||
+				len(header) >= len(video) && strings.EqualFold(header[:len(video)], video)) {
+				return ""
+			}
 		}
 	case map[string]any:
 		for key, child := range value {
-			value[key] = removeVideoInlinePayload(child, inlineURL)
+			value[key] = removeVideoInlinePayload(child, selectedInlineURL)
 		}
 	case []any:
 		for i, child := range value {
-			value[i] = removeVideoInlinePayload(child, inlineURL)
+			value[i] = removeVideoInlinePayload(child, selectedInlineURL)
 		}
 	}
 	return value

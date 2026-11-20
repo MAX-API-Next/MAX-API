@@ -44,8 +44,7 @@ func loadTaskPluginDeletions(tx *gorm.DB) ([]taskplugin.PackageDeletion, error) 
 }
 
 func taskPluginIdentity(key, version string) string {
-	sum := sha256.Sum256([]byte(key + "@" + version))
-	return hex.EncodeToString(sum[:])
+	return taskplugin.StoragePackageIdentity(key, version)
 }
 
 func validateTaskPluginDeletionHead(head TaskPluginCatalogHead, deletions []taskplugin.PackageDeletion) error {
@@ -118,6 +117,9 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		}
 		rows, identities, err := store.loadTaskPluginVersions(tx)
 		if err != nil {
+			if errors.Is(err, taskplugin.ErrCatalogInvalid) {
+				return invalidTaskPluginDeletionObservation(head.Revision, err)
+			}
 			return err
 		}
 		identity := taskPluginIdentity(key, version)

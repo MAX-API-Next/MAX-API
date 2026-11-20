@@ -243,19 +243,19 @@ func (store *TaskPluginCatalogStore) loadTaskPluginVersions(tx *gorm.DB) ([]task
 		return nil, nil, err
 	}
 	result := make([]taskplugin.StoredPackage, len(records))
-	identities := make([]string, 0, len(records))
+	identities := make([]string, len(records))
 	for i, record := range records {
 		result[i] = taskplugin.StoredPackage{Document: []byte(record.Document), Digest: record.Digest, Active: record.Active, Enabled: record.Enabled, Revoked: record.Revoked}
+		identities[i] = record.Identity
 	}
 	for i, entry := range result {
 		identity, err := store.retainedIdentity(tx.Statement.Context, entry)
 		if tx.Statement.Context.Err() != nil {
-			return result, nil, errors.Join(taskplugin.ErrCatalogUnavailable, tx.Statement.Context.Err())
+			return result, identities, errors.Join(taskplugin.ErrCatalogUnavailable, tx.Statement.Context.Err())
 		}
 		if err != nil || identity != records[i].Identity {
-			return result, nil, taskplugin.ErrCatalogInvalid
+			return result, identities, taskplugin.ErrCatalogInvalid
 		}
-		identities = append(identities, identity)
 	}
 	return result, identities, nil
 }
@@ -307,8 +307,7 @@ func taskPluginStorageIdentityContext(ctx context.Context, entry taskplugin.Stor
 		return "", taskplugin.ErrCatalogInvalid
 	}
 	manifest := p.Manifest()
-	digest := sha256.Sum256([]byte(manifest.Key + "@" + manifest.Version))
-	return hex.EncodeToString(digest[:]), nil
+	return taskplugin.StoragePackageIdentity(manifest.Key, manifest.Version), nil
 }
 
 func validTaskPluginCatalogHead(head TaskPluginCatalogHead) bool {
@@ -323,6 +322,7 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 	var snapshot taskplugin.CatalogSnapshot
 	var observedRevision *int64
 	var completedPackages *[]taskplugin.StoredPackage
+	var completedIdentities []string
 	var completedData *taskplugin.CatalogSnapshot
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var head TaskPluginCatalogHead
@@ -336,9 +336,10 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		}
 		observed := head.Revision
 		observedRevision = &observed
-		rows, _, err := store.loadTaskPluginVersions(tx)
+		rows, identities, err := store.loadTaskPluginVersions(tx)
 		if rows != nil {
 			completedPackages = &rows
+			completedIdentities = identities
 		}
 		if err != nil {
 			return err
@@ -385,7 +386,7 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 			err = errors.Join(taskplugin.ErrCatalogUnavailable, ctx.Err())
 		}
 		if observedRevision != nil {
-			err = &taskplugin.CatalogReadObservationError{Revision: *observedRevision, Packages: completedPackages, Snapshot: completedData, Err: err}
+			err = &taskplugin.CatalogReadObservationError{Revision: *observedRevision, Packages: completedPackages, RowIdentities: completedIdentities, Snapshot: completedData, Err: err}
 		}
 		return taskplugin.CatalogSnapshot{}, err
 	}

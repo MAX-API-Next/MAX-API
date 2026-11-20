@@ -19,7 +19,7 @@ import (
 
 func TestSlowTaskSubmitFailureClaimDoesNotBlockLaterRecovery(t *testing.T) {
 	db := deletionDB(t)
-	require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+	require.NoError(t, db.AutoMigrate(&BillingSettlement{}, &BillingPreConsumeSelection{}))
 	previous, oldSQLite := DB, common.UsingSQLite
 	DB, common.UsingSQLite = db, true
 	t.Cleanup(func() { DB, common.UsingSQLite = previous, oldSQLite })
@@ -65,7 +65,7 @@ func TestSlowTaskSubmitFailureClaimDoesNotBlockLaterRecovery(t *testing.T) {
 
 func TestTaskSubmitFailureAcknowledgementCommitsWithClaim(t *testing.T) {
 	db := deletionDB(t)
-	require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+	require.NoError(t, db.AutoMigrate(&BillingSettlement{}, &BillingPreConsumeSelection{}))
 	previous, oldSQLite := DB, common.UsingSQLite
 	DB, common.UsingSQLite = db, true
 	t.Cleanup(func() { DB, common.UsingSQLite = previous, oldSQLite })
@@ -112,6 +112,23 @@ func TestTaskSubmitFailureAcknowledgementCommitsWithClaim(t *testing.T) {
 	require.EqualValues(t, 1, records)
 }
 
+func TestTaskSubmitFailureStaleBackoffPreservesNewerSchedule(t *testing.T) {
+	db := deletionDB(t)
+	old := TaskSubmitFailureRecovery{TaskID: 1, OperationKey: "fixture", Status: TaskSubmitFailureRecoveryPending, Attempts: 1}
+	require.NoError(t, db.Create(&old).Error)
+	newer := writePendingTaskSubmitFailureDisposition(db, old, TaskSubmitFailureRecoveryPending, errors.New("newer retry"))
+	require.NoError(t, newer.Error)
+	require.EqualValues(t, 1, newer.RowsAffected)
+	var before TaskSubmitFailureRecovery
+	require.NoError(t, db.First(&before, "task_id = ?", old.TaskID).Error)
+	stale := writePendingTaskSubmitFailureDisposition(db, old, TaskSubmitFailureRecoveryManual, errors.New("stale decision"))
+	require.NoError(t, stale.Error)
+	require.Zero(t, stale.RowsAffected)
+	var after TaskSubmitFailureRecovery
+	require.NoError(t, db.First(&after, "task_id = ?", old.TaskID).Error)
+	require.Equal(t, before, after)
+}
+
 func TestTaskSubmitFailureRecoveryMetadataUsesPassDeadline(t *testing.T) {
 	db := deletionDB(t)
 	previous := DB
@@ -133,7 +150,7 @@ func TestTaskSubmitFailureRecoveryMetadataUsesPassDeadline(t *testing.T) {
 
 func TestOverdueSubmitFailureRecoveryPrecedesNewJournalPage(t *testing.T) {
 	db := deletionDB(t)
-	require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+	require.NoError(t, db.AutoMigrate(&BillingSettlement{}, &BillingPreConsumeSelection{}))
 	previous, oldSQLite := DB, common.UsingSQLite
 	DB, common.UsingSQLite = db, true
 	t.Cleanup(func() { DB, common.UsingSQLite = previous, oldSQLite })
@@ -233,7 +250,7 @@ func TestPendingSubmitFailureRecoveryOwnsTimeoutAndRetry(t *testing.T) {
 
 func TestSubmitFailureClaimReservesSQLiteWriterBeforeReading(t *testing.T) {
 	db := deletionDB(t)
-	require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+	require.NoError(t, db.AutoMigrate(&BillingSettlement{}, &BillingPreConsumeSelection{}))
 	var journal string
 	require.NoError(t, db.Raw("PRAGMA journal_mode=WAL").Scan(&journal).Error)
 	require.Equal(t, "wal", strings.ToLower(journal))
@@ -438,7 +455,7 @@ func TestSubmitFailureJournalRollsBackBusySQLiteCommit(t *testing.T) {
 
 func TestSubmitFailureWorkerCanReplayAfterBusySQLiteCommit(t *testing.T) {
 	db := deletionDB(t)
-	require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+	require.NoError(t, db.AutoMigrate(&BillingSettlement{}, &BillingPreConsumeSelection{}))
 	previous, oldSQLite := DB, common.UsingSQLite
 	DB, common.UsingSQLite = db, true
 	t.Cleanup(func() { DB, common.UsingSQLite = previous, oldSQLite })

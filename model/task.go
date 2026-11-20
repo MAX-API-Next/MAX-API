@@ -558,7 +558,8 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 	var tasks []*Task
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		var rows []taskWorkerRow
-		if err := withRowLock(tx).Model(&Task{}).Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+		unfinished := []string{TaskStatusFailure, TaskStatusSuccess}
+		if err := withoutPendingTaskSubmitFailure(withRowLock(tx).Model(&Task{}).Where("status NOT IN ?", unfinished)).
 			Limit(limit).
 			Order("updated_at ASC, id ASC").
 			Find(&rows).Error; err != nil {
@@ -585,8 +586,8 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 		if len(ids) == 0 {
 			return nil
 		}
-		return tx.Model(&Task{}).
-			Where("id IN ? AND status NOT IN ?", ids, []string{TaskStatusFailure, TaskStatusSuccess}).
+		return withoutPendingTaskSubmitFailure(tx.Model(&Task{})).
+			Where("id IN ? AND status NOT IN ?", ids, unfinished).
 			Where("updated_at IS NULL OR updated_at < ?", int64(math.MaxInt64-1)).
 			UpdateColumn("updated_at", gorm.Expr("CASE WHEN updated_at IS NULL OR updated_at < ? THEN ? ELSE updated_at + 1 END", now, now)).Error
 	})
@@ -1316,6 +1317,19 @@ func ClaimTaskSubmitFailureWithSettlementContext(ctx context.Context, taskID int
 	return claimTaskSubmitFailureWithSettlementDB(DB.WithContext(ctx), taskID, reason, input, nil, false)
 }
 
+// ClaimTaskSubmitFailureAfterWalletReserveError verifies the last reserve under
+// the refund transaction. On success, input contains the recorded refund amount.
+func ClaimTaskSubmitFailureAfterWalletReserveError(ctx context.Context, taskID int64, reason string, input *BillingSettlementInput, failedReserve int64) (bool, error) {
+	if DB == nil || input == nil || failedReserve <= 0 {
+		return false, ErrTaskSubmitRefundIdentityMismatch
+	}
+	record, err := taskSubmitFailureRecoveryRecord(taskID, reason, *input, failedReserve)
+	if err != nil {
+		return false, err
+	}
+	return claimTaskSubmitFailureWithSettlementDB(DB.WithContext(ctx), taskID, record.Reason, input, &record, false)
+}
+
 func ClaimTaskSubmitFailureStatusContext(ctx context.Context, taskID int64, requestID, reason string, userID, tokenID int) (bool, error) {
 	if DB == nil {
 		return false, errors.New("database is not initialized")
@@ -1334,8 +1348,12 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 	if db == nil {
 		return false, errors.New("database is not initialized")
 	}
+	var failedReserve int64
+	if recovery != nil {
+		failedReserve = recovery.FailedWalletReserveRevision
+	}
 	if input != nil {
-		if err := validateTaskSubmitFailureRefundShape(*input); err != nil {
+		if err := validateTaskSubmitFailureRefundShape(*input, failedReserve); err != nil {
 			return false, err
 		}
 	}
@@ -1347,6 +1365,7 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 	won := false
+	var recordedInput BillingSettlementInput
 	statusOnly := recovery != nil && input == nil
 	claim := func(tx *gorm.DB) error {
 		if tx.Dialector.Name() == "sqlite" {
@@ -1388,7 +1407,7 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 					observed = *input
 					observed.TokenKey = ""
 				}
-				if journal.refundInput() != observed {
+				if journal.refundInput() != observed || journal.FailedWalletReserveRevision != failedReserve {
 					return ErrBillingSettlementOperationConflict
 				}
 				pendingJournal = &journal
@@ -1411,15 +1430,33 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 			if !journalReplay || input == nil {
 				return nil
 			}
+			expected := *input
+			if failedReserve != 0 {
+				if task.Status != TaskStatusFailure || task.SubmitTimeoutRetainedFunding || task.PrivateData.UpstreamTaskID != "" ||
+					task.FailReason != reason || task.PrivateData.BillingRequestId == "" ||
+					expected.OperationKey != BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId) ||
+					expected.UserID != task.UserId || expected.TokenID != task.PrivateData.TokenId {
+					return ErrTaskSubmitRefundIdentityMismatch
+				}
+				if err := verifyTaskSubmitRefund(tx, task, &expected, failedReserve); err != nil {
+					return err
+				}
+				if expected.FundingDelta == 0 {
+					return complete(TaskSubmitFailureStatusRecorded)
+				}
+			}
 			var existing BillingSettlement
 			err := withRowLock(tx).Where("operation_key = ?", input.OperationKey).Take(&existing).Error
 			if errors.Is(err, gorm.ErrRecordNotFound) {
+				if failedReserve != 0 {
+					return ErrTaskFinalizeOwned
+				}
 				return nil
 			}
 			if err != nil {
 				return err
 			}
-			if validateBillingSettlement(existing, *input) != nil {
+			if validateBillingSettlement(existing, expected) != nil {
 				return ErrBillingSettlementOperationConflict
 			}
 			return complete(TaskSubmitFailureRecoveryRecorded)
@@ -1450,13 +1487,14 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 			if input.Source == BillingSettlementSourceSubscription && input.SubscriptionPreConsumeRequestID != task.PrivateData.BillingRequestId {
 				return ErrTaskSubmitRefundIdentityMismatch
 			}
+			recordedInput = *input
 		}
-		if input != nil && (lateRejection || unprojectedRetry) {
-			if _, err := taskSubmitFailureRecoveryRecord(taskID, reason, *input); err != nil {
+		if input != nil && (lateRejection || unprojectedRetry || input.Source == BillingSettlementSourceWallet) {
+			if _, err := taskSubmitFailureRecoveryRecord(taskID, reason, *input, failedReserve); err != nil {
 				return err
 			}
-			if unprojectedRetry {
-				if err := verifyUnprojectedTaskRetryRefund(tx, task.PrivateData.BillingRequestId, *input); err != nil {
+			if unprojectedRetry || input.Source == BillingSettlementSourceWallet {
+				if err := verifyTaskSubmitRefund(tx, task, &recordedInput, failedReserve); err != nil {
 					return err
 				}
 			}
@@ -1486,10 +1524,13 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 			return result.Error
 		}
 		if result.RowsAffected == 0 {
+			if failedReserve != 0 {
+				return ErrTaskFinalizeOwned // Roll back any reserve cancellation with the lost task claim.
+			}
 			return replayExistingIntent()
 		}
-		if input != nil {
-			if _, _, err := ensureBillingSettlementRecordDB(tx, *input); err != nil {
+		if input != nil && recordedInput.FundingDelta != 0 {
+			if _, _, err := ensureBillingSettlementRecordDB(tx, recordedInput); err != nil {
 				return err
 			}
 			return complete(TaskSubmitFailureRecoveryRecorded)
@@ -1497,6 +1538,9 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 		return complete(TaskSubmitFailureStatusRecorded)
 	}
 	_, err := taskSubmitFailureTransaction(db, claim)
+	if err == nil && won && failedReserve != 0 && !journalReplay {
+		*input = recordedInput
+	}
 	return won && err == nil, err
 }
 

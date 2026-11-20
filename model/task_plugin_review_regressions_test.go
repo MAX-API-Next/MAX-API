@@ -2603,8 +2603,8 @@ func TestInterruptedCatalogReadComparesCompletedObservedSet(t *testing.T) {
 }
 
 func TestCatalogReadRetainsPackageObservationWhenMetadataValidationIsInterrupted(t *testing.T) {
-	for _, changed := range []bool{false, true} {
-		t.Run(fmt.Sprint(changed), func(t *testing.T) {
+	for _, change := range []string{"none", "enabled", "identity"} {
+		t.Run(change, func(t *testing.T) {
 			db := deletionDB(t)
 			catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
 			require.NoError(t, err)
@@ -2619,8 +2619,11 @@ func TestCatalogReadRetainsPackageObservationWhenMetadataValidationIsInterrupted
 			require.NoError(t, db.Callback().Query().After("gorm:query").Register("cancel-after-reading-package-columns", func(tx *gorm.DB) {
 				if rows, ok := tx.Statement.Dest.(*[]TaskPluginVersion); ok && tx.Error == nil && len(*rows) == 1 {
 					observed = true
-					if changed {
+					switch change {
+					case "enabled":
 						(*rows)[0].Enabled = false
+					case "identity":
+						(*rows)[0].Identity = "different-primary-key"
 					}
 					cancel()
 				}
@@ -2628,7 +2631,7 @@ func TestCatalogReadRetainsPackageObservationWhenMetadataValidationIsInterrupted
 			require.ErrorIs(t, catalog.ValidateInstall(ctx, pkg), context.Canceled)
 			require.True(t, observed)
 			_, err = catalog.Host().Resolve(binding, actor)
-			if changed {
+			if change != "none" {
 				require.Error(t, err, "completed changed package columns suspend the previous Host")
 			} else {
 				require.NoError(t, err, "matching completed columns keep the previous Host")
@@ -2672,6 +2675,8 @@ func TestRootCatalogValidationCancellationCertifiesRollback(t *testing.T) {
 	require.Equal(t, before, after)
 	_, err = catalog.Host().Resolve(binding, actor)
 	require.NoError(t, err)
+	_, err = catalog.Host().Bind(actor, "GET", "/stored/one", "catalog-model", taskusage.MiniMaxH3Contract())
+	require.NoError(t, err, "a canceled disable must preserve new admissions")
 }
 
 func TestConflictingLegacyVersionsRemainKeyOnlyReferences(t *testing.T) {

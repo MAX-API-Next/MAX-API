@@ -30,6 +30,7 @@ func TestPollingBatchQuarantinesUnadvanceableVersions(t *testing.T) {
 	tasks := GetAllUnFinishSyncTasks(10)
 	require.Len(t, tasks, 2)
 	require.Equal(t, "10", tasks[0].TaskID)
+	require.Greater(t, tasks[0].UpdatedAt, int64(10))
 	require.Less(t, tasks[0].UpdatedAt, int64(math.MaxInt64-2))
 	require.EqualValues(t, math.MaxInt64-1, tasks[1].UpdatedAt)
 	for _, task := range tasks {
@@ -42,6 +43,26 @@ func TestPollingBatchQuarantinesUnadvanceableVersions(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, version, stored.UpdatedAt)
 	}
+}
+
+func TestPollingBatchLeavesRoomForTasksWithoutPendingSubmitRecovery(t *testing.T) {
+	truncateTables(t)
+	pending := &Task{TaskID: "pending-refund-first", Status: TaskStatusSubmitted, UpdatedAt: 10}
+	ready := &Task{TaskID: "ready-to-poll", Status: TaskStatusSubmitted, UpdatedAt: 20}
+	require.NoError(t, DB.Create(pending).Error)
+	require.NoError(t, DB.Create(ready).Error)
+	require.NoError(t, DB.Create(&TaskSubmitFailureRecovery{
+		TaskID: pending.ID, OperationKey: "fixture", Status: TaskSubmitFailureRecoveryPending,
+	}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("task_id = ?", pending.ID).Delete(&TaskSubmitFailureRecovery{}).Error)
+	})
+	batch := GetAllUnFinishSyncTasks(1)
+	require.Len(t, batch, 1)
+	require.Equal(t, ready.TaskID, batch[0].TaskID)
+	stored, err := GetTaskPlaceholderByID(pending.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, 10, stored.UpdatedAt)
 }
 
 func TestClaimedNullTimestampSupportsFirstManualDecision(t *testing.T) {

@@ -32,6 +32,9 @@ var allowedVideoDataURLMimeTypes = map[string]struct{}{
 
 // videoProxyError returns a standardized OpenAI-style error response.
 func videoProxyError(c *gin.Context, status int, errType, message string) {
+	if c.Writer.Written() {
+		return
+	}
 	c.JSON(status, gin.H{
 		"error": gin.H{
 			"message": message,
@@ -66,7 +69,7 @@ func VideoProxy(c *gin.Context) {
 	}
 	if source := task.PrivateData.InlineVideoDataURL; source != "" {
 		if err := writeVideoDataURL(c, source); err != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to decode stored video for task %s: %s", taskID, err.Error()))
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to serve stored video for task %s: %s", taskID, err.Error()))
 			videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to fetch video content")
 		}
 		return

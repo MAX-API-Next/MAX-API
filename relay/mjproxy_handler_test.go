@@ -354,7 +354,7 @@ func TestFinalizeMidjourneySubmissionRejectsSuccessWhenSettlementFails(t *testin
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
 	model.DB = db
-	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.Midjourney{}, &model.MidjourneyBillingClaim{}, &model.BillingSettlement{}))
+	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.Midjourney{}, &model.MidjourneyBillingClaim{}, &model.BillingSettlement{}))
 	t.Cleanup(func() {
 		model.DB = oldDB
 		if sqlDB, dbErr := db.DB(); dbErr == nil {

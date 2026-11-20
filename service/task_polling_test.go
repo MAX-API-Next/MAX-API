@@ -472,8 +472,9 @@ func TestVertexCompletionKeepsInlinePayloadOutOfTaskRow(t *testing.T) {
 	}{
 		{name: "object", statusPath: "status", URLPath: "nested.0.video", expected: `{"nested":[{"video":""}],"status":"completed"}`,
 			payload: map[string]any{"nested": []any{map[string]any{"video": inline}}, "status": "completed"}},
-		{name: "array", statusPath: "0.status", URLPath: "0.video", expected: `[{"video":"","status":"completed"}]`,
-			payload: []any{map[string]any{"video": " " + inline + "\n", "status": "completed"}}},
+		{name: "array", statusPath: "0.status", URLPath: "0.video", expected: `[{"video":"","status":"completed"},{"video":""},{"video":"https://fixture.invalid/video"}]`,
+			payload: []any{map[string]any{"video": " " + inline + "\n", "status": "completed"},
+				map[string]any{"video": "data:video/webm;base64,QQ=="}, map[string]any{"video": "https://fixture.invalid/video"}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			truncate(t)

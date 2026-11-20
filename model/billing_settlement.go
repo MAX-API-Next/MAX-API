@@ -23,10 +23,13 @@ const (
 	BillingSettlementStatusPending      = "pending"
 	BillingSettlementStatusApplied      = "applied"
 	BillingSettlementStatusManual       = "manual"
+	billingSettlementStatusCancelled    = "cancelled"
 	BillingSettlementEffectPending      = "pending"
 	BillingSettlementEffectApplying     = "applying"
 	BillingSettlementEffectApplied      = "applied"
 )
+
+var errBillingSettlementCancelled = errors.New("billing settlement cancelled")
 
 const billingRequestOperationPrefix = "request:"
 const billingRequestFinalizeSuffix = ":finalize"
@@ -1104,7 +1107,21 @@ func GetBillingSettlementStatus(operationKey string) (status string, found bool,
 	return record.Status, true, nil
 }
 
-func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDelta int64, alreadyApplied bool, err error) {
+func ApplyBillingSettlementOnce(input BillingSettlementInput) (int64, bool, error) {
+	return applyBillingSettlementOnce(input, false)
+}
+
+// ApplyBoundTaskWalletPreConsumeOnce does not leave a new debit for the worker
+// to replay after a failed initial reservation on an existing task placeholder.
+func ApplyBoundTaskWalletPreConsumeOnce(input BillingSettlementInput) (int64, bool, error) {
+	if input.Source != BillingSettlementSourceWallet || input.PreConsumeRequestID == "" ||
+		input.OperationKey != billingRequestOperationPrefix+input.PreConsumeRequestID+":pre-consume" || input.TaskID != 0 {
+		return 0, false, ErrBillingSettlementOperationConflict
+	}
+	return applyBillingSettlementOnce(input, true)
+}
+
+func applyBillingSettlementOnce(input BillingSettlementInput, atomicPreConsume bool) (appliedFundingDelta int64, alreadyApplied bool, err error) {
 	if input.OperationKey == "" {
 		return 0, false, errors.New("billing settlement operation key is required")
 	}
@@ -1113,9 +1130,12 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 
-	record, alreadyApplied, err := ensureBillingSettlementRecord(input)
-	if err != nil {
-		return 0, false, err
+	var record BillingSettlement
+	if !atomicPreConsume {
+		record, alreadyApplied, err = ensureBillingSettlementRecord(input)
+		if err != nil {
+			return 0, false, err
+		}
 	}
 	resolvedTokenKey := input.TokenKey
 	effectiveTokenID := input.TokenID
@@ -1138,6 +1158,17 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 	}
 
 	err = DB.Transaction(func(tx *gorm.DB) error {
+		if atomicPreConsume {
+			var err error
+			record, alreadyApplied, err = ensureBillingSettlementRecordDB(tx, input)
+			if err != nil {
+				return err
+			}
+			if alreadyApplied {
+				appliedFundingDelta = record.AppliedFundingDelta
+				return claimBillingPreConsumeSourceTx(tx, billingPreConsumeSelectionFromSettlement(input))
+			}
+		}
 		var current BillingSettlement
 		if err := withRowLock(tx).Where("id = ?", record.ID).First(&current).Error; err != nil {
 			return err
@@ -1152,6 +1183,9 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 		}
 		if current.Status == BillingSettlementStatusManual {
 			return permanentBillingSettlement(fmt.Errorf("%w: %s", ErrBillingSettlementManualReview, current.LastError))
+		}
+		if current.Status == billingSettlementStatusCancelled {
+			return errBillingSettlementCancelled
 		}
 		if current.Status != BillingSettlementStatusPending {
 			return permanentBillingSettlement(fmt.Errorf("unknown billing settlement status %q", current.Status))
@@ -1275,10 +1309,18 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 		return nil
 	})
 	if err != nil {
-		markBillingSettlementFailure(input.OperationKey, err)
+		if !atomicPreConsume && !errors.Is(err, errBillingSettlementCancelled) {
+			markBillingSettlementFailure(input.OperationKey, err)
+		}
 		return 0, false, err
 	}
 
+	if atomicPreConsume && alreadyApplied {
+		if resolvedTokenKey == "" {
+			resolvedTokenKey = lookupBillingTokenKey(record.TokenID)
+		}
+		invalidateBillingSettlementCaches(record, resolvedTokenKey)
+	}
 	dispatchStagedCacheInvalidations(cacheTasks)
 	return appliedFundingDelta, alreadyApplied, nil
 }
@@ -1594,6 +1636,9 @@ func ensureBillingSettlementRecordDB(db *gorm.DB, input BillingSettlementInput) 
 	if record.Status == BillingSettlementStatusManual {
 		return BillingSettlement{}, false, fmt.Errorf("%w: %s", ErrBillingSettlementManualReview, record.LastError)
 	}
+	if record.Status == billingSettlementStatusCancelled {
+		return BillingSettlement{}, false, errBillingSettlementCancelled
+	}
 	return record, record.Status == "" || record.Status == BillingSettlementStatusApplied, nil
 }
 
@@ -1795,7 +1840,9 @@ func processPendingBillingSettlements() {
 			Effect:                          effect,
 		})
 		if err != nil {
-			common.SysLog("billing settlement retry remains pending: " + err.Error())
+			if !errors.Is(err, errBillingSettlementCancelled) {
+				common.SysLog("billing settlement retry remains pending: " + err.Error())
+			}
 			continue
 		}
 		if effectErr := ProcessBillingSettlementEffect(record.OperationKey); effectErr != nil {

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,22 +33,36 @@ func TestVideoProxyServesPersistedInlineContentForOwner(t *testing.T) {
 			InlineVideoDataURL: "data:video/webm;base64," + base64.StdEncoding.EncodeToString([]byte("fixture-video")),
 		}}
 	require.NoError(t, db.Create(task).Error)
-	request := func(user int) *httptest.ResponseRecorder {
+	request := func(user int, interrupted bool) *httptest.ResponseRecorder {
 		recorder := httptest.NewRecorder()
-		ctx, _ := gin.CreateTestContext(recorder)
+		var response http.ResponseWriter = recorder
+		if interrupted {
+			response = interruptedVideoWriter{ResponseWriter: recorder}
+		}
+		ctx, _ := gin.CreateTestContext(response)
 		ctx.Request = httptest.NewRequest(http.MethodGet, task.PrivateData.ResultURL, nil)
 		ctx.Params = gin.Params{{Key: "task_id", Value: task.TaskID}}
 		ctx.Set("id", user)
 		VideoProxy(ctx)
 		return recorder
 	}
-	response := request(71)
+	response := request(71, false)
 	require.Equal(t, http.StatusOK, response.Code)
 	require.Equal(t, "video/webm", response.Header().Get("Content-Type"))
 	require.Equal(t, "fixture-video", response.Body.String())
-	foreign := request(72)
+	partial := request(71, true)
+	require.Equal(t, http.StatusOK, partial.Code)
+	require.Equal(t, "fix", partial.Body.String())
+	foreign := request(72, false)
 	require.Equal(t, http.StatusNotFound, foreign.Code)
 	require.NotContains(t, foreign.Body.String(), "fixture-video")
+}
+
+type interruptedVideoWriter struct{ http.ResponseWriter }
+
+func (w interruptedVideoWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p[:min(3, len(p))])
+	return n, errors.Join(errors.New("synthetic write interruption"), err)
 }
 
 func TestWriteVideoDataURLAllowsVideoPayload(t *testing.T) {

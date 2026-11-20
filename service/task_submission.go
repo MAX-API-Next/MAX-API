@@ -22,6 +22,8 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 	}
 	if info.TaskRelayInfo != nil && info.PersistedTaskID > 0 {
 		var intent *model.BillingSettlementInput
+		var failedReserve int64
+		session, isSession := info.Billing.(*BillingSession)
 		statusOnly := info.Billing == nil
 		if info.Billing != nil {
 			preparer, ok := info.Billing.(RefundSettlementPreparer)
@@ -30,12 +32,16 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 				return
 			}
 			var err error
-			intent, err = preparer.PrepareRefundSettlement()
+			if isSession {
+				intent, failedReserve, err = session.prepareTaskSubmitFailureRefund()
+			} else {
+				intent, err = preparer.PrepareRefundSettlement()
+			}
 			if err != nil {
-				common.SysError("task submit refund preparation requires reconciliation: " + err.Error())
+				common.SysError(fmt.Sprintf("task submit refund preparation requires reconciliation: task_id=%d result=%s", info.PersistedTaskID, taskSubmitRecoveryErrorCategory(err)))
 				return
 			}
-			if session, ok := info.Billing.(*BillingSession); intent == nil && ok {
+			if intent == nil && isSession {
 				statusOnly = session.isUnsettledZeroChargeTask(info)
 			}
 		}
@@ -48,6 +54,8 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 		for attempt := 0; attempt < 3; attempt++ {
 			if statusOnly {
 				won, err = model.ClaimTaskSubmitFailureStatusContext(claimCtx, info.PersistedTaskID, info.RequestId, reason, info.UserId, info.TokenId)
+			} else if failedReserve != 0 {
+				won, err = model.ClaimTaskSubmitFailureAfterWalletReserveError(claimCtx, info.PersistedTaskID, reason, intent, failedReserve)
 			} else {
 				won, err = model.ClaimTaskSubmitFailureWithSettlementContext(claimCtx, info.PersistedTaskID, reason, intent)
 			}
@@ -58,10 +66,10 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 		cancel()
 		if err != nil {
 			if intent != nil {
-				status, journalErr := model.RecordTaskSubmitFailureRecoveryWithStatus(info.PersistedTaskID, reason, *intent)
+				status, journalErr := model.RecordTaskSubmitFailureWithReserveRecovery(info.PersistedTaskID, reason, *intent, failedReserve)
 				switch {
 				case journalErr != nil:
-					common.SysError(fmt.Sprintf("task submit rejection recovery was not recorded: task_id=%d; inspect the original placeholder and preconsume records", info.PersistedTaskID))
+					common.SysError(fmt.Sprintf("task submit rejection recovery was not recorded: task_id=%d claim=%s journal=%s", info.PersistedTaskID, taskSubmitRecoveryErrorCategory(err), taskSubmitRecoveryErrorCategory(journalErr)))
 				case status == model.TaskSubmitFailureRecoveryPending:
 					common.SysLog(fmt.Sprintf("task submit rejection queued for recovery: task_id=%d", info.PersistedTaskID))
 				case status == model.TaskSubmitFailureRecoveryRecorded:
@@ -72,7 +80,7 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 			} else {
 				status, journalErr := model.RecordTaskSubmitFailureStatusRecovery(info.PersistedTaskID, info.RequestId, reason, info.UserId, info.TokenId)
 				if journalErr != nil {
-					common.SysError(fmt.Sprintf("task submit rejection status recovery could not be verified: task_id=%d", info.PersistedTaskID))
+					common.SysError(fmt.Sprintf("task submit rejection status recovery could not be verified: task_id=%d claim=%s journal=%s", info.PersistedTaskID, taskSubmitRecoveryErrorCategory(err), taskSubmitRecoveryErrorCategory(journalErr)))
 				} else if status == model.TaskSubmitFailureRecoveryPending {
 					common.SysLog(fmt.Sprintf("task submit rejection queued for status recovery: task_id=%d", info.PersistedTaskID))
 				} else if status == model.TaskSubmitFailureRecoveryManual {
@@ -84,8 +92,33 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 		if !won || statusOnly {
 			return
 		}
+		if failedReserve != 0 {
+			if intent.FundingDelta != 0 {
+				if _, _, err := model.ApplyBillingSettlementOnce(*intent); err != nil {
+					common.SysLog(fmt.Sprintf("task submit refund remains in ledger: task_id=%d result=%s", info.PersistedTaskID, taskSubmitRecoveryErrorCategory(err)))
+					return
+				}
+			}
+			session.finishRefundIntent(true)
+			return
+		}
 	}
 	if info.Billing != nil {
 		info.Billing.Refund(c)
+	}
+}
+
+func taskSubmitRecoveryErrorCategory(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return "deadline"
+	case errors.Is(err, model.ErrTaskSubmitRefundIdentityMismatch):
+		return "identity_mismatch"
+	case errors.Is(err, model.ErrBillingSettlementOperationConflict), errors.Is(err, model.ErrTaskFinalizeOwned):
+		return "conflict"
+	case errors.Is(err, model.ErrTaskSubmitFailureRecoveryRequiresReview), errors.Is(err, model.ErrBillingSettlementManualReview):
+		return "manual_review"
+	default:
+		return "storage_error"
 	}
 }

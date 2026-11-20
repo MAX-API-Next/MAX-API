@@ -23,12 +23,26 @@ func TestTaskPrivateHistoryUsesJSONFieldFolding(t *testing.T) {
 	require.Equal(t, "wallet", object["billing_source"])
 }
 
+func TestTaskPrivateHistoricalContainerNamesRetainCase(t *testing.T) {
+	var private TaskPrivateData
+	const legacy = `{"legacy":{"billing_context":"v1","Billing_Context":"v2"}}`
+	require.NoError(t, private.Scan(legacy))
+	raw, err := common.Marshal(private)
+	require.NoError(t, err)
+	require.JSONEq(t, legacy, string(raw))
+	require.Error(t, private.Scan(`{"billing_context":{"model_price":1},"Billing_Context":{"model_price":2}}`))
+}
+
 func TestBillingPlanHistoryStaysWithItsOriginalConfig(t *testing.T) {
 	var private TaskPrivateData
 	require.NoError(t, private.Scan(`{"billing_context":{"task_billing_plan":{"config_hash":"original","historical_receipt":{"retained":true}}}}`))
 	encoded, err := common.Marshal(private)
 	require.NoError(t, err)
 	require.Contains(t, string(encoded), "historical_receipt")
+	private.BillingContext.TaskBillingPlan.ReserveQuota = 10
+	_, err = common.Marshal(private)
+	require.ErrorContains(t, err, "different billing plan")
+	private.BillingContext.TaskBillingPlan.ReserveQuota = 0
 	private.BillingContext.TaskBillingPlan.ConfigHash = "replacement"
 	_, err = common.Marshal(private)
 	require.ErrorContains(t, err, "different billing plan")

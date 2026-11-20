@@ -18,8 +18,9 @@ type taskPrivateUnmodeled struct{ fields map[string]any }
 type taskPrivateNested struct{ value any }
 type taskPrivateMap map[string]any
 type taskPrivateBillingPlanHistory struct {
-	configHash string
-	fields     map[string]any
+	configHash                  string
+	estimateQuota, reserveQuota string
+	fields                      map[string]any
 }
 type taskPrivateArray struct {
 	original, preserved []any
@@ -159,8 +160,10 @@ func unknownTaskPrivateValue(value any, typ reflect.Type) any {
 		if typ.Kind() == reflect.Struct {
 			if fields := unknownTaskPrivateFields(object, typ); len(fields) != 0 {
 				if typ == reflect.TypeFor[types.TaskBillingPlan]() {
-					hash, _ := canonicalTaskPrivateFields(object, typ)["config_hash"].(string)
-					return taskPrivateBillingPlanHistory{configHash: hash, fields: fields}
+					plan := canonicalTaskPrivateFields(object, typ)
+					hash, _ := plan["config_hash"].(string)
+					return taskPrivateBillingPlanHistory{configHash: hash, estimateQuota: taskPrivatePlanQuota(plan["estimate_quota"]),
+						reserveQuota: taskPrivatePlanQuota(plan["reserve_quota"]), fields: fields}
 				}
 				return fields
 			}
@@ -224,7 +227,8 @@ func mergeTaskPrivateValue(unknown, current any) (any, error) {
 	if plan, ok := unknown.(taskPrivateBillingPlanHistory); ok {
 		next, object := current.(map[string]any)
 		hash, _ := next["config_hash"].(string)
-		if !object || hash != plan.configHash {
+		if !object || hash != plan.configHash || taskPrivatePlanQuota(next["estimate_quota"]) != plan.estimateQuota ||
+			taskPrivatePlanQuota(next["reserve_quota"]) != plan.reserveQuota {
 			return nil, errors.New("cannot move unmodeled task private history to a different billing plan")
 		}
 		return mergeTaskPrivateFields(plan.fields, next)
@@ -298,6 +302,13 @@ func mergeTaskPrivateValue(unknown, current any) (any, error) {
 		}
 	}
 	return nil, errors.New("cannot discard unmodeled task private history from an incompatible typed value")
+}
+
+func taskPrivatePlanQuota(value any) string {
+	if number, ok := value.(json.Number); ok && number != "" {
+		return number.String()
+	}
+	return "0" // A quota missing from historical JSON decodes to zero.
 }
 
 func (history taskPrivateArray) typed(entries []any) (any, error) {
@@ -517,7 +528,7 @@ func taskPrivateMemberKey(typ reflect.Type, key string) string {
 	if typ = taskPrivateJSONType(typ); typ != nil && typ.Kind() == reflect.Map {
 		return key
 	}
-	for _, name := range []string{"plugin_key", "package_digest", "selected_plugin_key", "plugin_binding", "billing_context", "task_billing_plan", "expression_plan", "pricing_usage_envelope"} {
+	for _, name := range []string{"plugin_key", "package_digest", "selected_plugin_key"} {
 		if strings.EqualFold(name, key) {
 			return name
 		}

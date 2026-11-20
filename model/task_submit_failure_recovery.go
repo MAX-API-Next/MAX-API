@@ -39,6 +39,7 @@ type TaskSubmitFailureRecovery struct {
 	TokenID                         int    `gorm:"not null;default:0"`
 	FundingDelta                    int64  `gorm:"not null"`
 	TokenDelta                      int64  `gorm:"not null"`
+	FailedWalletReserveRevision     int64  `gorm:"not null;default:0"`
 	SubscriptionPreConsumeRequestID string `gorm:"type:varchar(64)"`
 	FinalizeSubscriptionPreConsume  bool   `gorm:"not null;default:false"`
 	AllowMissingToken               bool   `gorm:"not null;default:false"`
@@ -61,18 +62,19 @@ func (record TaskSubmitFailureRecovery) refundInput() BillingSettlementInput {
 	}
 }
 
-func taskSubmitFailureRecoveryRecord(taskID int64, reason string, input BillingSettlementInput) (TaskSubmitFailureRecovery, error) {
+func taskSubmitFailureRecoveryRecord(taskID int64, reason string, input BillingSettlementInput, failedReserve int64) (TaskSubmitFailureRecovery, error) {
 	input.TokenKey = "" // Existing settlement replay resolves cache identity by ID.
 	if taskID <= 0 {
 		return TaskSubmitFailureRecovery{}, ErrBillingSettlementOperationConflict
 	}
-	if err := validateTaskSubmitFailureRefundShape(input); err != nil {
+	if err := validateTaskSubmitFailureRefundShape(input, failedReserve); err != nil {
 		return TaskSubmitFailureRecovery{}, err
 	}
 	reasonRunes := []rune(common.SanitizePersistedLogContent(reason))
 	record := TaskSubmitFailureRecovery{
 		TaskID: taskID, OperationKey: input.OperationKey, Source: input.Source, UserID: input.UserID,
 		SubscriptionID: input.SubscriptionID, TokenID: input.TokenID, FundingDelta: input.FundingDelta, TokenDelta: input.TokenDelta,
+		FailedWalletReserveRevision:     failedReserve,
 		SubscriptionPreConsumeRequestID: input.SubscriptionPreConsumeRequestID,
 		FinalizeSubscriptionPreConsume:  input.FinalizeSubscriptionPreConsume, AllowMissingToken: input.AllowMissingToken,
 		Reason: string(reasonRunes[:min(len(reasonRunes), 512)]), Status: TaskSubmitFailureRecoveryPending,
@@ -84,8 +86,9 @@ func taskSubmitFailureRecoveryRecord(taskID int64, reason string, input BillingS
 	return record, nil
 }
 
-func validateTaskSubmitFailureRefundShape(input BillingSettlementInput) error {
-	if input.FundingDelta >= 0 || input.TokenDelta > 0 ||
+func validateTaskSubmitFailureRefundShape(input BillingSettlementInput, failedReserve int64) error {
+	if failedReserve < 0 || failedReserve > 0 && input.Source != BillingSettlementSourceWallet ||
+		input.FundingDelta > 0 || input.FundingDelta == 0 && (failedReserve == 0 || input.TokenDelta != 0) || input.TokenDelta > 0 ||
 		!strings.HasPrefix(input.OperationKey, billingRequestOperationPrefix) || !strings.HasSuffix(input.OperationKey, billingRequestFinalizeSuffix) {
 		return ErrBillingSettlementOperationConflict
 	}
@@ -94,10 +97,26 @@ func validateTaskSubmitFailureRefundShape(input BillingSettlementInput) error {
 
 // A timeout can win before the first paid retry projects its reservation onto
 // a free placeholder. Only the original applied debit identifies that amount.
-func verifyUnprojectedTaskRetryRefund(tx *gorm.DB, requestID string, input BillingSettlementInput) error {
+func verifyTaskSubmitRefund(tx *gorm.DB, task *Task, input *BillingSettlementInput, failedReserve int64) error {
+	requestID := task.PrivateData.BillingRequestId
 	var selection BillingPreConsumeSelection
-	if err := tx.Where("request_id = ?", requestID).Take(&selection).Error; err != nil {
+	if err := withRowLock(tx).Where("request_id = ?", requestID).Take(&selection).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Older wallet tasks can have a projected balance without a
+			// request receipt. It is the only amount that can be proved.
+			if input.Source == BillingSettlementSourceWallet && failedReserve == 0 && task.Quota > 0 &&
+				input.FundingDelta == -int64(task.Quota) && (input.TokenDelta == 0 || input.TokenDelta == input.FundingDelta) {
+				var receipt BillingSettlement
+				prefix := billingRequestOperationPrefix + requestID
+				proofErr := withRowLock(tx).Select("id").Where("operation_key = ? OR operation_key LIKE ? ESCAPE '!'", prefix+":pre-consume",
+					taskSubmitWalletReservePattern(prefix+":reserve:")).Take(&receipt).Error
+				if errors.Is(proofErr, gorm.ErrRecordNotFound) {
+					return nil
+				}
+				if proofErr != nil {
+					return proofErr
+				}
+			}
 			return ErrTaskSubmitRefundIdentityMismatch
 		}
 		return err
@@ -108,7 +127,7 @@ func verifyUnprojectedTaskRetryRefund(tx *gorm.DB, requestID string, input Billi
 	}
 	switch input.Source {
 	case BillingSettlementSourceWallet:
-		return verifyUnprojectedWalletRefund(tx, selection, input)
+		return reconcileTaskSubmitWalletRefund(tx, selection, input, failedReserve)
 	case BillingSettlementSourceSubscription:
 		if selection.EffectiveQuota <= 0 || selection.EffectiveQuota != -input.FundingDelta {
 			return ErrTaskSubmitRefundIdentityMismatch
@@ -130,7 +149,7 @@ func verifyUnprojectedTaskRetryRefund(tx *gorm.DB, requestID string, input Billi
 	return ErrTaskSubmitRefundIdentityMismatch
 }
 
-func verifyUnprojectedWalletRefund(tx *gorm.DB, selection BillingPreConsumeSelection, input BillingSettlementInput) error {
+func reconcileTaskSubmitWalletRefund(tx *gorm.DB, selection BillingPreConsumeSelection, input *BillingSettlementInput, failedReserve int64) error {
 	if input.SubscriptionID != 0 || input.SubscriptionPreConsumeRequestID != "" || input.FinalizeSubscriptionPreConsume {
 		return ErrTaskSubmitRefundIdentityMismatch
 	}
@@ -143,34 +162,78 @@ func verifyUnprojectedWalletRefund(tx *gorm.DB, selection BillingPreConsumeSelec
 		return err
 	}
 	if initial.OperationKey != prefix+":pre-consume" || initial.PreConsumeRequestID != selection.RequestID ||
-		initial.AppliedFundingDelta != selection.EffectiveQuota || !isAppliedWalletSubmitDebit(initial, input) {
+		initial.AppliedFundingDelta != selection.EffectiveQuota || !isAppliedWalletSubmitDebit(initial, *input) {
 		return ErrTaskSubmitRefundIdentityMismatch
 	}
 	funding, token := initial.AppliedFundingDelta, initial.AppliedTokenDelta
 	prefix += ":reserve:"
-	pattern := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(prefix) + "%"
 	var reserves []BillingSettlement
-	if err := withRowLock(tx).Where("operation_key LIKE ? ESCAPE '!'", pattern).Find(&reserves).Error; err != nil {
+	if err := withRowLock(tx).Where("operation_key LIKE ? ESCAPE '!'", taskSubmitWalletReservePattern(prefix)).Find(&reserves).Error; err != nil {
 		return err
 	}
-	revisions := make(map[uint64]bool, len(reserves))
+	revisions := make([]*BillingSettlement, len(reserves))
 	for _, reserve := range reserves {
 		suffix, sameRequest := strings.CutPrefix(reserve.OperationKey, prefix)
 		revision, parseErr := strconv.ParseUint(suffix, 10, 64)
 		if !sameRequest || parseErr != nil || revision == 0 || strconv.FormatUint(revision, 10) != suffix ||
-			revision > uint64(len(reserves)) || revisions[revision] || reserve.PreConsumeRequestID != "" ||
-			reserve.AppliedFundingDelta <= 0 || !isAppliedWalletSubmitDebit(reserve, input) ||
+			revision > uint64(len(reserves)) || revisions[revision-1] != nil || reserve.PreConsumeRequestID != "" ||
+			reserve.Source != input.Source || reserve.UserID != input.UserID || reserve.TokenID != input.TokenID ||
+			reserve.TaskID != 0 || reserve.SubscriptionID != 0 || reserve.EffectPayload != "" ||
+			reserve.FundingDelta <= 0 || reserve.TokenDelta != 0 && reserve.TokenDelta != reserve.FundingDelta {
+			return ErrTaskSubmitRefundIdentityMismatch
+		}
+		revisions[revision-1] = &reserve
+	}
+	if failedReserve != 0 && (failedReserve < int64(len(revisions)) || failedReserve > int64(len(revisions))+1) {
+		return ErrTaskSubmitRefundIdentityMismatch
+	}
+	for i, reserve := range revisions {
+		if int64(i)+1 == failedReserve {
+			if funding != -input.FundingDelta || token != -input.TokenDelta {
+				return ErrTaskSubmitRefundIdentityMismatch
+			}
+			if reserve.Status != BillingSettlementStatusApplied {
+				return cancelRejectedTaskWalletReserve(tx, *reserve)
+			}
+		}
+		if !isAppliedWalletSubmitDebit(*reserve, *input) ||
 			reserve.AppliedFundingDelta > math.MaxInt64-funding || reserve.AppliedTokenDelta > math.MaxInt64-token {
 			return ErrTaskSubmitRefundIdentityMismatch
 		}
-		revisions[revision] = true
 		funding += reserve.AppliedFundingDelta
 		token += reserve.AppliedTokenDelta
+	}
+	if failedReserve != 0 && failedReserve == int64(len(revisions)) {
+		// The reserve finished before the rejection obtained its row lock.
+		input.FundingDelta, input.TokenDelta = -funding, -token
+		return nil
 	}
 	if funding != -input.FundingDelta || token != -input.TokenDelta {
 		return ErrTaskSubmitRefundIdentityMismatch
 	}
 	return nil
+}
+
+func taskSubmitWalletReservePattern(prefix string) string {
+	return strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(prefix) + "%"
+}
+
+func cancelRejectedTaskWalletReserve(tx *gorm.DB, reserve BillingSettlement) error {
+	if reserve.AppliedFundingDelta != 0 || reserve.AppliedTokenDelta != 0 {
+		return ErrTaskSubmitRefundIdentityMismatch
+	}
+	if reserve.Status == billingSettlementStatusCancelled {
+		return nil
+	}
+	if reserve.Status != BillingSettlementStatusPending && reserve.Status != BillingSettlementStatusManual {
+		return ErrTaskSubmitRefundIdentityMismatch
+	}
+	result := tx.Model(&BillingSettlement{}).Where("id = ? AND revision = ? AND status = ?", reserve.ID, reserve.Revision, reserve.Status).
+		Updates(billingSettlementFailureUpdates(reserve.Attempts, "task submission rejected before additional wallet debit", billingSettlementStatusCancelled, 0, time.Now().Unix(), false))
+	if result.Error == nil && result.RowsAffected != 1 {
+		return ErrBillingSettlementOperationConflict
+	}
+	return result.Error
 }
 
 func isAppliedWalletSubmitDebit(debit BillingSettlement, input BillingSettlementInput) bool {
@@ -190,7 +253,11 @@ func RecordTaskSubmitFailureRecovery(taskID int64, reason string, input BillingS
 // RecordTaskSubmitFailureRecoveryWithStatus also reports the current durable
 // journal status, including an existing record that still requires review.
 func RecordTaskSubmitFailureRecoveryWithStatus(taskID int64, reason string, input BillingSettlementInput) (string, error) {
-	record, err := taskSubmitFailureRecoveryRecord(taskID, reason, input)
+	return RecordTaskSubmitFailureWithReserveRecovery(taskID, reason, input, 0)
+}
+
+func RecordTaskSubmitFailureWithReserveRecovery(taskID int64, reason string, input BillingSettlementInput, failedReserve int64) (string, error) {
+	record, err := taskSubmitFailureRecoveryRecord(taskID, reason, input, failedReserve)
 	if err != nil {
 		return "", err
 	}
@@ -306,7 +373,7 @@ func recordTaskSubmitFailureRecovery(record TaskSubmitFailureRecovery) (string, 
 		if err := withRowLock(tx).First(&existing, "task_id = ?", record.TaskID).Error; err != nil {
 			return err
 		}
-		if existing.refundInput() != record.refundInput() {
+		if existing.refundInput() != record.refundInput() || existing.FailedWalletReserveRevision != record.FailedWalletReserveRevision {
 			return ErrBillingSettlementOperationConflict
 		}
 		status = existing.Status
@@ -325,11 +392,13 @@ func retryTaskSubmitFailureTransaction(db *gorm.DB, write func(*gorm.DB) error) 
 	}
 	ctx := db.Statement.Context
 	for {
-		if err := billingSettlementSQLiteWriteMu.lockContext(ctx); err != nil {
-			return err
-		}
-		retry, err := taskSubmitFailureTransaction(db, write)
-		billingSettlementSQLiteWriteMu.Unlock()
+		retry, err := func() (bool, error) {
+			if err := billingSettlementSQLiteWriteMu.lockContext(ctx); err != nil {
+				return false, err
+			}
+			defer billingSettlementSQLiteWriteMu.Unlock()
+			return taskSubmitFailureTransaction(db, write)
+		}()
 		if !retry {
 			return err
 		}
@@ -435,14 +504,14 @@ func processPendingTaskSubmitFailures() {
 			break
 		}
 		var input *BillingSettlementInput
-		if record.FundingDelta == 0 {
+		if record.FundingDelta == 0 && record.FailedWalletReserveRevision == 0 {
 			if _, err := record.statusOnlyRequestID(); err != nil {
 				updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryManual, err)
 				continue
 			}
 		} else {
 			original := record.refundInput()
-			if _, err := taskSubmitFailureRecoveryRecord(record.TaskID, record.Reason, original); err != nil {
+			if _, err := taskSubmitFailureRecoveryRecord(record.TaskID, record.Reason, original, record.FailedWalletReserveRevision); err != nil {
 				updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryManual, err)
 				continue
 			}
@@ -486,6 +555,6 @@ func writePendingTaskSubmitFailureDisposition(db *gorm.DB, record TaskSubmitFail
 	if status == TaskSubmitFailureRecoveryPending {
 		next = time.Now().Add(time.Duration(1<<min(record.Attempts+1, 6)) * time.Second).Unix()
 	}
-	return db.Model(&TaskSubmitFailureRecovery{}).Where("task_id = ? AND status = ?", record.TaskID, TaskSubmitFailureRecoveryPending).
+	return db.Model(&TaskSubmitFailureRecovery{}).Where("task_id = ? AND status = ? AND attempts = ?", record.TaskID, TaskSubmitFailureRecoveryPending, record.Attempts).
 		Updates(map[string]any{"status": status, "attempts": gorm.Expr("attempts + 1"), "last_error": message, "next_attempt": next, "updated_at": time.Now().Unix()})
 }

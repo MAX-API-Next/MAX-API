@@ -459,6 +459,15 @@ acknowledgement alongside its status claim and any verified refund intent.
 If a retry reserved wallet funds before writing them to the task, a later
 definite rejection must match the complete original debit and every applied
 reserve receipt before it can refund them.
+Upgrade the recovery journal with `failed_wallet_reserve_revision` before
+starting new task and settlement workers. A definite rejection can reconcile
+one failed wallet reserve attempt by its durable revision. It cancels a
+verified unapplied reserve in the same transaction that claims the rejection.
+If the reserve applied first, the recorded refund includes it. Cancellation
+and refund authority still require a verified request, wallet and token.
+When an existing free placeholder first retries on a paid wallet route,
+creation of the initial debit record and the wallet/token charge are atomic.
+A failed transaction leaves no new debit for a worker to replay.
 If the database cannot save even the recovery record, use the original task
 and reservation records to reconcile the logged task ID after service returns.
 Historical private metadata retains unknown fields, including nested typed

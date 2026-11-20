@@ -54,9 +54,9 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 			table = foldTaskPluginTableName(table)
 		}
 		guardedType := channelType
-		if table == taskTable {
+		if taskPluginMatchesProtectedTable(table, taskTable) {
 			guardedType = taskType
-		} else if table != channelTable {
+		} else if !taskPluginMatchesProtectedTable(table, channelTable) {
 			return
 		}
 		value := reflect.ValueOf(tx.Statement.Dest)
@@ -103,18 +103,18 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 			table = foldTaskPluginTableName(table)
 			statementTable = foldTaskPluginTableName(statementTable)
 		}
-		if !resolved && (statementTable == channelTable || statementTable == taskTable) {
+		if !resolved && (taskPluginMatchesProtectedTable(statementTable, channelTable) || taskPluginMatchesProtectedTable(statementTable, taskTable)) {
 			tx.AddError(taskplugin.ErrCatalogInvalid)
 			return
 		}
-		var guardedType reflect.Type
-		switch table {
-		case channelTable:
-			guardedType = channelType
-		case taskTable:
-			guardedType = taskType
-		default:
+		channelTarget := taskPluginMatchesProtectedTable(table, channelTable)
+		taskTarget := taskPluginMatchesProtectedTable(table, taskTable)
+		if !channelTarget && !taskTarget {
 			return
+		}
+		guardedType := channelType
+		if taskTarget {
+			guardedType = taskType
 		}
 		if tx.Statement.Schema != nil && tx.Statement.Schema.ModelType == guardedType {
 			return
@@ -136,8 +136,8 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 			}
 			column = strings.Trim(column[strings.LastIndexByte(column, '.')+1:], "\"`[]")
 			column = strings.ToLower(column)
-			if table == channelTable && (column == "models" || column == "modelmapping" || column == "model_mapping") ||
-				table == taskTable && (column == "privatedata" || column == "private_data") {
+			if channelTarget && (column == "models" || column == "modelmapping" || column == "model_mapping") ||
+				taskTarget && (column == "privatedata" || column == "private_data") {
 				tx.AddError(taskplugin.ErrCatalogInvalid)
 				return
 			}
@@ -164,9 +164,14 @@ func taskPluginStatementTable(statement *gorm.Statement) (string, bool) {
 		name = name[1 : len(name)-1]
 	}
 	table, valid := taskPluginPlainTableName(name)
-	rawBase := name[strings.LastIndexByte(name, '.')+1:]
-	if only && !strings.HasPrefix(rawBase, "\"") {
-		table = strings.ToLower(table) // PostgreSQL folds the unquoted ONLY target.
+	if valid && only {
+		parts := strings.Split(table, ".")
+		for i, rawPart := range strings.Split(name, ".") {
+			if !strings.HasPrefix(rawPart, "\"") {
+				parts[i] = foldTaskPluginTableName(parts[i])
+			}
+		}
+		table = strings.Join(parts, ".")
 	}
 	return table, valid
 }
@@ -182,7 +187,15 @@ func taskPluginPlainTableName(name string) (string, bool) {
 		}
 		parts[i] = part
 	}
-	return parts[len(parts)-1], true
+	return strings.Join(parts, "."), true
+}
+
+func taskPluginMatchesProtectedTable(candidate, protected string) bool {
+	if strings.Contains(candidate, ".") && strings.Contains(protected, ".") {
+		return candidate == protected
+	}
+	// An unqualified target may resolve through the configured search path.
+	return candidate[strings.LastIndexByte(candidate, '.')+1:] == protected[strings.LastIndexByte(protected, '.')+1:]
 }
 
 func foldTaskPluginTableName(table string) string {

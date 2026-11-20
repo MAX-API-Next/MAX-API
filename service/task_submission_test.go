@@ -599,3 +599,131 @@ func TestLateDefiniteRejectionRefundsUnprojectedWalletReservesOnce(t *testing.T)
 		})
 	}
 }
+
+func TestDefiniteRejectionReconcilesFailedWalletReserve(t *testing.T) {
+	for _, test := range []struct {
+		name                        string
+		initial                     int
+		appliedFirst, journalReplay bool
+	}{
+		{name: "pending after committed intent", initial: 100},
+		{name: "zero original debit"},
+		{name: "applied before claim with journal replay", initial: 100, appliedFirst: true, journalReplay: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			isolateTaskPluginBillingDatabase(t)
+			const userID, tokenID = 91, 92
+			const request = "synthetic-reserve-failure"
+			seedUser(t, userID, 1000)
+			seedToken(t, tokenID, userID, request, 1000)
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			info := &relaycommon.RelayInfo{RequestId: request, UserId: userID, TokenId: tokenID, TokenKey: request,
+				ForcePreConsume: true, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+			require.Nil(t, PreConsumeBilling(ctx, test.initial, info))
+			row := &model.Task{TaskID: request, UserId: userID, Quota: test.initial, Status: model.TaskStatusSubmitted,
+				PrivateData: model.TaskPrivateData{BillingSource: BillingSourceWallet, AwaitingUpstreamID: true, BillingRequestId: request, TokenId: tokenID}}
+			require.NoError(t, model.DB.Create(row).Error)
+			info.PersistedTaskID = row.ID
+			reserve := model.BillingSettlementInput{OperationKey: "request:" + request + ":reserve:1",
+				Source: BillingSourceWallet, UserID: userID, TokenID: tokenID, FundingDelta: 50, TokenDelta: 50, ManualOnFailure: true}
+			const reserveRead = "fixture:fail-first-reserve-read"
+			outage := errors.New("synthetic post-insert wallet reserve read failure")
+			require.NoError(t, model.DB.Callback().Query().Before("gorm:query").Register(reserveRead, func(tx *gorm.DB) {
+				if tx.Statement.Table == "billing_settlements" {
+					_ = tx.AddError(outage)
+				}
+			}))
+			require.ErrorIs(t, info.Billing.Reserve(test.initial+50), outage)
+			require.NoError(t, model.DB.Callback().Query().Remove(reserveRead))
+			status, found, err := model.GetBillingSettlementStatus(reserve.OperationKey)
+			require.NoError(t, err)
+			require.True(t, found, "the intent committed before the failed read")
+			require.Equal(t, model.BillingSettlementStatusPending, status)
+			require.EqualValues(t, 1000-test.initial, getUserQuota(t, userID))
+			if test.appliedFirst {
+				_, _, err = model.ApplyBillingSettlementOnce(reserve)
+				require.NoError(t, err)
+				require.EqualValues(t, 1000-test.initial-50, getTokenRemainQuota(t, tokenID))
+			}
+			const claimWrite = "fixture:fail-rejection-claim"
+			if test.journalReplay {
+				require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(claimWrite, func(tx *gorm.DB) {
+					if tx.Statement.Table == "tasks" {
+						_ = tx.AddError(errors.New("synthetic task write unavailable"))
+					}
+				}))
+			}
+			CleanupDefiniteTaskSubmitFailure(ctx, info, "no retry was sent")
+			if test.journalReplay {
+				require.NoError(t, model.DB.Callback().Update().Remove(claimWrite))
+				var journal model.TaskSubmitFailureRecovery
+				require.NoError(t, model.DB.First(&journal, "task_id = ?", row.ID).Error)
+				require.Equal(t, model.TaskSubmitFailureRecoveryPending, journal.Status)
+				require.EqualValues(t, 1, journal.FailedWalletReserveRevision)
+			}
+			model.ProcessPendingBillingSettlementsOnce()
+			model.ProcessPendingBillingSettlementsOnce()
+			if !test.appliedFirst {
+				_, _, err = model.ApplyBillingSettlementOnce(reserve)
+				require.ErrorContains(t, err, "cancelled", "a worker that previously selected the reserve must be unable to debit it")
+			}
+			stored, err := model.GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, err)
+			require.EqualValues(t, model.TaskStatusFailure, stored.Status)
+			require.Zero(t, stored.Quota)
+			require.Equal(t, "no retry was sent", stored.FailReason)
+			require.EqualValues(t, 1000, getUserQuota(t, userID))
+			require.EqualValues(t, 1000, getTokenRemainQuota(t, tokenID))
+			refundAmount := test.initial
+			if test.appliedFirst {
+				refundAmount += 50
+			}
+			var receipt model.BillingSettlement
+			err = model.DB.First(&receipt, "operation_key = ?", model.BillingRequestFinalizeOperationKey(request)).Error
+			if refundAmount == 0 {
+				require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+			} else {
+				require.NoError(t, err)
+				require.EqualValues(t, -refundAmount, receipt.AppliedFundingDelta)
+				require.EqualValues(t, -refundAmount, receipt.AppliedTokenDelta)
+			}
+		})
+	}
+}
+
+func TestBoundTaskWalletPreConsumeReadFailureLeavesNoReplayDebit(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
+	const userID, tokenID = 91, 92
+	const request = "synthetic-bound-wallet-selection"
+	seedUser(t, userID, 1000)
+	seedToken(t, tokenID, userID, request, 1000)
+	row := &model.Task{TaskID: request, UserId: userID, Status: model.TaskStatusSubmitted,
+		PrivateData: model.TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: request, TokenId: tokenID}}
+	require.NoError(t, model.DB.Create(row).Error)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{RequestId: request, UserId: userID, TokenId: tokenID, TokenKey: request,
+		ForcePreConsume: true, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: row.ID}}
+	const hook = "fixture:abort-bound-wallet-preconsume"
+	observed := false
+	require.NoError(t, model.DB.Callback().Query().After("gorm:query").Register(hook, func(tx *gorm.DB) {
+		if receipt, ok := tx.Statement.Dest.(*model.BillingSettlement); tx.Error == nil && ok && receipt.OperationKey == "request:"+request+":pre-consume" {
+			observed = true
+			_ = tx.AddError(errors.New("synthetic initial debit read failure"))
+		}
+	}))
+	require.NotNil(t, PreConsumeBilling(ctx, 100, info))
+	require.True(t, observed, "the injected failure must occur after the new receipt was written")
+	require.NoError(t, model.DB.Callback().Query().Remove(hook))
+	require.Nil(t, info.Billing)
+	CleanupDefiniteTaskSubmitFailure(ctx, info, "retry not sent")
+	model.ProcessPendingBillingSettlementsOnce()
+	stored, err := model.GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, model.TaskStatusFailure, stored.Status)
+	require.Zero(t, stored.Quota)
+	_, found, err := model.GetBillingSettlementStatus("request:" + request + ":pre-consume")
+	require.NoError(t, err)
+	require.False(t, found)
+	require.EqualValues(t, 1000, getUserQuota(t, userID))
+	require.EqualValues(t, 1000, getTokenRemainQuota(t, tokenID))
+}

@@ -22,6 +22,7 @@ package taskplugin
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -61,6 +62,8 @@ type CatalogReadObservationError struct {
 	Revision int64
 	// Packages is independently completed evidence, even if receipts failed.
 	Packages *[]StoredPackage
+	// RowIdentities holds the observed store keys in the same order as Packages.
+	RowIdentities []string
 	// Snapshot is private completed data observed before the final head reread.
 	// It is evidence for suspension, never authority to publish a generation.
 	Snapshot *CatalogSnapshot
@@ -99,6 +102,12 @@ type CatalogSnapshot struct {
 	Revision  int64
 	Packages  []StoredPackage
 	Deletions []PackageDeletion
+}
+
+// StoragePackageIdentity is the persisted key of a catalog version.
+func StoragePackageIdentity(key, version string) string {
+	sum := sha256.Sum256([]byte(packageIdentity(key, version)))
+	return hex.EncodeToString(sum[:])
 }
 
 // PackageDeletion is an immutable, source-free deletion receipt. It lets other
@@ -214,7 +223,8 @@ func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool
 		observed := errors.As(err, &observation)
 		changed := observed && (observation.Revision != catalog.snapshot.Revision ||
 			observation.Snapshot != nil && !sameCatalogSnapshot(*observation.Snapshot, catalog.snapshot) ||
-			observation.Packages != nil && !sameCatalogSnapshot(CatalogSnapshot{Packages: *observation.Packages}, CatalogSnapshot{Packages: catalog.snapshot.Packages}))
+			observation.Packages != nil && (!sameCatalogSnapshot(CatalogSnapshot{Packages: *observation.Packages}, CatalogSnapshot{Packages: catalog.snapshot.Packages}) ||
+				!catalog.observedCatalogRowIdentitiesMatch(*observation.Packages, observation.RowIdentities)))
 		confirmedCurrent := err == nil && snapshot.Revision >= catalog.highestObservedRevision && sameCatalogSnapshot(snapshot, catalog.snapshot)
 		if !confirmedCurrent && (!preflight || ctx.Err() == nil || changed || errors.Is(err, ErrCatalogInvalid) || err == nil) {
 			catalog.host.state.Store(nil)
@@ -259,6 +269,25 @@ func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool
 	}
 	catalog.publish(snapshot, state)
 	return nil
+}
+
+func (catalog *Catalog) observedCatalogRowIdentitiesMatch(packages []StoredPackage, identities []string) bool {
+	if identities == nil {
+		return true // A store without separate row keys supplies only package evidence.
+	}
+	if len(identities) != len(packages) || catalog.state == nil {
+		return false
+	}
+	expected := make(map[string]string, len(catalog.state.history))
+	for _, pkg := range catalog.state.history {
+		expected[pkg.digest] = StoragePackageIdentity(pkg.manifest.Key, pkg.manifest.Version)
+	}
+	for i, entry := range packages {
+		if identity, ok := expected[entry.Digest]; !ok || identity != identities[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func sameCatalogSnapshot(a, b CatalogSnapshot) bool {
