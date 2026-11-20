@@ -8,7 +8,6 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
-	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -80,7 +79,7 @@ func DecodeLocalTaskID(id string) (string, error) {
 // BuildProxyURL constructs the video proxy URL using the public task ID.
 // e.g., "https://your-server.com/v1/videos/task_xxxx/content"
 func BuildProxyURL(taskID string) string {
-	return fmt.Sprintf("%s/v1/videos/%s/content", system_setting.ServerAddress, taskID)
+	return model.TaskVideoProxyURL(taskID)
 }
 
 // Status-to-progress mapping constants for polling updates.

@@ -822,7 +822,9 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.MaxAPIErro
 			}
 			apply := model.ApplyBillingSettlementOnce
 			if s.relayInfo.TaskRelayInfo != nil && s.relayInfo.PersistedTaskID > 0 {
-				apply = model.ApplyBoundTaskWalletPreConsumeOnce
+				apply = func(input model.BillingSettlementInput) (int64, bool, error) {
+					return model.ApplyBoundTaskWalletPreConsumeOnce(input, s.relayInfo.PersistedTaskID)
+				}
 			}
 			applied, _, err := apply(model.BillingSettlementInput{
 				OperationKey:             "request:" + s.relayInfo.RequestId + ":pre-consume",
@@ -839,6 +841,16 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.MaxAPIErro
 				PreConsumeEffectiveQuota: int64(effectiveQuota),
 			})
 			if err != nil {
+				if errors.Is(err, model.ErrBoundTaskWalletDebitOutcomeUnknown) {
+					c.Set(boundWalletDebitRecoveryKey, boundWalletDebitRecovery{
+						taskID: s.relayInfo.PersistedTaskID,
+						refund: model.BillingSettlementInput{
+							OperationKey: model.BillingRequestFinalizeOperationKey(s.relayInfo.RequestId), Source: model.BillingSettlementSourceWallet,
+							UserID: s.relayInfo.UserId, TokenID: s.relayInfo.TokenId, AllowMissingToken: true,
+							FundingDelta: -int64(effectiveQuota), TokenDelta: -tokenDelta,
+						},
+					})
+				}
 				return mapAtomicPreConsumeError(err)
 			}
 			if applied != int64(effectiveQuota) {

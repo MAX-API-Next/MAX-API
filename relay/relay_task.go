@@ -881,6 +881,10 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	if terminal {
 		return renderRealtimeVideoStatus(task, task.Data)
 	}
+	upstreamTaskID := task.GetUpstreamTaskID()
+	if upstreamTaskID == "" {
+		return nil
+	}
 	if task.CapturePrivateDataForStatusUpdate() != nil {
 		return nil
 	}
@@ -896,7 +900,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	}
 
 	resp, err := adaptor.FetchTask(baseURL, channelModel.Key, taskcommon.WithTaskProtocolConfig(map[string]any{
-		"task_id": task.GetUpstreamTaskID(),
+		"task_id": upstreamTaskID,
 		"action":  task.Action,
 		"model":   task.Properties.UpstreamModelName,
 	}, channelModel.GetOtherSettings()), proxy)
@@ -933,10 +937,12 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	if strings.HasPrefix(ti.Url, "data:") {
 		// data: URI — kept in Data, not ResultURL
 	} else if ti.Url != "" {
+		task.PrivateData.LocalVideoContent = false
 		task.PrivateData.ResultURL = ti.Url
 	} else if task.Status == model.TaskStatusSuccess {
 		// No URL from adaptor — construct proxy URL using public task ID
-		task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
+		task.PrivateData.ResultURL = model.TaskVideoProxyPath(task.TaskID)
+		task.PrivateData.LocalVideoContent = true
 	}
 
 	// Terminal transitions must go through the polling settlement path. The

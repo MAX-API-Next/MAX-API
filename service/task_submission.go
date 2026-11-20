@@ -13,6 +13,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const boundWalletDebitRecoveryKey = "max_bound_task_wallet_debit_recovery"
+
+type boundWalletDebitRecovery struct {
+	taskID int64
+	refund model.BillingSettlementInput
+}
+
 // Claim the definite terminal transition before the existing request refund.
 // An open task-finalize owner, confirmed provider work or read error must keep
 // its task and funding available for the original reconciliation path.
@@ -25,6 +32,14 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 		var failedReserve int64
 		session, isSession := info.Billing.(*BillingSession)
 		statusOnly := info.Billing == nil
+		if statusOnly && c != nil {
+			candidate, _ := c.Get(boundWalletDebitRecoveryKey)
+			if recovery, ok := candidate.(boundWalletDebitRecovery); ok && recovery.taskID == info.PersistedTaskID &&
+				recovery.refund.OperationKey == model.BillingRequestFinalizeOperationKey(info.RequestId) &&
+				recovery.refund.UserID == info.UserId && recovery.refund.TokenID == info.TokenId {
+				intent, statusOnly = &recovery.refund, false
+			}
+		}
 		if info.Billing != nil {
 			preparer, ok := info.Billing.(RefundSettlementPreparer)
 			if !ok {
@@ -68,6 +83,8 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 			if intent != nil {
 				status, journalErr := model.RecordTaskSubmitFailureWithReserveRecovery(info.PersistedTaskID, reason, *intent, failedReserve)
 				switch {
+				case model.QueueTaskSubmitFailureRecovery(info.PersistedTaskID, info.RequestId, reason, info.UserId, info.TokenId, intent, failedReserve, journalErr):
+					common.SysLog(fmt.Sprintf("task submit rejection retained for journal retry: task_id=%d", info.PersistedTaskID))
 				case journalErr != nil:
 					common.SysError(fmt.Sprintf("task submit rejection recovery was not recorded: task_id=%d claim=%s journal=%s", info.PersistedTaskID, taskSubmitRecoveryErrorCategory(err), taskSubmitRecoveryErrorCategory(journalErr)))
 				case status == model.TaskSubmitFailureRecoveryPending:
@@ -79,7 +96,9 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 				}
 			} else {
 				status, journalErr := model.RecordTaskSubmitFailureStatusRecovery(info.PersistedTaskID, info.RequestId, reason, info.UserId, info.TokenId)
-				if journalErr != nil {
+				if model.QueueTaskSubmitFailureRecovery(info.PersistedTaskID, info.RequestId, reason, info.UserId, info.TokenId, nil, 0, journalErr) {
+					common.SysLog(fmt.Sprintf("task submit rejection retained for journal retry: task_id=%d", info.PersistedTaskID))
+				} else if journalErr != nil {
 					common.SysError(fmt.Sprintf("task submit rejection status recovery could not be verified: task_id=%d claim=%s journal=%s", info.PersistedTaskID, taskSubmitRecoveryErrorCategory(err), taskSubmitRecoveryErrorCategory(journalErr)))
 				} else if status == model.TaskSubmitFailureRecoveryPending {
 					common.SysLog(fmt.Sprintf("task submit rejection queued for status recovery: task_id=%d", info.PersistedTaskID))

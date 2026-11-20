@@ -18,12 +18,13 @@ type taskPrivateUnmodeled struct{ fields map[string]any }
 type taskPrivateNested struct{ value any }
 type taskPrivateMap map[string]any
 type taskPrivateBillingPlanHistory struct {
-	configHash                  string
-	estimateQuota, reserveQuota int64
-	fields                      map[string]any
+	configHash                                   string
+	estimateQuota, reserveQuota, inputVideoCount int64
+	fields                                       map[string]any
 }
 type taskPrivateUsageHistory struct {
 	digest   string
+	legacy   bool
 	original map[string]any
 	fields   map[string]any
 }
@@ -168,12 +169,15 @@ func unknownTaskPrivateValue(value any, typ reflect.Type) any {
 					plan := canonicalTaskPrivateFields(object, typ)
 					hash, _ := plan["config_hash"].(string)
 					return taskPrivateBillingPlanHistory{configHash: hash, estimateQuota: taskPrivatePlanQuota(plan["estimate_quota"]),
-						reserveQuota: taskPrivatePlanQuota(plan["reserve_quota"]), fields: fields}
+						reserveQuota: taskPrivatePlanQuota(plan["reserve_quota"]), inputVideoCount: taskPrivatePlanQuota(plan["input_video_count"]), fields: fields}
 				}
 				if typ == reflect.TypeFor[types.TaskUsageEnvelope]() {
 					envelope := canonicalTaskPrivateFields(object, typ)
 					digest, _ := envelope["evidence_digest"].(string)
 					return taskPrivateUsageHistory{digest: digest, original: object, fields: fields}
+				}
+				if typ == reflect.TypeFor[types.TaskUsage]() && canonicalTaskPrivateFields(object, typ)["completeness"] == types.TaskUsageCompletenessMissing {
+					return taskPrivateUsageHistory{legacy: true, original: object, fields: fields}
 				}
 				return fields
 			}
@@ -215,8 +219,8 @@ func mergeTaskPrivateFields(unknown, current map[string]any) (map[string]any, er
 				continue
 			}
 			if nested, ok := previous.(taskPrivateNested); ok {
-				if usage, tracked := nested.value.(taskPrivateUsageHistory); tracked && usage.digest != taskPrivateUsageDigest(value) {
-					const archiveKey = "previous_task_usage_envelopes"
+				usage, tracked := nested.value.(taskPrivateUsageHistory)
+				if archiveKey := usage.replacementArchiveKey(value); tracked && archiveKey != "" {
 					archive, _ := merged[archiveKey].([]any)
 					if original := merged[archiveKey]; original != nil && archive == nil {
 						archive = []any{original}
@@ -242,10 +246,19 @@ func mergeTaskPrivateFields(unknown, current map[string]any) (map[string]any, er
 	return merged, nil
 }
 
-func taskPrivateUsageDigest(value any) string {
-	envelope, _ := value.(map[string]any)
-	digest, _ := envelope["evidence_digest"].(string)
-	return digest
+func (usage taskPrivateUsageHistory) replacementArchiveKey(value any) string {
+	facts, _ := value.(map[string]any)
+	if usage.legacy {
+		if facts["completeness"] == types.TaskUsageCompletenessComplete && facts["source"] == types.TaskUsageSourceProviderResponse {
+			return "previous_task_usage_facts"
+		}
+		return ""
+	}
+	digest, _ := facts["evidence_digest"].(string)
+	if digest != usage.digest {
+		return "previous_task_usage_envelopes"
+	}
+	return ""
 }
 
 func mergeTaskPrivateValue(unknown, current any) (any, error) {
@@ -256,7 +269,7 @@ func mergeTaskPrivateValue(unknown, current any) (any, error) {
 		next, object := current.(map[string]any)
 		hash, _ := next["config_hash"].(string)
 		if !object || hash != plan.configHash || taskPrivatePlanQuota(next["estimate_quota"]) != plan.estimateQuota ||
-			taskPrivatePlanQuota(next["reserve_quota"]) != plan.reserveQuota {
+			taskPrivatePlanQuota(next["reserve_quota"]) != plan.reserveQuota || taskPrivatePlanQuota(next["input_video_count"]) != plan.inputVideoCount {
 			return nil, errors.New("cannot move unmodeled task private history to a different billing plan")
 		}
 		return mergeTaskPrivateFields(plan.fields, next)

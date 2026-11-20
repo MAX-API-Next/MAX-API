@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,9 +13,12 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/relay"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
+	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
+	"github.com/tidwall/gjson"
 )
 
 func getGeminiVideoURL(ctx context.Context, channel *model.Channel, task *model.Task, apiKey string) (string, error) {
@@ -198,7 +202,8 @@ func fetchVideoTaskResultURL(ctx context.Context, channel *model.Channel, task *
 		"action":  task.Action,
 		"model":   task.Properties.UpstreamModelName,
 	})
-	resp, err := adaptor.FetchTask(baseURL, key, taskcommon.WithTaskProtocolConfig(query, channel.GetOtherSettings()), channel.GetSetting().Proxy)
+	settings := channel.GetOtherSettings()
+	resp, err := adaptor.FetchTask(baseURL, key, taskcommon.WithTaskProtocolConfig(query, settings), channel.GetSetting().Proxy)
 	if err != nil {
 		return "", fmt.Errorf("fetch task failed: %w", err)
 	}
@@ -209,10 +214,15 @@ func fetchVideoTaskResultURL(ctx context.Context, channel *model.Channel, task *
 	}
 	body, err := readVideoProviderStatus(resp.Body)
 	if err != nil {
+		if errors.Is(err, errVideoProviderStatusTooLarge) {
+			if chosen := configuredInlineVideoFromPrefix(body, settings); chosen != "" {
+				return chosen, nil
+			}
+		}
 		return "", fmt.Errorf("read task response failed: %w", err)
 	}
 
-	taskInfo, parsed, parseErr := taskcommon.ParseConfiguredTaskResult(body, channel.GetOtherSettings())
+	taskInfo, parsed, parseErr := taskcommon.ParseConfiguredTaskResult(body, settings)
 	if parseErr != nil {
 		return "", fmt.Errorf("parse configured task result failed: %w", parseErr)
 	}
@@ -233,6 +243,8 @@ func fetchVideoTaskResultURL(ctx context.Context, channel *model.Channel, task *
 	return "", fmt.Errorf("video result URL not found")
 }
 
+var errVideoProviderStatusTooLarge = errors.New("video status response exceeds size limit")
+
 func readVideoProviderStatus(reader io.Reader) ([]byte, error) {
 	limit := int64(base64.StdEncoding.EncodedLen(maxVideoDataURLDecodedBytes)) + (1 << 20)
 	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
@@ -240,9 +252,24 @@ func readVideoProviderStatus(reader io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(body)) > limit {
-		return nil, fmt.Errorf("video status response exceeds size limit")
+		return body[:limit], errVideoProviderStatusTooLarge
 	}
 	return body, nil
+}
+
+// On a truncated status response, serve only a complete inline value at the
+// explicitly preferred result path. Unrelated fields can follow the read limit.
+func configuredInlineVideoFromPrefix(body []byte, settings dto.ChannelOtherSettings) string {
+	if !taskcommon.UseConfiguredTaskProtocol(settings) || settings.TaskProtocolConfig == nil ||
+		len(settings.TaskProtocolConfig.ResultURLPaths) == 0 {
+		return ""
+	}
+	result := gjson.GetBytes(body, settings.TaskProtocolConfig.ResultURLPaths[0])
+	if result.Type != gjson.String || !strings.HasPrefix(result.Raw, `"`) || !strings.HasPrefix(result.Str, "data:") ||
+		!common.ValidJSON(common.StringToByteSlice(result.Raw)) {
+		return ""
+	}
+	return result.Str
 }
 
 func isTaskProxyContentURL(raw string, taskID string) bool {
@@ -251,11 +278,17 @@ func isTaskProxyContentURL(raw string, taskID string) bool {
 		return false
 	}
 	if result.Scheme == "" && result.Host == "" {
-		return result.Path == "/v1/videos/"+taskID+"/content"
+		return result.Path == model.TaskVideoProxyPath(taskID)
 	}
-	local, err := url.Parse(taskcommon.BuildProxyURL(taskID))
-	return err == nil && local.Host != "" && result.Path == local.Path &&
-		strings.EqualFold(result.Scheme, local.Scheme) && strings.EqualFold(result.Host, local.Host)
+	bases := append([]string{system_setting.ServerAddress}, strings.Split(common.GetEnvOrDefaultString("TASK_VIDEO_PROXY_LEGACY_BASE_URLS", ""), ",")...)
+	for _, base := range bases {
+		local, err := url.Parse(strings.TrimRight(strings.TrimSpace(base), "/") + model.TaskVideoProxyPath(taskID))
+		if err == nil && local.Host != "" && result.Path == local.Path &&
+			strings.EqualFold(result.Scheme, local.Scheme) && strings.EqualFold(result.Host, local.Host) {
+			return true
+		}
+	}
+	return false
 }
 
 func getVertexTaskKey(channel *model.Channel, task *model.Task) string {

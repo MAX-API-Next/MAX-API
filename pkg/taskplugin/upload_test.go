@@ -18,6 +18,25 @@ import (
 
 const validUploadSource = `export const meta = {apiVersion: 1, key: "custom-upload", name: "Custom", version: "1.0.0", models: ["custom-model"]}; export function buildSubmitRequest(){return {}} export function parseSubmitResponse(){return {}} export function buildQueryRequest(){return {}} export function parseTaskResult(){return {}}`
 
+func TestRetainedPackageValidationReusesOnlyExactBytesWithinOperation(t *testing.T) {
+	pkg, err := LoadUpload(strings.NewReader(validUploadSource), "")
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx = withRetainedPackageValidation(ctx, pkg)
+	entry := StoredPackage{Document: pkg.Document(), Digest: pkg.Digest()}
+	read, err := entry.LoadRetainedPackage(ctx)
+	require.NoError(t, err)
+	require.Same(t, pkg, read)
+	modified := entry
+	modified.Document = append(bytes.Clone(entry.Document), ' ')
+	_, err = modified.LoadRetainedPackage(ctx)
+	require.ErrorContains(t, err, "digest mismatch")
+	cancel()
+	_, err = entry.LoadRetainedPackage(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestPinnedPackageRejectsRepeatedJSONMembers(t *testing.T) {
 	for _, prefix := range []string{"", "\xef\xbb\xbf"} {
 		for _, repeated := range []string{

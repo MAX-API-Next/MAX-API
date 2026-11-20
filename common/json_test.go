@@ -13,7 +13,8 @@ func TestUnmarshalUseNumberPreservesTokensAndRejectsTrailingData(t *testing.T) {
 	require.Equal(t, json.Number("1e400"), value["huge"])
 	require.Equal(t, json.Number("0"), value["zero"])
 	require.Equal(t, json.Number("9007199254740993"), value["precise"])
-	for _, raw := range []string{`{} {}`, `{} x`, `{"x":1e}`, ``} {
+	require.NoError(t, UnmarshalUseNumber([]byte("{} \t\r\n"), &value))
+	for _, raw := range []string{`{} {}`, `{} x`, `{"x":1e}`, ``, "{}\u00a0"} {
 		require.Error(t, UnmarshalUseNumber([]byte(raw), &value))
 	}
 }

@@ -35,7 +35,7 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 		if tx.Statement.SkipHooks {
 			return
 		}
-		table, resolved := taskPluginStatementTable(tx.Statement)
+		table, resolved := taskPluginStatementTable(tx.Statement, dialect == "postgres")
 		if explicit, exists := tx.Statement.Clauses["INSERT"]; exists {
 			insert, knownInsert := explicit.Expression.(clause.Insert)
 			if !knownInsert || insert.Table.Raw || insert.Table.Alias != "" || strings.ContainsAny(insert.Table.Name, "\"`[]") {
@@ -83,7 +83,7 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 		if tx.Statement.SkipHooks {
 			return
 		}
-		table, resolved := taskPluginStatementTable(tx.Statement)
+		table, resolved := taskPluginStatementTable(tx.Statement, dialect == "postgres")
 		if explicit, exists := tx.Statement.Clauses["UPDATE"]; exists {
 			update, known := explicit.Expression.(clause.Update)
 			if !known || update.Table.Raw || update.Table.Alias != "" || strings.ContainsAny(update.Table.Name, "\"\x60[]") {
@@ -141,7 +141,7 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 	})
 }
 
-func taskPluginStatementTable(statement *gorm.Statement) (string, bool) {
+func taskPluginStatementTable(statement *gorm.Statement, postgres bool) (string, bool) {
 	if statement.TableExpr == nil {
 		return statement.Table, true
 	}
@@ -160,7 +160,7 @@ func taskPluginStatementTable(statement *gorm.Statement) (string, bool) {
 		name = name[1 : len(name)-1]
 	}
 	table, valid := taskPluginPlainTableName(name)
-	if valid && only {
+	if valid && postgres {
 		parts := strings.Split(table, ".")
 		for i, rawPart := range strings.Split(name, ".") {
 			if !strings.HasPrefix(rawPart, "\"") {

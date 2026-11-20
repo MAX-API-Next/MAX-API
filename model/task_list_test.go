@@ -19,6 +19,10 @@ func TestTaskListsIsolateUnreadableMetadataAndKeepScope(t *testing.T) {
 			for _, row := range []*Task{healthy, bad, foreign} {
 				insertTask(t, row)
 			}
+			require.NoError(t, DB.Model(healthy).UpdateColumn("private_data", `{
+				"upstream_task_id":"healthy-provider","result_url":"/v1/videos/healthy-list/content",
+				"Inline_Video_Data_URL":"data:video/mp4;base64,AA==","Pending_Terminal_Reſult_URL":"data:video/mp4;base64,AA=="
+			}`).Error)
 			var raw any = []byte(`{"upstream_task_id":42}`)
 			if asText {
 				raw = `{"upstream_task_id":42}`
@@ -36,6 +40,7 @@ func TestTaskListsIsolateUnreadableMetadataAndKeepScope(t *testing.T) {
 			require.Zero(t, userRows[1].ChannelId, "user list must retain its channel_id omission")
 			require.Equal(t, 7, userRows[1].Quota)
 			require.Empty(t, userRows[1].PrivateData.InlineVideoDataURL)
+			require.Empty(t, userRows[1].PrivateData.PendingTerminalResultURL)
 			require.Equal(t, healthy.PrivateData.ResultURL, userRows[1].GetResultURL())
 			adminRows := TaskGetAllTasks(0, 10, SyncTaskQueryParams{})
 			require.Len(t, adminRows, 3)

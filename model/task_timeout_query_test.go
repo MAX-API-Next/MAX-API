@@ -19,7 +19,8 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestPostgresReserveLookupUsesPatternIndex(t *testing.T) {
+func withDisposablePostgresTaskSchema(t *testing.T, run func(*gorm.DB)) {
+	t.Helper()
 	dsn := os.Getenv("TEST_TASK_RESERVE_PATTERN_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("requires a disposable PostgreSQL matrix database")
@@ -32,19 +33,38 @@ func TestPostgresReserveLookupUsesPatternIndex(t *testing.T) {
 	var database string
 	require.NoError(t, db.Raw("SELECT current_database()").Scan(&database).Error)
 	require.Regexp(t, "^maxapi_task_billing_test_round[0-9]+$", database)
-	var nonC int64
-	require.NoError(t, db.Raw("SELECT count(*) FROM pg_collation WHERE collname = 'en-US-x-icu'").Scan(&nonC).Error)
-	require.Positive(t, nonC, "the matrix must exercise a non-C collation")
 	schemaName := fmt.Sprintf("reserve_fixture_%d", time.Now().UnixNano())
 	require.NoError(t, db.Exec("CREATE SCHEMA "+schemaName).Error)
 	t.Cleanup(func() { require.NoError(t, db.Exec("DROP SCHEMA "+schemaName+" CASCADE").Error) })
 	require.NoError(t, db.Connection(func(db *gorm.DB) error {
 		require.NoError(t, db.Exec("SET search_path TO "+schemaName).Error)
 		defer db.Exec("RESET search_path")
-		require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+		run(db.Session(&gorm.Session{NewDB: true}))
+		return nil
+	}))
+}
+
+func TestPostgresReserveLookupUsesPatternIndex(t *testing.T) {
+	withDisposablePostgresTaskSchema(t, func(db *gorm.DB) {
+		var nonC int64
+		require.NoError(t, db.Raw("SELECT count(*) FROM pg_collation WHERE collname = 'en-US-x-icu'").Scan(&nonC).Error)
+		require.Positive(t, nonC, "the matrix must exercise a non-C collation")
+		const injection = "fixture:fail-reserve-index-creation"
+		require.NoError(t, db.Callback().Raw().Before("gorm:raw").Register(injection, func(tx *gorm.DB) {
+			if strings.HasPrefix(tx.Statement.SQL.String(), "CREATE INDEX IF NOT EXISTS idx_billing_settlements_operation_key_pattern ") {
+				_ = tx.AddError(fmt.Errorf("fixture index creation interrupted"))
+			}
+		}))
+		failed := prepareBillingSettlementReserveLookup(db)
+		require.NoError(t, db.Callback().Raw().Remove(injection))
+		require.ErrorContains(t, failed, "fixture index creation interrupted")
+		require.False(t, db.Migrator().HasTable(&BillingSettlement{}), "a failed fresh index build also rolls back the new ledger")
+		require.NoError(t, prepareBillingSettlementReserveLookup(db))
+		require.NoError(t, db.Exec("DROP INDEX idx_billing_settlements_operation_key_pattern").Error)
 		require.NoError(t, db.Exec(`ALTER TABLE billing_settlements ALTER COLUMN operation_key TYPE varchar(191) COLLATE pg_catalog."en-US-x-icu"`).Error)
-		require.ErrorContains(t, checkBillingSettlementReserveLookup(db, false), "missing or invalid")
-		require.NoError(t, checkBillingSettlementReserveLookup(db, true))
+		require.ErrorContains(t, prepareBillingSettlementReserveLookup(db), "missing or invalid")
+		require.NoError(t, db.Exec("CREATE INDEX idx_billing_settlements_operation_key_pattern ON billing_settlements (operation_key)").Error)
+		require.ErrorContains(t, prepareBillingSettlementReserveLookup(db), "missing or invalid")
 		require.NoError(t, db.Exec("DROP INDEX idx_billing_settlements_operation_key_pattern").Error)
 		require.NoError(t, db.Exec(`INSERT INTO billing_settlements (operation_key, source, created_at, updated_at)
 			SELECT 'plan-fixture:' || i, 'wallet', 1, 1 FROM generate_series(1, 50000) AS i`).Error)
@@ -52,8 +72,8 @@ func TestPostgresReserveLookupUsesPatternIndex(t *testing.T) {
 			VALUES ('request:plan-_fixture:reserve:1', 'wallet', 1, 1), ('request:plan-Xfixture:reserve:1', 'wallet', 1, 1)`).Error)
 		require.NoError(t, db.Exec("ANALYZE billing_settlements").Error)
 		require.NoError(t, db.Exec("CREATE INDEX CONCURRENTLY idx_billing_settlements_operation_key_pattern ON billing_settlements (operation_key varchar_pattern_ops)").Error)
-		require.NoError(t, checkBillingSettlementReserveLookup(db, false))
-		require.NoError(t, checkBillingSettlementReserveLookup(db, false))
+		require.NoError(t, prepareBillingSettlementReserveLookup(db))
+		require.NoError(t, prepareBillingSettlementReserveLookup(db))
 		pattern := taskSubmitWalletReservePattern("request:plan-_fixture:reserve:")
 		var plan []string
 		require.NoError(t, db.Raw("EXPLAIN SELECT id FROM billing_settlements WHERE operation_key LIKE ? ESCAPE '!'", pattern).Scan(&plan).Error)
@@ -61,8 +81,31 @@ func TestPostgresReserveLookupUsesPatternIndex(t *testing.T) {
 		var found []string
 		require.NoError(t, db.Raw("SELECT operation_key FROM billing_settlements WHERE operation_key LIKE ? ESCAPE '!'", pattern).Scan(&found).Error)
 		require.Equal(t, []string{"request:plan-_fixture:reserve:1"}, found)
-		return nil
-	}))
+	})
+}
+
+func TestPostgresTaskHistoryPreservesDuplicateMetadataValidation(t *testing.T) {
+	withDisposablePostgresTaskSchema(t, func(db *gorm.DB) {
+		previous := DB
+		DB = db
+		defer func() { DB = previous }()
+		require.NoError(t, db.AutoMigrate(&Task{}))
+		row := &Task{TaskID: "postgres-history", UserId: 71, Status: TaskStatusSuccess}
+		require.NoError(t, db.Create(row).Error)
+		setPrivate := func(raw string) {
+			require.NoError(t, db.Exec("UPDATE tasks SET private_data = CAST(? AS json) WHERE id = ?", raw, row.ID).Error)
+		}
+		setPrivate(`{"result_url":"/first","result_url":"/second","Inline_Video_Data_URL":"data:video/mp4;base64,AA=="}`)
+		rows := TaskGetAllUserTask(row.UserId, 0, 10, SyncTaskQueryParams{TaskID: row.TaskID})
+		require.Len(t, rows, 1)
+		require.True(t, rows[0].PrivateDataUnreadable())
+		require.Empty(t, rows[0].GetResultURL())
+		setPrivate(`{"result_url":"/single","Inline_Video_Data_URL":"data:video/mp4;base64,AA=="}`)
+		rows = TaskGetAllUserTask(row.UserId, 0, 10, SyncTaskQueryParams{TaskID: row.TaskID})
+		require.Len(t, rows, 1)
+		require.Equal(t, "/single", rows[0].GetResultURL())
+		require.Empty(t, rows[0].PrivateData.InlineVideoDataURL)
+	})
 }
 
 func TestPollingBatchQuarantinesUnadvanceableVersions(t *testing.T) {
@@ -82,20 +125,39 @@ func TestPollingBatchQuarantinesUnadvanceableVersions(t *testing.T) {
 	tasks := GetAllUnFinishSyncTasks(10)
 	require.Len(t, tasks, 2)
 	require.Equal(t, "10", tasks[0].TaskID)
-	require.Greater(t, tasks[0].UpdatedAt, int64(10))
-	require.Less(t, tasks[0].UpdatedAt, int64(math.MaxInt64-2))
+	require.EqualValues(t, 10, tasks[0].UpdatedAt)
+	require.Positive(t, tasks[0].LastPolledAt)
 	require.Equal(t, penultimateID, tasks[1].ID)
-	require.EqualValues(t, math.MaxInt64-1, tasks[1].UpdatedAt)
+	require.EqualValues(t, math.MaxInt64-2, tasks[1].UpdatedAt)
 	for _, task := range tasks {
 		stored, err := GetTaskPlaceholderByID(task.ID)
 		require.NoError(t, err)
 		require.Equal(t, task.UpdatedAt, stored.UpdatedAt)
+		require.Equal(t, task.LastPolledAt, stored.LastPolledAt)
 	}
 	for id, version := range quarantined {
 		stored, err := GetTaskPlaceholderByID(id)
 		require.NoError(t, err)
 		require.Equal(t, version, stored.UpdatedAt)
 	}
+}
+
+func TestOverlappingPollingSelectionsKeepTerminalSnapshotCurrent(t *testing.T) {
+	truncateTables(t)
+	row := &Task{TaskID: "overlapping-selections", Status: TaskStatusInProgress, UpdatedAt: 21}
+	require.NoError(t, DB.Create(row).Error)
+	first, second := GetAllUnFinishSyncTasks(1), GetAllUnFinishSyncTasks(1)
+	require.Len(t, first, 1)
+	require.Len(t, second, 1)
+	require.Equal(t, first[0].UpdatedAt, second[0].UpdatedAt)
+	first[0].Status, first[0].Progress = TaskStatusSuccess, "100%"
+	won, err := first[0].UpdateWithStatusSnapshot(TaskStatusInProgress, first[0].UpdatedAt)
+	require.NoError(t, err)
+	require.True(t, won)
+	second[0].Status = TaskStatusFailure
+	won, err = second[0].UpdateWithStatusSnapshot(TaskStatusInProgress, second[0].UpdatedAt)
+	require.NoError(t, err)
+	require.False(t, won, "a durable state change still wins over the stale poller")
 }
 
 func TestPollingBatchLeavesRoomForTasksWithoutPendingSubmitRecovery(t *testing.T) {

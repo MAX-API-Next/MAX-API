@@ -10,6 +10,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -26,6 +27,16 @@ const (
 )
 
 var ErrTaskSubmitFailureRecoveryRequiresReview = errors.New("task submission rejection requires manual review")
+
+type deferredTaskSubmitFailure struct {
+	db     *gorm.DB
+	record TaskSubmitFailureRecovery
+}
+
+var deferredTaskSubmitFailures struct {
+	sync.Mutex
+	items []deferredTaskSubmitFailure
+}
 
 // This journal preserves the original refund parameters, never a token key or
 // provider payload. Recorded means the original settlement intent is durable;
@@ -100,7 +111,7 @@ func validateTaskSubmitFailureRefundShape(input BillingSettlementInput, failedRe
 func verifyTaskSubmitRefund(tx *gorm.DB, task *Task, input *BillingSettlementInput, failedReserve int64) error {
 	requestID := task.PrivateData.BillingRequestId
 	if input.Source == BillingSettlementSourceSubscription {
-		return verifyTaskSubmitSubscriptionRefund(tx, requestID, input, failedReserve)
+		return verifyTaskSubmitSubscriptionRefund(tx, requestID, input, failedReserve, "consumed")
 	}
 	var selection BillingPreConsumeSelection
 	if err := withRowLock(tx).Where("request_id = ?", requestID).Take(&selection).Error; err != nil {
@@ -134,7 +145,22 @@ func verifyTaskSubmitRefund(tx *gorm.DB, task *Task, input *BillingSettlementInp
 	return reconcileTaskSubmitWalletRefund(tx, selection, input, failedReserve)
 }
 
-func verifyTaskSubmitSubscriptionRefund(tx *gorm.DB, requestID string, input *BillingSettlementInput, failedReserve int64) error {
+func verifyTaskSubmitSubscriptionRefund(tx *gorm.DB, requestID string, input *BillingSettlementInput, failedReserve int64, debitStatus string) error {
+	// Settlement workers lock the reserve operation before its subscription
+	// consumption row. Use the same order when cancelling an unapplied reserve.
+	prefix := billingRequestOperationPrefix + requestID + ":reserve:"
+	var reserves []BillingSettlement
+	if err := withRowLock(tx).Where("subscription_pre_consume_request_id = ? AND operation_key LIKE ? ESCAPE '!'", requestID,
+		taskSubmitWalletReservePattern(prefix)).Order("operation_key").Find(&reserves).Error; err != nil {
+		return err
+	}
+	if debitStatus == "refunded" {
+		for _, reserve := range reserves {
+			if reserve.Status != BillingSettlementStatusApplied && reserve.Status != billingSettlementStatusCancelled {
+				return ErrTaskSubmitRefundIdentityMismatch
+			}
+		}
+	}
 	var debit SubscriptionPreConsumeRecord
 	if err := withRowLock(tx).Where("request_id = ?", requestID).Take(&debit).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -142,7 +168,7 @@ func verifyTaskSubmitSubscriptionRefund(tx *gorm.DB, requestID string, input *Bi
 		}
 		return err
 	}
-	if debit.RequestId != requestID || debit.Status != "consumed" || debit.UserId != input.UserID ||
+	if debit.RequestId != requestID || debit.Status != debitStatus || debit.UserId != input.UserID ||
 		debit.UserSubscriptionId != input.SubscriptionID || debit.PreConsumed <= 0 ||
 		input.SubscriptionPreConsumeRequestID != requestID || !input.FinalizeSubscriptionPreConsume ||
 		debit.TokenId != 0 && debit.TokenId != input.TokenID {
@@ -152,12 +178,6 @@ func verifyTaskSubmitSubscriptionRefund(tx *gorm.DB, requestID string, input *Bi
 	token := int64(0)
 	if debit.TokenId > 0 {
 		token = debit.PreConsumed
-	}
-	prefix := billingRequestOperationPrefix + requestID + ":reserve:"
-	var reserves []BillingSettlement
-	if err := withRowLock(tx).Where("subscription_pre_consume_request_id = ? AND operation_key LIKE ? ESCAPE '!'", requestID,
-		taskSubmitWalletReservePattern(prefix)).Find(&reserves).Error; err != nil {
-		return err
 	}
 	return reconcileTaskSubmitReserveChain(tx, input, prefix, reserves, failedReserve, funding, token)
 }
@@ -236,8 +256,9 @@ func taskSubmitWalletReservePattern(prefix string) string {
 	return strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(prefix) + "%"
 }
 
-// Keep index creation on a populated PostgreSQL ledger out of service startup.
-func checkBillingSettlementReserveLookup(db *gorm.DB, newTable bool) error {
+// Fresh PostgreSQL ledgers and their reserve index commit together. Populated
+// ledgers require a separate concurrent index build before startup.
+func prepareBillingSettlementReserveLookup(db *gorm.DB) error {
 	if db.Dialector.Name() != "postgres" {
 		return nil
 	}
@@ -250,19 +271,42 @@ func checkBillingSettlementReserveLookup(db *gorm.DB, newTable bool) error {
 		return err
 	}
 	table := statement.Quote(clause.Table{Name: statement.Schema.Table})
-	if newTable {
-		if err := db.Exec("CREATE INDEX IF NOT EXISTS " + index + " ON " + table + " (operation_key varchar_pattern_ops)").Error; err != nil {
-			return err
-		}
-	}
-	var valid bool
-	if err := db.Raw("SELECT COALESCE((SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(?) AND indrelid = to_regclass(?)), false)", index, table).Scan(&valid).Error; err != nil {
+	var existing bool
+	if err := db.Raw("SELECT pg_catalog.to_regclass(?) IS NOT NULL", table).Scan(&existing).Error; err != nil {
 		return err
 	}
-	if !valid {
-		return errors.New("PostgreSQL reserve lookup index is missing or invalid: follow the PostgreSQL deployment step in pkg/taskplugin/management.md")
+	validate := func(tx *gorm.DB) error {
+		var valid bool
+		if err := tx.Raw(`SELECT EXISTS (
+			SELECT 1 FROM pg_catalog.pg_index i
+			JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
+			JOIN pg_catalog.pg_am am ON am.oid = c.relam
+			JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+			JOIN pg_catalog.pg_opclass op ON op.oid = i.indclass[0]
+			JOIN pg_catalog.pg_namespace ns ON ns.oid = op.opcnamespace
+			WHERE i.indrelid = pg_catalog.to_regclass(?) AND c.relname = ?
+				AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND am.amname = 'btree'
+				AND a.attname = 'operation_key' AND op.opcname = 'varchar_pattern_ops' AND ns.nspname = 'pg_catalog'
+		)`, table, index).Scan(&valid).Error; err != nil {
+			return err
+		}
+		if !valid {
+			return errors.New("PostgreSQL reserve lookup index is missing or invalid: follow the PostgreSQL deployment step in pkg/taskplugin/management.md")
+		}
+		return nil
 	}
-	return nil
+	if existing {
+		return validate(db)
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.AutoMigrate(&BillingSettlement{}); err != nil {
+			return err
+		}
+		if err := tx.Exec("CREATE INDEX IF NOT EXISTS " + index + " ON " + table + " (operation_key pg_catalog.varchar_pattern_ops)").Error; err != nil {
+			return err
+		}
+		return validate(tx)
+	})
 }
 
 func cancelRejectedTaskReserve(tx *gorm.DB, reserve BillingSettlement) error {
@@ -407,6 +451,10 @@ func recordTaskSubmitFailureRecovery(record TaskSubmitFailureRecovery) (string, 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	return storeTaskSubmitFailureRecovery(ctx, DB, record)
+}
+
+func storeTaskSubmitFailureRecovery(ctx context.Context, db *gorm.DB, record TaskSubmitFailureRecovery) (string, error) {
 	record.NextAttempt = time.Now().Unix()
 	status := ""
 	save := func(tx *gorm.DB) error {
@@ -426,11 +474,80 @@ func recordTaskSubmitFailureRecovery(record TaskSubmitFailureRecovery) (string, 
 		status = existing.Status
 		return nil
 	}
-	db := DB.WithContext(ctx)
-	if err := retryTaskSubmitFailureTransaction(db, save); err != nil {
+	if err := retryTaskSubmitFailureTransaction(db.WithContext(ctx), save); err != nil {
 		return "", err
 	}
 	return status, nil
+}
+
+func taskSubmitJournalCanRetry(err error) bool {
+	return err != nil && !errors.Is(err, ErrBillingSettlementOperationConflict) &&
+		!errors.Is(err, ErrTaskSubmitRefundIdentityMismatch) && !errors.Is(err, ErrTaskSubmitFailureRecoveryRequiresReview)
+}
+
+// Retain a definite rejection while the journal is temporarily unavailable.
+// The settlement worker retries the original evidence under its normal budget.
+func QueueTaskSubmitFailureRecovery(taskID int64, requestID, reason string, userID, tokenID int, input *BillingSettlementInput, failedReserve int64, err error) bool {
+	db := DB
+	if db == nil || !taskSubmitJournalCanRetry(err) {
+		return false
+	}
+	var record TaskSubmitFailureRecovery
+	if input == nil {
+		record, err = taskSubmitFailureStatusRecoveryRecord(taskID, requestID, reason, userID, tokenID)
+	} else {
+		record, err = taskSubmitFailureRecoveryRecord(taskID, reason, *input, failedReserve)
+	}
+	if err != nil {
+		return false
+	}
+	deferredTaskSubmitFailures.Lock()
+	defer deferredTaskSubmitFailures.Unlock()
+	for _, item := range deferredTaskSubmitFailures.items {
+		if item.db == db && item.record.TaskID == taskID {
+			return item.record.refundInput() == record.refundInput() && item.record.FailedReserveRevision == record.FailedReserveRevision
+		}
+	}
+	const maxDeferredRejections = 128
+	if len(deferredTaskSubmitFailures.items) >= maxDeferredRejections {
+		return false
+	}
+	deferredTaskSubmitFailures.items = append(deferredTaskSubmitFailures.items, deferredTaskSubmitFailure{db: db, record: record})
+	return true
+}
+
+func retryDeferredTaskSubmitFailures(ctx context.Context, db *gorm.DB) {
+	deferredTaskSubmitFailures.Lock()
+	var batch []deferredTaskSubmitFailure
+	for _, item := range deferredTaskSubmitFailures.items {
+		if item.db == db {
+			batch = append(batch, item)
+			if len(batch) == 2 {
+				break
+			}
+		}
+	}
+	deferredTaskSubmitFailures.Unlock()
+
+	for _, item := range batch {
+		attempt, cancel := context.WithTimeout(ctx, time.Second)
+		_, err := storeTaskSubmitFailureRecovery(attempt, db, item.record)
+		cancel()
+		if taskSubmitJournalCanRetry(err) {
+			continue
+		}
+		deferredTaskSubmitFailures.Lock()
+		for i, current := range deferredTaskSubmitFailures.items {
+			if current == item {
+				deferredTaskSubmitFailures.items = append(deferredTaskSubmitFailures.items[:i], deferredTaskSubmitFailures.items[i+1:]...)
+				break
+			}
+		}
+		deferredTaskSubmitFailures.Unlock()
+		if err != nil {
+			common.SysError(fmt.Sprintf("deferred task rejection conflicts with the journal: task_id=%d", item.record.TaskID))
+		}
+	}
 }
 
 func retryTaskSubmitFailureTransaction(db *gorm.DB, write func(*gorm.DB) error) error {
@@ -536,6 +653,7 @@ func processPendingTaskSubmitFailures() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	retryDeferredTaskSubmitFailures(ctx, DB)
 	db := DB.WithContext(ctx)
 	if !db.Migrator().HasTable(&TaskSubmitFailureRecovery{}) {
 		return
@@ -601,9 +719,11 @@ func updateTaskSubmitFailureRecovery(record TaskSubmitFailureRecovery, status st
 }
 
 type taskSubmitFailureReviewItem struct {
-	TaskID    string `json:"task_id"`
-	LastError string `json:"last_error"`
-	UpdatedAt int64  `json:"updated_at"`
+	TaskID      string `json:"task_id"`
+	LastError   string `json:"last_error"`
+	UpdatedAt   int64  `json:"updated_at"`
+	RequestID   string `json:"request_id,omitempty"`
+	WalletDebit string `json:"wallet_debit,omitempty"`
 }
 
 func loadTaskSubmitFailureReview(tx *gorm.DB, limit int, data *BillingSettlementReconciliationData) error {
@@ -630,24 +750,81 @@ func loadTaskSubmitFailureReview(tx *gorm.DB, limit int, data *BillingSettlement
 
 func taskSubmitFailureReview(row TaskSubmitFailureRecovery) taskSubmitFailureReviewItem {
 	message := []rune(common.SanitizePersistedLogContent(common.MaskSensitiveInfo(row.LastError)))
+	requestID, _ := strings.CutPrefix(row.OperationKey, billingRequestOperationPrefix)
+	requestID, _ = strings.CutSuffix(requestID, billingRequestFinalizeSuffix)
 	return taskSubmitFailureReviewItem{
 		TaskID: strconv.FormatInt(row.TaskID, 10), LastError: string(message[:min(len(message), 512)]), UpdatedAt: row.UpdatedAt,
+		RequestID: common.SanitizePersistedLogContent(requestID),
 	}
 }
 
-// LookupTaskSubmitFailureReview retrieves one manual journal entry by its
-// durable database ID. It never reads or changes a monetary intent.
+// LookupTaskSubmitFailureReview retrieves manual evidence by database task ID.
+// A timed-out placeholder can also identify a debit when the journal was unavailable.
 func LookupTaskSubmitFailureReview(ctx context.Context, taskID int64) ([]taskSubmitFailureReviewItem, error) {
+	db := DB.WithContext(ctx)
 	var row TaskSubmitFailureRecovery
-	err := DB.WithContext(ctx).Select("task_id", "last_error", "updated_at").
-		Where("task_id = ? AND status = ?", taskID, TaskSubmitFailureRecoveryManual).Take(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	err := db.Select("task_id", "status", "operation_key", "last_error", "updated_at").Where("task_id = ?", taskID).Take(&row).Error
+	if err == nil && row.Status != TaskSubmitFailureRecoveryManual {
 		return []taskSubmitFailureReviewItem{}, nil
 	}
+	var results []taskSubmitFailureReviewItem
+	if err == nil {
+		results = append(results, taskSubmitFailureReview(row))
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	proof, found, err := lookupRetainedWalletDebit(db, taskID)
 	if err != nil {
 		return nil, err
 	}
-	return []taskSubmitFailureReviewItem{taskSubmitFailureReview(row)}, nil
+	if found {
+		if len(results) == 0 {
+			results = append(results, proof)
+		} else {
+			results[0].WalletDebit = proof.WalletDebit
+		}
+	}
+	if results == nil {
+		return []taskSubmitFailureReviewItem{}, nil
+	}
+	return results, nil
+}
+
+func lookupRetainedWalletDebit(db *gorm.DB, taskID int64) (taskSubmitFailureReviewItem, bool, error) {
+	var proof taskSubmitFailureReviewItem
+	task, err := readTaskSnapshot(db.Where("id = ? AND status = ? AND submit_timeout_retained_funding = ?", taskID, TaskStatusFailure, true))
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return proof, false, nil
+	}
+	if err != nil {
+		return proof, false, err
+	}
+	if !task.MayHaveUnprojectedSubmissionFunding() || task.PrivateData.UpstreamTaskID != "" {
+		return proof, false, nil
+	}
+	requestID := task.PrivateData.BillingRequestId
+	var debit BillingSettlement
+	err = db.Where("operation_key = ?", billingRequestOperationPrefix+requestID+":pre-consume").Take(&debit).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return proof, false, nil
+	}
+	if err != nil {
+		return proof, false, err
+	}
+	identity := BillingSettlementInput{Source: BillingSettlementSourceWallet, UserID: task.UserId, TokenID: task.PrivateData.TokenId}
+	if debit.PreConsumeRequestID != requestID || debit.AppliedFundingDelta <= 0 || !isAppliedTaskSubmitDebit(debit, identity) {
+		return proof, false, nil
+	}
+	var finalizations int64
+	if err := db.Model(&BillingSettlement{}).Where("operation_key IN ?", []string{
+		BillingRequestFinalizeOperationKey(requestID), BillingTaskFinalizeOperationKey(taskID),
+	}).Count(&finalizations).Error; err != nil || finalizations != 0 {
+		return proof, false, err
+	}
+	proof = taskSubmitFailureReview(TaskSubmitFailureRecovery{TaskID: taskID, OperationKey: BillingRequestFinalizeOperationKey(requestID),
+		LastError: task.FailReason, UpdatedAt: task.UpdatedAt})
+	proof.WalletDebit = strconv.FormatInt(debit.AppliedFundingDelta, 10)
+	return proof, true, nil
 }
 
 func writePendingTaskSubmitFailureDisposition(db *gorm.DB, record TaskSubmitFailureRecovery, status string, cause error) *gorm.DB {

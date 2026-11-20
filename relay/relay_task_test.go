@@ -62,6 +62,11 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 		Progress: "10%", Quota: 20, UpdatedAt: 100,
 		PrivateData: model.TaskPrivateData{UpstreamTaskID: taskcommon.EncodeLocalTaskID("models/synthetic/operations/one")}}
 	require.NoError(t, db.Create(task).Error)
+	awaiting := &model.Task{TaskID: "awaiting-provider", ChannelId: channel.Id, Status: model.TaskStatusSubmitted,
+		PrivateData: model.TaskPrivateData{AwaitingUpstreamID: true}}
+	require.NoError(t, db.Create(awaiting).Error)
+	require.Nil(t, tryRealtimeFetch(awaiting, false))
+	require.Zero(t, providerCalls.Load())
 	stale := *task
 	require.NotEmpty(t, tryRealtimeFetch(task, false))
 	progress, err := model.GetTaskPlaceholderByID(task.ID)

@@ -96,7 +96,7 @@ func VideoProxy(c *gin.Context) {
 		baseURL = "https://api.openai.com"
 	}
 
-	var videoURL string
+	var videoURL, nativeContentURL string
 	proxy := channel.GetSetting().Proxy
 	client, err := service.GetHttpClientWithProxy(proxy)
 	if err != nil {
@@ -137,12 +137,12 @@ func VideoProxy(c *gin.Context) {
 			return
 		}
 	case constant.ChannelTypeOpenAI, constant.ChannelTypeSora:
+		nativeContentURL = fmt.Sprintf("%s/v1/videos/%s/content", strings.TrimRight(baseURL, "/"), task.GetUpstreamTaskID())
 		if taskcommon.UseConfiguredTaskProtocol(channel.GetOtherSettings()) {
 			videoURL, _ = fetchVideoTaskResultURL(ctx, channel, task)
 		}
-		if videoURL == "" {
-			videoURL = fmt.Sprintf("%s/v1/videos/%s/content", baseURL, task.GetUpstreamTaskID())
-			req.Header.Set("Authorization", "Bearer "+channel.Key)
+		if strings.TrimSpace(videoURL) == "" || isTaskProxyContentURL(videoURL, task.TaskID) {
+			videoURL = nativeContentURL
 		}
 	default:
 		// Video URL is stored in PrivateData.ResultURL (fallback to FailReason for old data)
@@ -165,11 +165,22 @@ func VideoProxy(c *gin.Context) {
 	}
 
 	if strings.HasPrefix(videoURL, "data:") {
-		if err := writeVideoDataURL(c, videoURL); err != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to decode video data URL for task %s: %s", taskID, err.Error()))
-			videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to fetch video content")
+		err := writeVideoDataURL(c, videoURL)
+		if err == nil {
+			return
 		}
-		return
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to serve inline video for task %s: %s", taskID, err.Error()))
+		if c.Writer.Written() {
+			return
+		}
+		if nativeContentURL == "" {
+			videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to fetch video content")
+			return
+		}
+		videoURL = nativeContentURL
+	}
+	if nativeContentURL != "" && videoURL == nativeContentURL {
+		req.Header.Set("Authorization", "Bearer "+channel.Key)
 	}
 
 	fetchSetting := system_setting.GetFetchSetting()

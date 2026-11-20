@@ -33,6 +33,8 @@ func TestChannelSettingsRepairDoesNotRewriteMalformedMapping(t *testing.T) {
 			} else {
 				loaded.GetOtherSettings()
 			}
+			require.Equal(t, &bad, loaded.Setting)
+			require.Equal(t, bad, loaded.OtherSettings)
 			var fresh Channel
 			require.NoError(t, db.First(&fresh, row.Id).Error)
 			if field == "setting" {
@@ -259,14 +261,17 @@ func TestChannelTableMetadataUpdateStillWorksWithGuard(t *testing.T) {
 }
 
 func TestCatalogGuardResolvesAliasedTableExpression(t *testing.T) {
-	table, resolved := taskPluginStatementTable(&gorm.Statement{Table: "c", TableExpr: &clause.Expr{SQL: "`main`.`channels` AS c"}})
+	table, resolved := taskPluginStatementTable(&gorm.Statement{Table: "c", TableExpr: &clause.Expr{SQL: "`main`.`channels` AS c"}}, false)
 	require.True(t, resolved)
 	require.Equal(t, "main.channels", table)
-	for _, expression := range []string{`ONLY public.CHANNELS AS c`, `ONLY ("public"."channels") AS c`} {
-		table, resolved = taskPluginStatementTable(&gorm.Statement{Table: "c", TableExpr: &clause.Expr{SQL: expression}})
+	for _, expression := range []string{`ONLY public.CHANNELS AS c`, `ONLY ("public"."channels") AS c`, `PUBLIC.CHANNELS AS c`} {
+		table, resolved = taskPluginStatementTable(&gorm.Statement{Table: "c", TableExpr: &clause.Expr{SQL: expression}}, true)
 		require.True(t, resolved)
 		require.Equal(t, "public.channels", table)
 	}
+	table, resolved = taskPluginStatementTable(&gorm.Statement{Table: "c", TableExpr: &clause.Expr{SQL: `PUBLIC."Channels" AS c`}}, true)
+	require.True(t, resolved)
+	require.Equal(t, "public.Channels", table)
 }
 
 func TestTaskPrivateReferenceWritesRequireTypedUpdates(t *testing.T) {

@@ -592,6 +592,7 @@ func (catalog *Catalog) Install(ctx context.Context, packages ...*Package) error
 	if len(packages) == 0 {
 		return ErrCatalogInvalid
 	}
+	ctx = withRetainedPackageValidation(ctx, packages...)
 	return catalog.update(ctx, func(next *CatalogSnapshot) error { return installCatalogPackagesContext(ctx, next, packages...) })
 }
 

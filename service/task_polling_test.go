@@ -422,8 +422,12 @@ func TestVideoPollingRecoversAppliedEvidenceWithoutChannelOrTimeout(t *testing.T
 				wantURL := test.rawURL
 				if test.wantProxy {
 					wantURL = taskcommon.BuildProxyURL(row.TaskID)
+					require.Equal(t, model.TaskVideoProxyPath(row.TaskID), stored.PrivateData.ResultURL)
+				} else {
+					require.Equal(t, wantURL, stored.PrivateData.ResultURL)
 				}
-				require.Equal(t, wantURL, stored.PrivateData.ResultURL)
+				require.Equal(t, test.wantProxy, stored.PrivateData.LocalVideoContent)
+				require.Equal(t, wantURL, stored.GetResultURL())
 				if !test.isVertex && strings.HasPrefix(test.rawURL, "data:") {
 					require.Equal(t, test.rawURL, stored.PrivateData.InlineVideoDataURL)
 				} else {

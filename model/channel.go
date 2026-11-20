@@ -1210,14 +1210,13 @@ func channelSettingRepairQuery(db *gorm.DB, id int, column, observed string) *go
 
 func (channel *Channel) GetSetting() dto.ChannelSettings {
 	setting := dto.ChannelSettings{}
-	if channel.Setting != nil && *channel.Setting != "" {
-		err := common.Unmarshal([]byte(*channel.Setting), &setting)
+	if raw := channel.Setting; raw != nil && *raw != "" {
+		observed := *raw
+		err := common.UnmarshalJsonStr(observed, &setting)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
-			malformed := *channel.Setting
-			channel.Setting = nil // 清空设置以避免后续错误
 			if channel.Id > 0 {
-				_ = channelSettingRepairQuery(DB, channel.Id, "setting", malformed).Update("setting", nil).Error
+				_ = channelSettingRepairQuery(DB, channel.Id, "setting", observed).Update("setting", nil).Error
 			}
 		}
 	}
@@ -1244,14 +1243,12 @@ func (channel *Channel) ParseOtherSettings() (dto.ChannelOtherSettings, error) {
 
 func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 	setting := dto.ChannelOtherSettings{}
-	if channel.OtherSettings != "" {
-		err := common.UnmarshalJsonStr(channel.OtherSettings, &setting)
+	if observed := channel.OtherSettings; observed != "" {
+		err := common.UnmarshalJsonStr(observed, &setting)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
-			malformed := channel.OtherSettings
-			channel.OtherSettings = "{}" // 清空设置以避免后续错误
 			if channel.Id > 0 {
-				_ = channelSettingRepairQuery(DB, channel.Id, "settings", malformed).Update("settings", channel.OtherSettings).Error
+				_ = channelSettingRepairQuery(DB, channel.Id, "settings", observed).Update("settings", "{}").Error
 			}
 		}
 	}

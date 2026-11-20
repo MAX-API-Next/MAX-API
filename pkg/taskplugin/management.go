@@ -65,6 +65,7 @@ type ManagementMutation struct {
 // ValidateInstall checks the current catalog without committing an installation.
 // The eventual write still requires the caller's observed revision and CAS.
 func (catalog *Catalog) ValidateInstall(ctx context.Context, pkg *Package) error {
+	ctx = withRetainedPackageValidation(ctx, pkg)
 	if err := catalog.acquire(ctx); err != nil {
 		return err
 	}
@@ -105,6 +106,9 @@ func (catalog *Catalog) MutateExpected(ctx context.Context, expected int64, muta
 	}
 	if mutation.Action == "delete" {
 		return catalog.deleteExpected(ctx, expected, mutation.Key, mutation.Version)
+	}
+	if mutation.Action == "install" {
+		ctx = withRetainedPackageValidation(ctx, mutation.Package)
 	}
 	return catalog.updateExpected(ctx, &expected, func(next *CatalogSnapshot) error {
 		switch mutation.Action {

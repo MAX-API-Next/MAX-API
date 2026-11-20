@@ -29,6 +29,7 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -57,6 +58,42 @@ type Package struct {
 	legacyRepeatedMembers bool
 }
 
+type retainedPackageValidationKey struct{}
+
+// Reuse immutable validation within one catalog operation. A cache hit still
+// verifies the exact current bytes, including when a locked store rereads them.
+type retainedPackageValidation struct {
+	mu       sync.Mutex
+	packages map[string]*Package
+	bytes    int
+}
+
+func withRetainedPackageValidation(ctx context.Context, packages ...*Package) context.Context {
+	if ctx == nil {
+		return nil
+	}
+	cache, _ := ctx.Value(retainedPackageValidationKey{}).(*retainedPackageValidation)
+	if cache == nil {
+		cache = &retainedPackageValidation{packages: make(map[string]*Package)}
+		ctx = context.WithValue(ctx, retainedPackageValidationKey{}, cache)
+	}
+	for _, pkg := range packages {
+		if pkg != nil {
+			cache.remember(pkg)
+		}
+	}
+	return ctx
+}
+
+func (cache *retainedPackageValidation) remember(pkg *Package) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.packages[pkg.digest] == nil && len(pkg.document) <= MaxRetainedPackageBytes-cache.bytes {
+		cache.packages[pkg.digest] = pkg
+		cache.bytes += len(pkg.document)
+	}
+}
+
 // LoadPackage accepts exactly one bounded document and requires a trusted hash
 // from outside the document. Computing a hash from an untrusted upload alone
 // does not establish publisher authenticity.
@@ -73,7 +110,26 @@ func LoadPackageContext(ctx context.Context, reader io.Reader, expectedSHA256 st
 // LoadRetainedPackage reads digest-pinned bytes already retained by a catalog.
 // Legacy packages retain their original JSON interpretation and bytes.
 func (entry StoredPackage) LoadRetainedPackage(ctx context.Context) (*Package, error) {
-	return loadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest, true)
+	var cache *retainedPackageValidation
+	if ctx != nil && ctx.Err() == nil {
+		cache, _ = ctx.Value(retainedPackageValidationKey{}).(*retainedPackageValidation)
+		if cache != nil {
+			cache.mu.Lock()
+			cached := cache.packages[entry.Digest]
+			cache.mu.Unlock()
+			if cached != nil && bytes.Equal(cached.document, entry.Document) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				return cached, nil
+			}
+		}
+	}
+	pkg, err := loadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest, true)
+	if err == nil && cache != nil {
+		cache.remember(pkg)
+	}
+	return pkg, err
 }
 
 func loadPackageContext(ctx context.Context, reader io.Reader, expectedSHA256 string, retained bool) (*Package, error) {

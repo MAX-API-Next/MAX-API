@@ -907,6 +907,7 @@ const maxRetainedInlineVideoURLBytes = 16 << 20
 
 func setVideoTaskResult(task *model.Task, providerURL string) {
 	task.PrivateData.InlineVideoDataURL = ""
+	task.PrivateData.LocalVideoContent = false
 	if strings.HasPrefix(providerURL, "data:") {
 		platform, _ := strconv.Atoi(string(task.Platform))
 		if platform != constant.ChannelTypeVertexAi && len(providerURL) <= maxRetainedInlineVideoURLBytes {
@@ -915,7 +916,8 @@ func setVideoTaskResult(task *model.Task, providerURL string) {
 		providerURL = ""
 	}
 	if providerURL == "" {
-		providerURL = taskcommon.BuildProxyURL(task.TaskID)
+		task.PrivateData.LocalVideoContent = true
+		providerURL = model.TaskVideoProxyPath(task.TaskID)
 	}
 	task.PrivateData.ResultURL = providerURL
 }

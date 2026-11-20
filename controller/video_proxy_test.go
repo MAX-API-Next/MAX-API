@@ -90,13 +90,33 @@ func TestVideoProxyFallsBackToProviderAfterStoredValidationFails(t *testing.T) {
 	service.InitHttpClient()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v1/videos/native-video/content":
+		case "/v1/videos/native-video/content", "/v1/videos/invalid-provider-inline-video/content", "/v1/videos/native-url-video/content":
+			if r.Header.Get("Authorization") != "Bearer fixture" {
+				http.Error(w, "missing credential", http.StatusUnauthorized)
+				return
+			}
 			w.Header().Set("Content-Type", "video/webm")
 			w.Header().Set("Cache-Control", "public")
 			_, _ = w.Write([]byte(fixtureVideo))
 		case "/jobs/configured-video":
 			encoded := base64.StdEncoding.EncodeToString([]byte(fixtureVideo))
 			_, _ = w.Write([]byte(`{"status":"completed","result":{"url":"data:video/webm;base64,` + encoded + `"}}`))
+		case "/jobs/oversized-video":
+			encoded := base64.StdEncoding.EncodeToString([]byte(fixtureVideo))
+			_, _ = w.Write([]byte(`{"status":"completed","result":{"url":"data:video/webm;base64,` + encoded + `"},"other_output":"` + strings.Repeat("X", (1<<20)+128) + `"}`))
+		case "/jobs/invalid-provider-inline-video":
+			_, _ = w.Write([]byte(`{"status":"completed","result":{"url":"data:application/octet-stream;base64,AA=="}}`))
+		case "/jobs/native-url-video":
+			_, _ = w.Write([]byte(`{"status":"completed","result":{"url":"http://` + r.Host + `/v1/videos/native-url-video/content"}}`))
+		case "/jobs/custom-url-video":
+			_, _ = w.Write([]byte(`{"status":"completed","result":{"url":"http://` + r.Host + `/media/result.webm"}}`))
+		case "/media/result.webm":
+			if r.Header.Get("Authorization") != "" {
+				http.Error(w, "unexpected credential", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "video/webm")
+			_, _ = w.Write([]byte(fixtureVideo))
 		default:
 			http.NotFound(w, r)
 		}
@@ -116,14 +136,26 @@ func TestVideoProxyFallsBackToProviderAfterStoredValidationFails(t *testing.T) {
 		_ = pool.Close()
 	})
 	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.Channel{}))
+	const configured = `{"task_protocol":"generic_video_task","task_protocol_config":{"query_path":"/jobs/{task_id}","result_url_paths":["result.url"]}}`
 	for _, tc := range []struct {
 		name, settings string
 		channelType    int
 	}{
 		{name: "native", channelType: constant.ChannelTypeOpenAI},
-		{name: "configured", channelType: constant.ChannelTypeSora, settings: `{"task_protocol":"generic_video_task","task_protocol_config":{"query_path":"/jobs/{task_id}","result_url_paths":["result.url"]}}`},
+		{name: "configured", channelType: constant.ChannelTypeSora, settings: configured},
+		{name: "oversized", channelType: constant.ChannelTypeSora, settings: configured},
+		{name: "invalid-provider-inline", channelType: constant.ChannelTypeSora, settings: configured},
+		{name: "native-url", channelType: constant.ChannelTypeSora, settings: configured},
+		{name: "custom-url", channelType: constant.ChannelTypeSora, settings: configured},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "oversized" {
+				original := maxVideoDataURLDecodedBytes
+				maxVideoDataURLDecodedBytes = 32
+				t.Cleanup(func() { maxVideoDataURLDecodedBytes = original })
+				settings := (&model.Channel{OtherSettings: configured}).GetOtherSettings()
+				require.Empty(t, configuredInlineVideoFromPrefix([]byte(`{"result":{"url":"data:video/webm;base64,AA==`), settings))
+			}
 			channel := &model.Channel{Type: tc.channelType, BaseURL: &server.URL, Key: "fixture", OtherSettings: tc.settings}
 			require.NoError(t, db.Create(channel).Error)
 			task := &model.Task{TaskID: "fallback-" + tc.name, UserId: 71, ChannelId: channel.Id, Status: model.TaskStatusSuccess,
@@ -147,10 +179,15 @@ func TestVideoProxyDistinguishesLocalContentAndBoundsStatusReads(t *testing.T) {
 	previous := system_setting.ServerAddress
 	system_setting.ServerAddress = "https://gateway.invalid/console"
 	t.Cleanup(func() { system_setting.ServerAddress = previous })
+	t.Setenv("TASK_VIDEO_PROXY_LEGACY_BASE_URLS", "https://legacy.invalid/old,https://retired.invalid")
 	require.True(t, isTaskProxyContentURL("/v1/videos/task_demo/content", "task_demo"))
 	require.True(t, isTaskProxyContentURL("https://gateway.invalid/console/v1/videos/task_demo/content", "task_demo"))
 	require.False(t, isTaskProxyContentURL("https://provider.invalid/console/v1/videos/task_demo/content", "task_demo"))
 	require.False(t, isTaskProxyContentURL("https://gateway.invalid/console/v1/videos/task_demo/content.mp4", "task_demo"))
+	require.True(t, isTaskProxyContentURL("https://legacy.invalid/old/v1/videos/task_demo/content", "task_demo"))
+	require.False(t, isTaskProxyContentURL("https://legacy.invalid/other/v1/videos/task_demo/content", "task_demo"))
+	row := &model.Task{TaskID: "task_demo", PrivateData: model.TaskPrivateData{ResultURL: model.TaskVideoProxyPath("task_demo"), LocalVideoContent: true}}
+	require.Equal(t, "https://gateway.invalid/console/v1/videos/task_demo/content", row.GetResultURL())
 	body, err := readVideoProviderStatus(strings.NewReader(`{"status":"complete"}`))
 	require.NoError(t, err)
 	require.JSONEq(t, `{"status":"complete"}`, string(body))

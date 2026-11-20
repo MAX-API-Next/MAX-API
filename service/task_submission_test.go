@@ -765,7 +765,12 @@ func TestDefiniteRejectionRecoversSubscriptionAfterFailedReserve(t *testing.T) {
 	info.PersistedTaskID = row.ID
 	require.ErrorIs(t, info.Billing.Reserve(150), model.ErrSubscriptionQuotaInsufficient)
 	require.EqualValues(t, 100, getSubscriptionUsed(t, subscription))
-	CleanupDefiniteTaskSubmitFailure(ctx, info, "retry not sent")
+	const reason = "retry not sent"
+	original, revision, err := info.Billing.(*BillingSession).prepareTaskSubmitFailureRefund()
+	require.NoError(t, err)
+	require.NotNil(t, original)
+	require.EqualValues(t, 1, revision)
+	CleanupDefiniteTaskSubmitFailure(ctx, info, reason)
 	model.ProcessPendingBillingSettlementsOnce()
 	model.ProcessPendingBillingSettlementsOnce()
 	require.Zero(t, getSubscriptionUsed(t, subscription))
@@ -778,4 +783,13 @@ func TestDefiniteRejectionRecoversSubscriptionAfterFailedReserve(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, "cancelled", status)
+	status, err = model.RecordTaskSubmitFailureWithReserveRecovery(row.ID, reason, *original, revision)
+	require.NoError(t, err)
+	require.Equal(t, model.TaskSubmitFailureRecoveryPending, status)
+	model.ProcessPendingBillingSettlementsOnce()
+	var journal model.TaskSubmitFailureRecovery
+	require.NoError(t, model.DB.Where("task_id = ?", row.ID).Take(&journal).Error)
+	require.Equal(t, model.TaskSubmitFailureRecoveryRecorded, journal.Status)
+	require.Zero(t, getSubscriptionUsed(t, subscription))
+	require.EqualValues(t, 1000, getTokenRemainQuota(t, token))
 }

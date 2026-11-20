@@ -158,6 +158,108 @@ func TestTaskSubmitFailureJournalOnlyManualItemsAreVisible(t *testing.T) {
 	require.Empty(t, hidden)
 }
 
+func TestPostgresBoundWalletDebitCanRecoverAfterLostCommitResponse(t *testing.T) {
+	withDisposablePostgresTaskSchema(t, func(db *gorm.DB) {
+		previousDB, previousSQLite, previousRedis := DB, common.UsingSQLite, common.RedisEnabled
+		DB, common.UsingSQLite, common.RedisEnabled = db, false, false
+		defer func() { DB, common.UsingSQLite, common.RedisEnabled = previousDB, previousSQLite, previousRedis }()
+		require.NoError(t, db.AutoMigrate(&Task{}, &User{}, &Token{}, &BillingSettlement{}, &BillingPreConsumeSelection{}, &TaskSubmitFailureRecovery{}, &CacheInvalidationTask{}))
+		const request = "bound-wallet-lost-commit"
+		require.NoError(t, db.Create(&User{Id: 71, Username: "fixture", Quota: 1000}).Error)
+		require.NoError(t, db.Create(&Token{Id: 72, UserId: 71, Key: "fixture", RemainQuota: 1000}).Error)
+		task := Task{TaskID: request, UserId: 71, Status: TaskStatusSubmitted, PrivateData: TaskPrivateData{
+			AwaitingUpstreamID: true, BillingRequestId: request, TokenId: 72,
+		}}
+		require.NoError(t, db.Create(&task).Error)
+		input := BillingSettlementInput{OperationKey: "request:" + request + ":pre-consume", Source: BillingSettlementSourceWallet,
+			UserID: 71, TokenID: 72, FundingDelta: 100, TokenDelta: 100, PreConsumeRequestID: request,
+			PreConsumeRequestedQuota: 100, PreConsumeEffectiveQuota: 100, ManualOnFailure: true}
+		pool := &receiptCandidateLostPool{ConnPool: db.Statement.ConnPool}
+		faultDB := db.Session(&gorm.Session{NewDB: true, Context: t.Context()})
+		faultDB.ConnPool, faultDB.Statement.ConnPool = pool, pool
+		DB = faultDB
+		_, _, err := ApplyBoundTaskWalletPreConsumeOnce(input, task.ID)
+		DB = db
+		require.ErrorIs(t, err, ErrBoundTaskWalletDebitOutcomeUnknown)
+		require.ErrorIs(t, err, errReceiptCandidateLost)
+		var debit BillingSettlement
+		require.NoError(t, db.Where("operation_key = ?", input.OperationKey).Take(&debit).Error)
+		require.Equal(t, BillingSettlementStatusApplied, debit.Status)
+		require.EqualValues(t, 100, debit.AppliedFundingDelta)
+		stored, err := GetTaskPlaceholderByID(task.ID)
+		require.NoError(t, err)
+		require.Equal(t, debit.PreConsumeRequestID, stored.PrivateData.BillingRequestId)
+		var user User
+		require.NoError(t, db.First(&user, 71).Error)
+		require.EqualValues(t, 900, user.Quota)
+		require.NoError(t, db.Model(&Task{}).Where("id = ?", task.ID).UpdateColumns(map[string]any{
+			"status": TaskStatusFailure, "submit_timeout_retained_funding": true, "fail_reason": "outcome requires review",
+		}).Error)
+		proof, err := LookupTaskSubmitFailureReview(t.Context(), task.ID)
+		require.NoError(t, err)
+		require.Len(t, proof, 1, "an operator can trace the retained debit without a journal row")
+		require.Equal(t, request, proof[0].RequestID)
+		require.Equal(t, "100", proof[0].WalletDebit)
+		refund := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey(request), Source: BillingSettlementSourceWallet,
+			UserID: 71, TokenID: 72, FundingDelta: -100, TokenDelta: -100, AllowMissingToken: true}
+		status, err := RecordTaskSubmitFailureRecoveryWithStatus(task.ID, "retry not sent", refund)
+		require.NoError(t, err)
+		require.Equal(t, TaskSubmitFailureRecoveryPending, status)
+		ProcessPendingBillingSettlementsOnce()
+		ProcessPendingBillingSettlementsOnce()
+		var journal TaskSubmitFailureRecovery
+		require.NoError(t, db.Where("task_id = ?", task.ID).Take(&journal).Error)
+		require.Equal(t, TaskSubmitFailureRecoveryRecorded, journal.Status)
+		require.Equal(t, refund.OperationKey, journal.OperationKey)
+		var credited BillingSettlement
+		require.NoError(t, db.Where("operation_key = ?", refund.OperationKey).Take(&credited).Error)
+		require.Equal(t, BillingSettlementStatusApplied, credited.Status)
+		require.EqualValues(t, -100, credited.AppliedFundingDelta)
+		var token Token
+		require.NoError(t, db.First(&user, 71).Error)
+		require.NoError(t, db.First(&token, 72).Error)
+		require.EqualValues(t, 1000, user.Quota)
+		require.EqualValues(t, 1000, token.RemainQuota)
+		proof, err = LookupTaskSubmitFailureReview(t.Context(), task.ID)
+		require.NoError(t, err)
+		require.Empty(t, proof)
+	})
+}
+
+func TestDeferredTaskSubmitRejectionPersistsAfterWriterBecomesAvailable(t *testing.T) {
+	db := deletionDB(t)
+	previousDB, previousSQLite := DB, common.UsingSQLite
+	DB, common.UsingSQLite = db, true
+	t.Cleanup(func() { DB, common.UsingSQLite = previousDB, previousSQLite })
+	require.NoError(t, db.AutoMigrate(&BillingSettlement{}, &BillingPreConsumeSelection{}, &SubscriptionPreConsumeRecord{}))
+	const request = "writer-unavailable-rejection"
+	const reason = "provider rejected the task"
+	task := &Task{TaskID: request, Status: TaskStatusSubmitted, UserId: 71, PrivateData: TaskPrivateData{
+		BillingRequestId: request, TokenId: 72, AwaitingUpstreamID: true,
+	}}
+	require.NoError(t, db.Create(task).Error)
+	func() {
+		billingSettlementSQLiteWriteMu.Lock()
+		defer billingSettlementSQLiteWriteMu.Unlock()
+		_, err := RecordTaskSubmitFailureStatusRecovery(task.ID, request, reason, task.UserId, task.PrivateData.TokenId)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.True(t, QueueTaskSubmitFailureRecovery(task.ID, request, reason, task.UserId, task.PrivateData.TokenId, nil, 0, err))
+		require.True(t, QueueTaskSubmitFailureRecovery(task.ID, request, reason, task.UserId, task.PrivateData.TokenId, nil, 0, err))
+		var existing int64
+		require.NoError(t, db.Model(&TaskSubmitFailureRecovery{}).Count(&existing).Error)
+		require.Zero(t, existing)
+	}()
+	processPendingTaskSubmitFailures()
+	processPendingTaskSubmitFailures()
+	var record TaskSubmitFailureRecovery
+	require.NoError(t, db.Where("task_id = ?", task.ID).Take(&record).Error)
+	require.Equal(t, TaskSubmitFailureStatusRecorded, record.Status)
+	stored, err := GetTaskPlaceholderByID(task.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, TaskStatusFailure, stored.Status)
+	require.Equal(t, reason, stored.FailReason)
+}
+
 func TestBoundWalletPreConsumeBusyCommitReleasesSQLiteWriter(t *testing.T) {
 	db := deletionDB(t)
 	require.NoError(t, db.AutoMigrate(&User{}, &Token{}, &BillingPreConsumeSelection{}, &BillingSettlement{}, &SubscriptionPreConsumeRecord{}, &CacheInvalidationTask{}))
@@ -197,7 +299,7 @@ func TestBoundWalletPreConsumeBusyCommitReleasesSQLiteWriter(t *testing.T) {
 	input := BillingSettlementInput{OperationKey: "request:" + request + ":pre-consume", Source: BillingSettlementSourceWallet,
 		UserID: 71, TokenID: 72, FundingDelta: 100, TokenDelta: 100, PreConsumeRequestID: request,
 		PreConsumeRequestedQuota: 100, PreConsumeEffectiveQuota: 100, ManualOnFailure: true}
-	_, _, err = ApplyBoundTaskWalletPreConsumeOnce(input)
+	_, _, err = ApplyBoundTaskWalletPreConsumeOnce(input, task.ID)
 	require.ErrorContains(t, err, "database is locked")
 	require.True(t, appliedUpdate, "the debit statements must run before COMMIT fails")
 	require.NoError(t, reader.Rollback().Error)

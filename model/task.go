@@ -15,6 +15,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	commonRelay "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -73,7 +74,8 @@ type Task struct {
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
 	// Set only by the guarded timeout sweep when upstream submission is still
 	// unconfirmed and the original reservation remains available.
-	SubmitTimeoutRetainedFunding bool `json:"-" gorm:"not null;default:false"`
+	SubmitTimeoutRetainedFunding bool  `json:"-" gorm:"not null;default:false"`
+	LastPolledAt                 int64 `json:"-" gorm:"not null;default:0"`
 
 	includeDataInUpdate               bool   `gorm:"-"`
 	includePrivateDataInUpdate        bool   `gorm:"-"`
@@ -140,11 +142,34 @@ func selectTaskHistory(query *gorm.DB, includeChannel bool) *gorm.DB {
 	var private string
 	switch query.Dialector.Name() {
 	case "postgres":
-		private = "CASE json_typeof(private_data) WHEN 'object' THEN (private_data::jsonb - 'inline_video_data_url' - 'pending_terminal_result_url')::text WHEN 'null' THEN NULL ELSE CASE WHEN private_data IS NULL THEN NULL ELSE '[]' END END"
+		// The json type keeps duplicate members. The strict decoder must see
+		// all retained keys and values after the large media fields are removed.
+		private = `CASE json_typeof(private_data) WHEN 'object' THEN COALESCE((
+			SELECT json_object_agg(metadata.key, metadata.value)::text FROM json_each(private_data) AS metadata
+			WHERE translate(metadata.key, 'ABCDEFGHIJKLMNOPQRSTUVWXYZſ', 'abcdefghijklmnopqrstuvwxyzs')
+				NOT IN ('inline_video_data_url', 'pending_terminal_result_url')
+		), '{}') WHEN 'null' THEN NULL ELSE CASE WHEN private_data IS NULL THEN NULL ELSE '[]' END END`
 	case "mysql":
-		private = "JSON_REMOVE(private_data, '$.inline_video_data_url', '$.pending_terminal_result_url')"
+		private = mysqlTaskHistoryPrivateData()
 	default:
-		private = "CASE WHEN private_data IS NULL THEN NULL WHEN json_valid(private_data) THEN json_remove(private_data, '$.inline_video_data_url', '$.pending_terminal_result_url') ELSE '[]' END"
+		// Remove matching keys from the original document so the JSON engine
+		// does not replace large numbers or collapse other repeated members.
+		private = `CASE WHEN private_data IS NULL THEN NULL WHEN NOT json_valid(private_data) THEN '[]' ELSE (
+			WITH RECURSIVE
+			media_keys AS (
+				SELECT key, row_number() OVER (ORDER BY id) AS position
+				FROM json_each(private_data)
+				WHERE lower(replace(key, 'ſ', 's')) IN ('inline_video_data_url', 'pending_terminal_result_url')
+				LIMIT 17
+			),
+			scrubbed(body, position) AS (
+				SELECT private_data, 0
+				UNION ALL
+				SELECT json_remove(scrubbed.body, '$."' || media_keys.key || '"'), media_keys.position
+				FROM scrubbed JOIN media_keys ON media_keys.position = scrubbed.position + 1
+			)
+			SELECT CASE WHEN position > 16 THEN '[]' ELSE body END FROM scrubbed ORDER BY position DESC LIMIT 1
+		) END`
 	}
 	columns := make([]string, 0, len(statement.Schema.DBNames))
 	for _, name := range statement.Schema.DBNames {
@@ -157,6 +182,21 @@ func selectTaskHistory(query *gorm.DB, includeChannel bool) *gorm.DB {
 		}
 	}
 	return query.Select(strings.Join(columns, ", "))
+}
+
+func mysqlTaskHistoryPrivateData() string {
+	// JSON_SEARCH works on MySQL 5.7 and returns the array position of the
+	// matching key. Extract the original spelling before removing that key.
+	const keys = "JSON_KEYS(private_data)"
+	var ambiguous, paths []string
+	for _, name := range []string{"inline_video_data_url", "pending_terminal_result_url"} {
+		pattern := strings.ReplaceAll(name, "_", "!_")
+		match := "JSON_SEARCH(" + keys + ", 'all', _utf8mb4'" + pattern + "' COLLATE utf8mb4_unicode_ci, '!')"
+		ambiguous = append(ambiguous, "JSON_TYPE("+match+") = 'ARRAY'")
+		key := "JSON_UNQUOTE(JSON_EXTRACT(" + keys + ", JSON_UNQUOTE(" + match + ")))"
+		paths = append(paths, "COALESCE(CONCAT('$.', JSON_QUOTE("+key+")), '$."+name+"')")
+	}
+	return "CASE WHEN " + strings.Join(ambiguous, " OR ") + " THEN '[]' ELSE JSON_REMOVE(private_data, " + strings.Join(paths, ", ") + ") END"
 }
 
 // IsMiniMaxH3Task reports whether the persisted task has an explicit,
@@ -237,6 +277,7 @@ type TaskPrivateData struct {
 	AwaitingUpstreamID bool   `json:"awaiting_upstream_id,omitempty"`
 	ResultURL          string `json:"result_url,omitempty"` // 任务成功后的结果 URL（视频地址等）
 	InlineVideoDataURL string `json:"inline_video_data_url,omitempty"`
+	LocalVideoContent  bool   `json:"local_video_content,omitempty"`
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
 	BillingSource    string              `json:"billing_source,omitempty"`     // "wallet" 或 "subscription"
 	BillingRequestId string              `json:"billing_request_id,omitempty"` // 原始预扣 request id，用于跨周期安全结算
@@ -305,9 +346,20 @@ func (t *Task) GetResultURL() string {
 		return ""
 	}
 	if t.PrivateData.ResultURL != "" {
+		if t.PrivateData.LocalVideoContent && t.PrivateData.ResultURL == TaskVideoProxyPath(t.TaskID) {
+			return TaskVideoProxyURL(t.TaskID)
+		}
 		return t.PrivateData.ResultURL
 	}
 	return t.FailReason
+}
+
+func TaskVideoProxyPath(taskID string) string {
+	return "/v1/videos/" + taskID + "/content"
+}
+
+func TaskVideoProxyURL(taskID string) string {
+	return strings.TrimRight(system_setting.ServerAddress, "/") + TaskVideoProxyPath(taskID)
 }
 
 // GenerateTaskID 生成对外暴露的 task_xxxx 格式 ID
@@ -590,7 +642,7 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 		unfinished := []string{TaskStatusFailure, TaskStatusSuccess}
 		if err := withoutPendingTaskSubmitFailure(withRowLock(tx).Model(&Task{}).Where("status NOT IN ?", unfinished)).
 			Limit(limit).
-			Order("updated_at ASC, id ASC").
+			Order("CASE WHEN last_polled_at > COALESCE(updated_at, 0) THEN last_polled_at ELSE updated_at END ASC, last_polled_at ASC, id ASC").
 			Find(&rows).Error; err != nil {
 			return err
 		}
@@ -608,17 +660,18 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 			}
 			advanceable = append(advanceable, task)
 			ids = append(ids, task.ID)
-			task.UpdatedAt = max(now, task.UpdatedAt+1)
-			task.updatedAtWasNull = false
+			task.LastPolledAt = max(now, task.LastPolledAt)
 		}
 		tasks = advanceable
 		if len(ids) == 0 {
 			return nil
 		}
+		// Scheduling rotates the scan without changing the actual task version.
+		// A second poller selecting the same row cannot invalidate settlement.
 		return withoutPendingTaskSubmitFailure(tx.Model(&Task{})).
 			Where("id IN ? AND status NOT IN ?", ids, unfinished).
 			Where("updated_at IS NULL OR updated_at < ?", int64(math.MaxInt64-1)).
-			UpdateColumn("updated_at", gorm.Expr("CASE WHEN updated_at IS NULL OR updated_at < ? THEN ? ELSE updated_at + 1 END", now, now)).Error
+			UpdateColumn("last_polled_at", gorm.Expr("CASE WHEN last_polled_at < ? THEN ? ELSE last_polled_at END", now, now)).Error
 	})
 	if err != nil {
 		return nil
@@ -1468,23 +1521,34 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 					expected.UserID != task.UserId || expected.TokenID != task.PrivateData.TokenId {
 					return ErrTaskSubmitRefundIdentityMismatch
 				}
-				if err := verifyTaskSubmitRefund(tx, task, &expected, failedReserve); err != nil {
-					return err
-				}
-				if expected.FundingDelta == 0 {
-					return complete(TaskSubmitFailureStatusRecorded)
-				}
 			}
 			var existing BillingSettlement
 			err := withRowLock(tx).Where("operation_key = ?", input.OperationKey).Take(&existing).Error
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				if failedReserve != 0 {
+			found := err == nil
+			if !found && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			if failedReserve != 0 {
+				if found && expected.Source == BillingSettlementSourceSubscription && existing.Status == BillingSettlementStatusApplied {
+					if existing.AppliedFundingDelta != existing.FundingDelta || existing.AppliedTokenDelta != existing.TokenDelta {
+						return ErrBillingSettlementOperationConflict
+					}
+					err = verifyTaskSubmitSubscriptionRefund(tx, task.PrivateData.BillingRequestId, &expected, failedReserve, "refunded")
+				} else {
+					err = verifyTaskSubmitRefund(tx, task, &expected, failedReserve)
+				}
+				if err != nil {
+					return err
+				}
+				if expected.FundingDelta == 0 && !found {
+					return complete(TaskSubmitFailureStatusRecorded)
+				}
+				if !found {
 					return ErrTaskFinalizeOwned
 				}
-				return nil
 			}
-			if err != nil {
-				return err
+			if !found {
+				return nil
 			}
 			if validateBillingSettlement(existing, expected) != nil {
 				return ErrBillingSettlementOperationConflict

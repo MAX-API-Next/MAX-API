@@ -347,6 +347,18 @@ Workers isolate unreadable task private data, log the database row ID, and
 continue valid neighbors. Timeout cursors advance past bad rows; those rows
 retain their status, quota and original metadata without a new settlement.
 Repair their metadata from trusted evidence before expecting further processing.
+The database migration adds `tasks.last_polled_at` for polling order. Selecting
+a task advances that cursor while leaving the task version available to the
+terminal settlement guard.
+
+New video result references store the gateway path and use the current server
+address when read. Installations that changed hosts or base paths can set
+`TASK_VIDEO_PROXY_LEGACY_BASE_URLS` to a comma-separated list of former gateway
+base URLs. Use only origins and base paths previously assigned to this gateway.
+An oversized configured status response can still serve a complete inline media
+value at the explicitly preferred result path when it fits within the bounded
+response prefix.
+
 Applied-finalize recovery uses its own `(submit_time, id)` cursor and captures a
 fixed inclusive upper cursor for each pass. It wraps after reaching that bound
 or an empty page, so a sustained newer backlog cannot starve repaired older rows.
@@ -482,20 +494,32 @@ newly created ledger table within a bounded startup step.
 SET lock_timeout = '5s';
 SET statement_timeout = '15min';
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_billing_settlements_operation_key_pattern
-  ON billing_settlements (operation_key varchar_pattern_ops);
-SELECT i.indisvalid
-FROM pg_index i
-WHERE i.indexrelid = to_regclass('idx_billing_settlements_operation_key_pattern')
-  AND i.indrelid = to_regclass('billing_settlements');
+  ON billing_settlements (operation_key pg_catalog.varchar_pattern_ops);
+SELECT EXISTS (
+  SELECT 1 FROM pg_catalog.pg_index i
+  JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
+  JOIN pg_catalog.pg_am am ON am.oid = c.relam
+  JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+  JOIN pg_catalog.pg_opclass op ON op.oid = i.indclass[0]
+  JOIN pg_catalog.pg_namespace ns ON ns.oid = op.opcnamespace
+  WHERE i.indrelid = pg_catalog.to_regclass('billing_settlements')
+    AND c.relname = 'idx_billing_settlements_operation_key_pattern'
+    AND i.indisvalid AND i.indisready AND i.indpred IS NULL AND am.amname = 'btree'
+    AND a.attname = 'operation_key' AND op.opcname = 'varchar_pattern_ops' AND ns.nspname = 'pg_catalog'
+);
 ```
 
-Continue once the query returns `true`. If it returns `false` after a failed
-build, verify that the invalid index belongs to this ledger and stop other
-deployment jobs for the same index. Run `DROP INDEX CONCURRENTLY
+Continue once the query returns `true`. If a failed build or an incorrect
+definition left an index at that name, verify that it belongs to this ledger
+and stop other deployment jobs for the same index. Run `DROP INDEX CONCURRENTLY
 idx_billing_settlements_operation_key_pattern` outside a transaction and retry
 the bounded creation. Retain the existing unique index on `operation_key`.
 If the database cannot save even the recovery record, use the original task
 and reservation records to reconcile the logged task ID after service returns.
+The running settlement worker retains a bounded queue of definite rejections
+while the journal is unavailable. A process restart discards that queue. Smart
+Ops can look up an unprojected wallet debit retained by the timed-out task,
+using the original request ID and recorded debit amount.
 Historical private metadata retains unknown fields, including nested typed
 objects and arrays, through polling updates. Progress-only polls omit unchanged
 private data; edits merge the retained fields and validate their references.

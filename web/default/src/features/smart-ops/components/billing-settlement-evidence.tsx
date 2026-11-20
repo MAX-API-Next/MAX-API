@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useMemo, useState, type ReactElement } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { TFunction } from 'i18next'
 import { CheckCircle2, Loader2, TriangleAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -130,16 +130,48 @@ export function BillingSettlementEvidence(
   props: BillingSettlementEvidenceProps
 ): ReactElement {
   const { t, i18n } = useTranslation()
+  const queryClient = useQueryClient()
+  const [lookupOpen, setLookupOpen] = useState(false)
   const [manualTaskId, setManualTaskId] = useState('')
-  const manualLookup = useMutation({
-    mutationFn: async (taskId: string) => {
-      const result = await getTaskSubmitFailureReview(taskId)
+  const [requestedTaskId, setRequestedTaskId] = useState('')
+  const lookupEnabled =
+    props.canCompleteManualTask &&
+    lookupOpen &&
+    requestedTaskId !== '' &&
+    props.data !== undefined
+  const manualLookup = useQuery({
+    queryKey: [
+      ...SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
+      'task-submit-failure',
+      requestedTaskId,
+    ],
+    enabled: lookupEnabled,
+    retry: false,
+    queryFn: async ({ signal }) => {
+      const result = await getTaskSubmitFailureReview(requestedTaskId, signal)
       if (!result.success || !Array.isArray(result.data)) {
-        throw new Error(t('We could not load billing reconciliation details.'))
+        throw new Error('Invalid task submission failure lookup response')
       }
-      return result.data.find((item) => item.task_id === taskId)
+      return (
+        result.data.find((item) => item.task_id === requestedTaskId) ?? null
+      )
     },
   })
+  const refreshManualLookup = manualLookup.refetch
+  useEffect(() => {
+    if (!lookupEnabled) return
+    return queryClient.getQueryCache().subscribe((event) => {
+      if (event.type !== 'updated' || event.action.type !== 'success') return
+      const prefix = SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY
+      const key = event.query.queryKey
+      if (
+        key.length === prefix.length + 1 &&
+        prefix.every((part, index) => key[index] === part)
+      ) {
+        void refreshManualLookup({ cancelRefetch: false })
+      }
+    })
+  }, [lookupEnabled, queryClient, refreshManualLookup])
   const [selectedTargets, setSelectedTargets] = useState<
     Map<number, BillingSettlementReviewTarget>
   >(() => new Map())
@@ -235,7 +267,6 @@ export function BillingSettlementEvidence(
     [activeSelectedTargetMap, reconciliationItems]
   )
   const [policyOverride, setPolicyOverride] = useState<boolean | null>(null)
-  const queryClient = useQueryClient()
   const policyValue =
     policyOverride ?? props.data?.block_user_by_default ?? false
 
@@ -578,12 +609,30 @@ export function BillingSettlementEvidence(
                     </li>
                   ))}
                 </ul>
+              </AlertDescription>
+            </Alert>
+          )}
+        {props.canCompleteManualTask && (
+          <div>
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              aria-expanded={lookupOpen}
+              onClick={() => setLookupOpen((open) => !open)}
+            >
+              {t('Task ID')}
+            </Button>
+            {lookupOpen && (
+              <>
                 <form
                   className='mt-2 flex flex-wrap gap-2'
                   onSubmit={(event) => {
                     event.preventDefault()
                     if (/^[1-9][0-9]*$/.test(manualTaskId)) {
-                      manualLookup.mutate(manualTaskId)
+                      if (manualTaskId === requestedTaskId)
+                        void refreshManualLookup()
+                      else setRequestedTaskId(manualTaskId)
                     }
                   }}
                 >
@@ -602,7 +651,7 @@ export function BillingSettlementEvidence(
                     size='sm'
                     variant='outline'
                     disabled={
-                      manualLookup.isPending ||
+                      manualLookup.isFetching ||
                       !/^[1-9][0-9]*$/.test(manualTaskId)
                     }
                   >
@@ -610,16 +659,37 @@ export function BillingSettlementEvidence(
                   </Button>
                 </form>
                 <div role='status'>
-                  {manualLookup.isError
-                    ? t('We could not load billing reconciliation details.')
-                    : manualLookup.isSuccess &&
-                      (manualLookup.data
-                        ? `${t('Task ID')} ${manualLookup.data.task_id} ${manualLookup.data.last_error}`
-                        : t('No results found.'))}
+                  {manualLookup.isError &&
+                    t('We could not load billing reconciliation details.')}
+                  {!manualLookup.isFetching &&
+                    manualLookup.isSuccess &&
+                    (manualLookup.data ? (
+                      <div className='flex flex-wrap gap-x-3 text-sm break-words'>
+                        <span>
+                          {t('Task ID')} {manualLookup.data.task_id}{' '}
+                          {manualLookup.data.last_error}
+                        </span>
+                        {manualLookup.data.request_id && (
+                          <span>
+                            {t('Request ID')}{' '}
+                            <code>{manualLookup.data.request_id}</code>
+                          </span>
+                        )}
+                        {manualLookup.data.wallet_debit && (
+                          <span>
+                            {t('Quota')}{' '}
+                            <code>{manualLookup.data.wallet_debit}</code>
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      t('No results found.')
+                    ))}
                 </div>
-              </AlertDescription>
-            </Alert>
-          )}
+              </>
+            )}
+          </div>
+        )}
 
         {props.data.items.length === 0 ? (
           <Alert>

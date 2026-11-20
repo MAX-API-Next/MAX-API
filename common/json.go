@@ -23,7 +23,7 @@ func UnmarshalUseNumber(data []byte, v any) error {
 	if err := decoder.Decode(v); err != nil {
 		return err
 	}
-	if decoder.Decode(new(any)) != io.EOF {
+	if len(bytes.Trim(data[decoder.InputOffset():], " \t\r\n")) != 0 {
 		return errors.New("unexpected data after JSON value")
 	}
 	return nil

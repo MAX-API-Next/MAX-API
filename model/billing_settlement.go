@@ -43,6 +43,7 @@ var (
 	ErrBillingSettlementTaskConflict       = errors.New("billing settlement task quota conflict")
 	ErrBillingSettlementOperationConflict  = errors.New("billing settlement operation conflict")
 	ErrBillingSettlementRecordNotDurable   = errors.New("billing settlement record was not durably created")
+	ErrBoundTaskWalletDebitOutcomeUnknown  = errors.New("bound task wallet debit commit outcome is unknown")
 	ErrBillingSettlementReviewConflict     = errors.New("billing settlement is no longer reviewable")
 	ErrBillingSettlementCompletionRequired = errors.New("manual task settlement requires financial completion")
 	ErrSubscriptionRefundClamped           = errors.New("subscription refund was clamped")
@@ -1113,23 +1114,24 @@ func GetBillingSettlementStatus(operationKey string) (status string, found bool,
 }
 
 func ApplyBillingSettlementOnce(input BillingSettlementInput) (int64, bool, error) {
-	return applyBillingSettlementOnce(input, false)
+	return applyBillingSettlementOnce(input, 0)
 }
 
 // ApplyBoundTaskWalletPreConsumeOnce does not leave a new debit for the worker
 // to replay after a failed initial reservation on an existing task placeholder.
-func ApplyBoundTaskWalletPreConsumeOnce(input BillingSettlementInput) (int64, bool, error) {
-	if input.Source != BillingSettlementSourceWallet || input.PreConsumeRequestID == "" ||
+func ApplyBoundTaskWalletPreConsumeOnce(input BillingSettlementInput, taskID int64) (int64, bool, error) {
+	if taskID <= 0 || input.Source != BillingSettlementSourceWallet || input.PreConsumeRequestID == "" ||
 		input.OperationKey != billingRequestOperationPrefix+input.PreConsumeRequestID+":pre-consume" || input.TaskID != 0 {
 		return 0, false, ErrBillingSettlementOperationConflict
 	}
-	return applyBillingSettlementOnce(input, true)
+	return applyBillingSettlementOnce(input, taskID)
 }
 
-func applyBillingSettlementOnce(input BillingSettlementInput, atomicPreConsume bool) (appliedFundingDelta int64, alreadyApplied bool, err error) {
+func applyBillingSettlementOnce(input BillingSettlementInput, boundTaskID int64) (appliedFundingDelta int64, alreadyApplied bool, err error) {
 	if input.OperationKey == "" {
 		return 0, false, errors.New("billing settlement operation key is required")
 	}
+	atomicPreConsume := boundTaskID > 0
 	if common.UsingSQLite {
 		billingSettlementSQLiteWriteMu.Lock()
 		defer billingSettlementSQLiteWriteMu.Unlock()
@@ -1164,7 +1166,23 @@ func applyBillingSettlementOnce(input BillingSettlementInput, atomicPreConsume b
 
 	apply := func(tx *gorm.DB) error {
 		if atomicPreConsume {
-			var err error
+			// The existing task is the durable link to the request receipt.
+			// Lock it before a debit so rejection cannot classify an in-flight
+			// debit as absent or replace its owner while that debit commits.
+			if tx.Dialector.Name() == "sqlite" {
+				if err := tx.Model(&Task{}).Where("id = ?", boundTaskID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
+					return err
+				}
+			}
+			task, err := readTaskSnapshot(withRowLock(tx).Where("id = ?", boundTaskID))
+			if err != nil {
+				return err
+			}
+			if !task.MayHaveUnprojectedSubmissionFunding() || task.PrivateData.UpstreamTaskID != "" ||
+				task.Status == TaskStatusFailure && !task.SubmitTimeoutRetainedFunding || task.Status == TaskStatusSuccess ||
+				task.UserId != input.UserID || task.PrivateData.TokenId != input.TokenID || task.PrivateData.BillingRequestId != input.PreConsumeRequestID {
+				return ErrBillingSettlementTaskConflict
+			}
 			record, alreadyApplied, err = ensureBillingSettlementRecordDB(tx, input)
 			if err != nil {
 				return err
@@ -1314,7 +1332,15 @@ func applyBillingSettlementOnce(input BillingSettlementInput, atomicPreConsume b
 		return nil
 	}
 	if atomicPreConsume {
-		_, err = taskSubmitFailureTransaction(DB, apply)
+		prepared := false
+		_, err = taskSubmitFailureTransaction(DB, func(tx *gorm.DB) error {
+			applyErr := apply(tx)
+			prepared = applyErr == nil
+			return applyErr
+		})
+		if prepared && err != nil && input.FundingDelta > 0 && DB.Dialector.Name() != "sqlite" {
+			err = errors.Join(ErrBoundTaskWalletDebitOutcomeUnknown, err)
+		}
 	} else {
 		err = DB.Transaction(apply)
 	}

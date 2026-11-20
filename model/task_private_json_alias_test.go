@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,12 +49,12 @@ func TestTaskUsageEvidenceMovesReplaceableEnvelopeHistoryToArchive(t *testing.T)
 			Archive []map[string]any `json:"previous_task_usage_envelopes"`
 		} `json:"billing_context"`
 	}
-	require.NoError(t, common.Unmarshal(encoded, &decoded))
+	require.NoError(t, common.UnmarshalUseNumber(encoded, &decoded))
 	require.Equal(t, "new", decoded.BillingContext.Active["evidence_digest"])
 	require.NotContains(t, decoded.BillingContext.Active, "historical_receipt")
 	require.Len(t, decoded.BillingContext.Archive, 1)
 	require.Equal(t, "old", decoded.BillingContext.Archive[0]["evidence_digest"])
-	require.Contains(t, decoded.BillingContext.Archive[0], "historical_receipt")
+	require.Equal(t, map[string]any{"first": json.Number("7")}, decoded.BillingContext.Archive[0]["historical_receipt"])
 }
 
 func TestBillingPlanHistoryStaysWithItsOriginalConfig(t *testing.T) {
@@ -66,9 +67,34 @@ func TestBillingPlanHistoryStaysWithItsOriginalConfig(t *testing.T) {
 	_, err = common.Marshal(private)
 	require.ErrorContains(t, err, "different billing plan")
 	private.BillingContext.TaskBillingPlan.ReserveQuota = 0
+	private.BillingContext.TaskBillingPlan.InputVideoCount = 1
+	_, err = common.Marshal(private)
+	require.ErrorContains(t, err, "different billing plan")
+	private.BillingContext.TaskBillingPlan.InputVideoCount = 0
 	private.BillingContext.TaskBillingPlan.ConfigHash = "replacement"
 	_, err = common.Marshal(private)
 	require.ErrorContains(t, err, "different billing plan")
+}
+
+func TestLegacyTaskUsageMovesMissingEvidenceToArchiveWhenReplaced(t *testing.T) {
+	var private TaskPrivateData
+	require.NoError(t, private.Scan(`{"billing_context":{"task_usage":{"completeness":"missing","historical_receipt":{"first":7}}}}`))
+	private.BillingContext.TaskUsage.Source = types.TaskUsageSourceProviderResponse
+	private.BillingContext.TaskUsage.Completeness = types.TaskUsageCompletenessComplete
+	private.BillingContext.TaskUsage.TotalTokens = common.GetPointer[int64](19)
+	raw, err := common.Marshal(private)
+	require.NoError(t, err)
+	var decoded struct {
+		BillingContext struct {
+			Active  map[string]any   `json:"task_usage"`
+			Archive []map[string]any `json:"previous_task_usage_facts"`
+		} `json:"billing_context"`
+	}
+	require.NoError(t, common.UnmarshalUseNumber(raw, &decoded))
+	require.Equal(t, json.Number("19"), decoded.BillingContext.Active["total_tokens"])
+	require.NotContains(t, decoded.BillingContext.Active, "historical_receipt")
+	require.Len(t, decoded.BillingContext.Archive, 1)
+	require.Equal(t, map[string]any{"completeness": "missing", "historical_receipt": map[string]any{"first": json.Number("7")}}, decoded.BillingContext.Archive[0])
 }
 
 func TestUnrelatedHistoricalVersionsKeepCaseSensitiveKeys(t *testing.T) {
