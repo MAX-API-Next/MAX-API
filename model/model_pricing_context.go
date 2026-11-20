@@ -63,7 +63,9 @@ type pricingAuthority struct {
 	catalogReady bool
 	selfUse      bool
 	// Local to this captured authority; never shared across revisions/nodes.
-	validatedPackages map[string]*taskplugin.Package
+	validatedPackages    map[string]*taskplugin.Package
+	pluginSchemas        map[string][]pricingPluginSchema
+	excludedPluginDigest string
 }
 
 func readPricingAuthority(tx *gorm.DB, lock bool) (*pricingAuthority, error) {
@@ -238,55 +240,34 @@ func (a *pricingAuthority) contextsContext(ctx context.Context, model string) ([
 		}
 		result = append(result, context)
 	}
-	for _, entry := range a.plugins {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if !entry.Active {
-			continue
-		}
-		if a.validatedPackages == nil {
-			a.validatedPackages = make(map[string]*taskplugin.Package)
-		}
-		pkg := a.validatedPackages[entry.Digest]
-		if pkg == nil {
-			var err error
-			pkg, err = entry.LoadRetainedPackage(ctx)
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
+	if a.pluginSchemas != nil {
+		for _, schema := range a.pluginSchemas[model] {
+			if err := ctx.Err(); err != nil {
+				return nil, err
 			}
+			if schema.entry.Digest != a.excludedPluginDigest {
+				result = append(result, schema.pricingContext(model))
+			}
+		}
+	} else {
+		for _, entry := range a.plugins {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if !entry.Active {
+				continue
+			}
+			pkg, err := a.pricingPluginPackage(ctx, entry)
 			if err != nil {
 				return nil, err
-			} // An incomplete reload must not erase a source from the comparison.
-			a.validatedPackages[entry.Digest] = pkg
+			}
+			schema, err := pkg.ModelUsageSchema(model)
+			if err != nil {
+				continue
+			}
+			info := pricingPluginSchema{entry: entry, key: pkg.Manifest().Key, executable: pkg.Executable(), schema: schema}
+			result = append(result, info.pricingContext(model))
 		}
-		manifest := pkg.Manifest()
-		if !slices.Contains(manifest.Models, model) {
-			continue
-		}
-		context := ModelPricingContext{ID: "plugin:" + manifest.Key, PluginKey: manifest.Key, MappedModel: model, Schema: map[string]types.TaskUsageField{}, binding: struct {
-			Digest           string
-			Enabled, Revoked bool
-		}{entry.Digest, entry.Enabled, entry.Revoked}, source: taskpricing.Source{Driver: "task_plugin", PluginKey: manifest.Key}, Reason: "no vetted host phase contract"}
-		modelSchema, schemaErr := pkg.ModelUsageSchema(model)
-		if schemaErr != nil {
-			continue
-		}
-		for key, field := range modelSchema {
-			context.Schema[key] = types.TaskUsageField{Type: field.Type, Unit: field.Unit, Enum: field.Enum}
-		}
-		if pkg.Executable() && entry.Enabled && !entry.Revoked {
-			context.Available = true
-			context.PreviewOnly = true
-			context.Profile = taskpricing.NewAPITask
-			context.Reason = "plugin configuration preview only; paid task admission unavailable"
-		}
-		// Executable packages allow configuration samples, not paid admission.
-		// Data-only packages still lack a vetted lifecycle and remain unquotable.
-		if !entry.Enabled || entry.Revoked {
-			context.Reason = "plugin disabled or revoked"
-		}
-		result = append(result, context)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -297,6 +278,97 @@ func (a *pricingAuthority) contextsContext(ctx context.Context, model string) ([
 	}
 	return result, nil
 }
+
+type pricingPluginSchema struct {
+	entry      taskplugin.StoredPackage
+	key        string
+	executable bool
+	schema     map[string]taskplugin.UsageField
+}
+
+func (a *pricingAuthority) pricingPluginPackage(ctx context.Context, entry taskplugin.StoredPackage) (*taskplugin.Package, error) {
+	if pkg := a.validatedPackages[entry.Digest]; pkg != nil {
+		return pkg, nil
+	}
+	pkg, err := entry.LoadRetainedPackage(ctx)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		return nil, err
+	} // A failed reload cannot erase a pricing source.
+	if a.validatedPackages == nil {
+		a.validatedPackages = make(map[string]*taskplugin.Package)
+	}
+	a.validatedPackages[entry.Digest] = pkg
+	return pkg, nil
+}
+
+// The deletion check projects many models under the same locks. Load each
+// retained manifest once and share immutable schemas across its model entries.
+func (a *pricingAuthority) indexPluginSchemas(ctx context.Context) error {
+	index := make(map[string][]pricingPluginSchema)
+	for _, entry := range a.plugins {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !entry.Active {
+			continue
+		}
+		pkg, err := a.pricingPluginPackage(ctx, entry)
+		if err != nil {
+			return err
+		}
+		manifest := pkg.Manifest()
+		profiles := make(map[string]map[string]taskplugin.UsageField)
+		for _, profile := range manifest.UsageProfiles {
+			for _, model := range profile.Models {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				profiles[model] = profile.Schema
+			}
+		}
+		for _, model := range manifest.Models {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			schema := manifest.UsageSchema
+			if len(manifest.UsageProfiles) != 0 {
+				var found bool
+				schema, found = profiles[model]
+				if !found {
+					continue
+				}
+			}
+			index[model] = append(index[model], pricingPluginSchema{entry: entry, key: manifest.Key, executable: pkg.Executable(), schema: schema})
+		}
+	}
+	a.pluginSchemas = index
+	return ctx.Err()
+}
+
+func (p pricingPluginSchema) pricingContext(model string) ModelPricingContext {
+	entry := p.entry
+	result := ModelPricingContext{ID: "plugin:" + p.key, PluginKey: p.key, MappedModel: model, Schema: map[string]types.TaskUsageField{}, binding: struct {
+		Digest           string
+		Enabled, Revoked bool
+	}{entry.Digest, entry.Enabled, entry.Revoked}, source: taskpricing.Source{Driver: "task_plugin", PluginKey: p.key}, Reason: "no vetted host phase contract"}
+	for key, field := range p.schema {
+		result.Schema[key] = types.TaskUsageField{Type: field.Type, Unit: field.Unit, Enum: slices.Clone(field.Enum)}
+	}
+	if p.executable && entry.Enabled && !entry.Revoked {
+		result.Available = true
+		result.PreviewOnly = true
+		result.Profile = taskpricing.NewAPITask
+		result.Reason = "plugin configuration preview only; paid task admission unavailable"
+	}
+	if !entry.Enabled || entry.Revoked {
+		result.Reason = "plugin disabled or revoked"
+	}
+	return result
+}
+
 func findPricingContext(contexts []ModelPricingContext, id string) (ModelPricingContext, bool) {
 	for _, context := range contexts {
 		if context.ID == id {

@@ -2,8 +2,10 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
@@ -35,12 +37,14 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 		}
 		var won bool
 		var err error
+		claimCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		for attempt := 0; attempt < 3; attempt++ {
-			won, err = model.ClaimTaskSubmitFailureWithSettlement(info.PersistedTaskID, reason, intent)
-			if err == nil || errors.Is(err, model.ErrTaskSubmitRefundIdentityMismatch) || errors.Is(err, model.ErrBillingSettlementOperationConflict) || errors.Is(err, model.ErrTaskSubmitFailureRecoveryRequiresReview) {
+			won, err = model.ClaimTaskSubmitFailureWithSettlementContext(claimCtx, info.PersistedTaskID, reason, intent)
+			if err == nil || claimCtx.Err() != nil || errors.Is(err, model.ErrTaskSubmitRefundIdentityMismatch) || errors.Is(err, model.ErrBillingSettlementOperationConflict) || errors.Is(err, model.ErrTaskSubmitFailureRecoveryRequiresReview) {
 				break
 			}
 		}
+		cancel()
 		if err != nil {
 			if intent != nil {
 				status, journalErr := model.RecordTaskSubmitFailureRecoveryWithStatus(info.PersistedTaskID, reason, *intent)
@@ -53,6 +57,15 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 					common.SysLog(fmt.Sprintf("task submit rejection already has a recorded refund intent: task_id=%d", info.PersistedTaskID))
 				default:
 					common.SysError(fmt.Sprintf("task submit rejection still requires manual review: task_id=%d", info.PersistedTaskID))
+				}
+			} else if info.Billing == nil {
+				status, journalErr := model.RecordTaskSubmitFailureStatusRecovery(info.PersistedTaskID, info.RequestId, reason, info.UserId, info.TokenId)
+				if journalErr != nil {
+					common.SysError(fmt.Sprintf("task submit rejection status recovery could not be verified: task_id=%d", info.PersistedTaskID))
+				} else if status == model.TaskSubmitFailureRecoveryPending {
+					common.SysLog(fmt.Sprintf("task submit rejection queued for status recovery: task_id=%d", info.PersistedTaskID))
+				} else if status == model.TaskSubmitFailureRecoveryManual {
+					common.SysError(fmt.Sprintf("task submit rejection status still requires manual review: task_id=%d", info.PersistedTaskID))
 				}
 			} else {
 				common.SysError(fmt.Sprintf("task submit failure ownership could not be determined: task_id=%d", info.PersistedTaskID))

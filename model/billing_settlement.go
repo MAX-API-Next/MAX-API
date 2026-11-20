@@ -1293,6 +1293,23 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 // this keeps a retry after interruption from stranding an existing pending
 // record.
 func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPrefix, recoveryNote string) (bool, error) {
+	return promoteManualTaskBillingSettlement(input, reasonPrefix, recoveryNote, nil)
+}
+
+type taskTerminalEvidenceUpdate struct {
+	task              *Task
+	fromStatus        TaskStatus
+	expectedUpdatedAt int64
+}
+
+func PromoteManualTaskBillingSettlementWithEvidence(task *Task, fromStatus TaskStatus, expectedUpdatedAt int64, input BillingSettlementInput, reasonPrefix, recoveryNote string) (bool, error) {
+	if task == nil || task.ID <= 0 || task.ID != input.TaskID {
+		return false, ErrBillingSettlementOperationConflict
+	}
+	return promoteManualTaskBillingSettlement(input, reasonPrefix, recoveryNote, &taskTerminalEvidenceUpdate{task, fromStatus, expectedUpdatedAt})
+}
+
+func promoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPrefix, recoveryNote string, evidence *taskTerminalEvidenceUpdate) (bool, error) {
 	if DB == nil {
 		return false, errors.New("database is not initialized")
 	}
@@ -1326,7 +1343,15 @@ func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPref
 	recoveryNote = common.SanitizePersistedLogContent(common.MaskSensitiveInfo(recoveryNote))
 
 	ready := false
+	evidenceWritten := false
+	var candidate Task
 	err = DB.Transaction(func(tx *gorm.DB) error {
+		if evidence != nil {
+			candidate = *evidence.task
+			if err := guardTaskPluginPersistenceValue(tx, &candidate, candidate.PrivateData); err != nil {
+				return err
+			}
+		}
 		var record BillingSettlement
 		if err := withRowLock(tx).Where("operation_key = ?", input.OperationKey).First(&record).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1338,7 +1363,7 @@ func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPref
 			if err := validateBillingSettlement(record, input); err != nil {
 				return err
 			}
-			ready = true
+			ready = true // The existing operation already owns its evidence.
 			return nil
 		}
 		if record.Status != BillingSettlementStatusManual {
@@ -1359,6 +1384,13 @@ func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPref
 			record.ManualOnFailure != input.ManualOnFailure ||
 			record.EffectPayload != "" {
 			return permanentBillingSettlement(ErrBillingSettlementOperationConflict)
+		}
+		if evidence != nil {
+			won, err := candidate.updateWithStatusAndPendingTerminalEvidenceDB(tx, evidence.fromStatus, evidence.expectedUpdatedAt)
+			if err != nil || !won {
+				return err
+			}
+			evidenceWritten = true
 		}
 		now := time.Now().Unix()
 		originalReason := common.SanitizePersistedLogContent(common.MaskSensitiveInfo(record.LastError))
@@ -1401,6 +1433,9 @@ func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPref
 	})
 	if err != nil {
 		return false, err
+	}
+	if evidenceWritten {
+		*evidence.task = candidate
 	}
 	return ready, nil
 }

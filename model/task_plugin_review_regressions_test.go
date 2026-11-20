@@ -1284,6 +1284,7 @@ func TestTaskPluginTruncatedAndRepeatedHistoricalMembersBlockDeletion(t *testing
 		"truncated-digest",
 		`{"history":{"plugin_key":"stored","plugin_key":"other","version":"1.0.0"}}`,
 		`{"history":{"plugin_key":"stored"},"history":{"plugin_key":"other"}}`,
+		`{"billing_context":{"task_usage_envelope":[{"plugin_key":"stored","version":"1.0.0","VERSION":"2.0.0"}]}}`,
 	} {
 		t.Run(raw, func(t *testing.T) {
 			db := deletionDB(t)
@@ -1351,6 +1352,16 @@ func TestPricingAuthorityReusesValidatedPackageWithinSnapshot(t *testing.T) {
 	contexts, err := retained.contextsContext(t.Context(), "catalog-model")
 	require.NoError(t, err)
 	require.NotEmpty(t, contexts)
+	indexed := retained
+	require.NoError(t, indexed.indexPluginSchemas(t.Context()))
+	indexed.validatedPackages = nil
+	indexedContexts, err := indexed.contextsContext(t.Context(), "catalog-model")
+	require.NoError(t, err)
+	require.Equal(t, contexts, indexedContexts)
+	indexed.excludedPluginDigest = entry.Digest
+	excluded, err := indexed.contextsContext(t.Context(), "catalog-model")
+	require.NoError(t, err)
+	require.Empty(t, excluded)
 	retained.validatedPackages = nil
 	_, err = retained.contextsContext(t.Context(), "catalog-model")
 	require.Error(t, err)
@@ -1466,6 +1477,10 @@ func TestTaskPrivateDataRetainsUnmodeledHistoryAcrossStatusWrite(t *testing.T) {
 	won, err := claimed[0].UpdateWithStatusSnapshot(TaskStatusInProgress, version)
 	require.NoError(t, err)
 	require.True(t, won)
+	var updated Task
+	require.NoError(t, db.First(&updated, row.ID).Error)
+	require.Equal(t, "40%", updated.Progress)
+	require.Equal(t, "https://example.invalid/progress", updated.PrivateData.ResultURL)
 	var stored []byte
 	require.NoError(t, db.Model(row).Select("private_data").Row().Scan(&stored))
 	require.Contains(t, string(stored), "extension_history")

@@ -316,8 +316,8 @@ func uniqueTaskComponentIndex(components []types.TaskBillingPlanComponent, key s
 func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 	decoder := common.NewJSONDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
-	var read func([]string, int, reflect.Type) (any, error)
-	read = func(path []string, depth int, typ reflect.Type) (any, error) {
+	var read func([]string, int, reflect.Type, bool) (any, error)
+	read = func(path []string, depth int, typ reflect.Type, typed bool) (any, error) {
 		if depth > 10000 {
 			return nil, errors.New("task private JSON is too deeply nested")
 		}
@@ -333,6 +333,7 @@ func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 		case '{':
 			object := make(map[string]any)
 			folded := make(map[string]any)
+			facts := typed && taskPrivateFactPath(path)
 			for decoder.More() {
 				token, err := decoder.Token()
 				if err != nil {
@@ -343,12 +344,12 @@ func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 					return nil, errors.New("invalid task private JSON member")
 				}
 				childType := taskPrivateObjectFieldType(typ, key)
-				value, err := read(append(path, key), depth+1, childType)
+				value, err := read(append(path, key), depth+1, childType, typed)
 				if err != nil {
 					return nil, err
 				}
 				canonical := key
-				if !taskPrivateFactPath(path) {
+				if !facts {
 					canonical = taskPrivateMemberKey(typ, key)
 				}
 				if previous, exists := folded[canonical]; exists && !taskPrivateJSONValueEqual(previous, value, childType) {
@@ -356,6 +357,13 @@ func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 				}
 				folded[canonical] = value
 				object[key] = value
+			}
+			if !facts && taskPrivateHasExtensionIdentity(object) {
+				_, _, versionConflict := taskPluginReferenceString(object, "version")
+				_, _, explicitConflict := taskPluginReferenceString(object, "plugin_version")
+				if versionConflict || explicitConflict {
+					return nil, errors.New("conflicting task private JSON members")
+				}
 			}
 			_, err := decoder.Token()
 			return object, err
@@ -366,7 +374,7 @@ func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 				childType = container.Elem()
 			}
 			for decoder.More() {
-				value, err := read(path, depth+1, childType)
+				value, err := read(path, depth+1, childType, typed && (childType != nil || taskPrivateFactPath(path)))
 				if err != nil {
 					return nil, err
 				}
@@ -378,7 +386,7 @@ func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 			return nil, errors.New("invalid task private JSON delimiter")
 		}
 	}
-	value, err := read(nil, 0, reflect.TypeOf(TaskPrivateData{}))
+	value, err := read(nil, 0, reflect.TypeOf(TaskPrivateData{}), true)
 	if err != nil {
 		return nil, err
 	}
@@ -386,6 +394,15 @@ func decodeTaskPrivateReferenceJSON(raw []byte) (any, error) {
 		return nil, errors.New("unexpected data after task private JSON")
 	}
 	return value, nil
+}
+
+func taskPrivateHasExtensionIdentity(object map[string]any) bool {
+	for _, name := range []string{"plugin_key", "selected_plugin_key", "package_digest"} {
+		if identity, _, conflict := taskPluginReferenceString(object, name); identity != "" || conflict {
+			return true
+		}
+	}
+	return false
 }
 
 func taskPrivateJSONValueEqual(a, b any, typ reflect.Type) bool {
@@ -484,7 +501,7 @@ func taskPrivateMemberKey(typ reflect.Type, key string) string {
 	if typ = taskPrivateJSONType(typ); typ != nil && typ.Kind() == reflect.Map {
 		return key
 	}
-	for _, name := range []string{"plugin_key", "package_digest", "selected_plugin_key", "version", "plugin_version", "plugin_binding", "billing_context", "task_billing_plan", "expression_plan", "pricing_usage_envelope"} {
+	for _, name := range []string{"plugin_key", "package_digest", "selected_plugin_key", "plugin_binding", "billing_context", "task_billing_plan", "expression_plan", "pricing_usage_envelope"} {
 		if strings.EqualFold(name, key) {
 			return name
 		}

@@ -41,7 +41,13 @@ test('known mapping repair errors preserve identifiers for reactive feedback', a
       expected_revision: '4',
       deletion_nodes_ready: true,
     })
-  for (const channelId of [23, '9007199254740993']) {
+  for (const channelId of [
+    23,
+    -23,
+    '0',
+    '9007199254740993',
+    '-9007199254740993',
+  ]) {
     respond(
       {
         success: false,
@@ -61,16 +67,23 @@ test('known mapping repair errors preserve identifiers for reactive feedback', a
         e.repair.channel_id === String(channelId)
     )
   }
-  respond(
-    {
-      success: false,
-      code: 'invalid_channel_mapping',
-      channel_id: Number.MAX_SAFE_INTEGER + 1,
-      message: 'English fallback',
-    },
-    422
-  )
-  await assert.rejects(mutate, (e) => e instanceof PluginError && !e.repair)
+  for (const channelId of [
+    Number.MIN_SAFE_INTEGER - 1,
+    Number.MAX_SAFE_INTEGER + 1,
+    '-0',
+    '+23',
+  ]) {
+    respond(
+      {
+        success: false,
+        code: 'invalid_channel_mapping',
+        channel_id: channelId,
+        message: 'English fallback',
+      },
+      422
+    )
+    await assert.rejects(mutate, (e) => e instanceof PluginError && !e.repair)
+  }
 })
 function respond(data: unknown, status = 200) {
   const calls: InternalAxiosRequestConfig[] = []

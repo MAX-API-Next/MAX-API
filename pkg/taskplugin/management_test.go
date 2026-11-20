@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -173,108 +174,84 @@ func TestManagementDeletionConflictSuspendsStaleHost(t *testing.T) {
 	}
 }
 
-type acquisitionSignalContext struct {
-	context.Context
-	entered chan struct{}
-	once    sync.Once
-}
-
-func (ctx *acquisitionSignalContext) Done() <-chan struct{} {
-	ctx.once.Do(func() { close(ctx.entered) })
-	return ctx.Context.Done()
-}
-
 func TestManagementExpiredPreflightDoesNotUnpublishHost(t *testing.T) {
-	store := &memoryCatalogStore{}
-	catalog, err := OpenCatalog(t.Context(), store)
-	require.NoError(t, err)
-	pkg := testPackage(t, validManifest(), "source")
-	require.NoError(t, catalog.Install(t.Context(), pkg))
-	published, calls := catalog.host.state.Load(), store.loadCalls
-	base, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	ctx := &acquisitionSignalContext{Context: base, entered: make(chan struct{})}
-	catalog.mu.Lock()
-	done := make(chan error, 1)
-	go func() { done <- catalog.ValidateInstall(ctx, pkg) }()
-	select {
-	case <-ctx.entered:
-	case <-time.After(time.Second):
-		catalog.mu.Unlock()
-		t.Fatal("preflight never reached context-aware acquisition")
-	}
-	cancel()
-	select {
-	case err := <-done:
+	synctest.Test(t, func(t *testing.T) {
+		store := &memoryCatalogStore{}
+		catalog, err := OpenCatalog(t.Context(), store)
+		require.NoError(t, err)
+		pkg := testPackage(t, validManifest(), "source")
+		require.NoError(t, catalog.Install(t.Context(), pkg))
+		published, calls := catalog.host.state.Load(), store.loadCalls
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		catalog.mu.Lock()
+		defer catalog.mu.Unlock()
+		done := make(chan error, 1)
+		go func() { done <- catalog.ValidateInstall(ctx, pkg) }()
+		synctest.Wait()
+		require.Empty(t, done, "preflight must wait for the held catalog lock")
+		cancel()
+		synctest.Wait()
+		require.Len(t, done, 1, "canceled preflight must return while the catalog lock is held")
+		require.ErrorIs(t, <-done, context.Canceled)
+		require.Same(t, published, catalog.host.state.Load())
+		require.Equal(t, calls, store.loadCalls, "expired preflight never reaches storage")
+		_, _, err = catalog.ManagementSnapshot(ctx)
 		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second):
-		catalog.mu.Unlock()
-		t.Fatal("canceled preflight must return while the catalog lock is still held")
-	}
-	require.Same(t, published, catalog.host.state.Load())
-	require.Equal(t, calls, store.loadCalls, "expired preflight never reaches storage")
-	catalog.mu.Unlock()
-	_, _, err = catalog.ManagementSnapshot(ctx)
-	require.ErrorIs(t, err, context.Canceled)
-	require.Same(t, published, catalog.host.state.Load(), "an expired administrative read also leaves the healthy publication intact")
-	require.Equal(t, calls, store.loadCalls)
-	require.ErrorIs(t, catalog.MutateExpected(ctx, 1, ManagementMutation{Action: "delete", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version}), context.Canceled)
-	require.Same(t, published, catalog.host.state.Load())
-	require.Equal(t, calls, store.loadCalls)
+		require.Same(t, published, catalog.host.state.Load(), "an expired administrative read also leaves the healthy publication intact")
+		require.Equal(t, calls, store.loadCalls)
+		require.ErrorIs(t, catalog.MutateExpected(ctx, 1, ManagementMutation{Action: "delete", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version}), context.Canceled)
+		require.Same(t, published, catalog.host.state.Load())
+		require.Equal(t, calls, store.loadCalls)
+	})
 }
 
 func TestCatalogOperationsCancelWhileWaitingWithoutStorage(t *testing.T) {
 	for _, operation := range []string{"delete", "disable", "refresh", "list", "read", "install"} {
 		t.Run(operation, func(t *testing.T) {
-			store := &memoryCatalogStore{}
-			catalog, err := OpenCatalog(t.Context(), store)
-			require.NoError(t, err)
-			pkg := testPackage(t, validManifest(), "source")
-			require.NoError(t, catalog.Install(t.Context(), pkg))
-			published, calls := catalog.host.state.Load(), store.loadCalls
-			base, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			ctx := &acquisitionSignalContext{Context: base, entered: make(chan struct{})}
-			catalog.mu.Lock()
-			done := make(chan error, 1)
-			go func() {
-				var err error
-				switch operation {
-				case "delete":
-					err = catalog.MutateExpected(ctx, 1, ManagementMutation{Action: "delete", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version})
-				case "disable":
-					err = catalog.MutateExpected(ctx, 1, ManagementMutation{Action: "disable", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version})
-				case "refresh":
-					err = catalog.Refresh(ctx)
-				case "list":
-					_, _, err = catalog.List(ctx)
-				case "read":
-					_, _, err = catalog.ManagementSnapshot(ctx)
-				case "install":
-					err = catalog.Install(ctx, pkg)
-				}
-				done <- err
-			}()
-			select {
-			case <-ctx.entered:
-			case <-time.After(time.Second):
-				catalog.mu.Unlock()
-				t.Fatal("operation never reached context-aware acquisition")
-			}
-			cancel()
-			select {
-			case err := <-done:
+			synctest.Test(t, func(t *testing.T) {
+				store := &memoryCatalogStore{}
+				catalog, err := OpenCatalog(t.Context(), store)
+				require.NoError(t, err)
+				pkg := testPackage(t, validManifest(), "source")
+				require.NoError(t, catalog.Install(t.Context(), pkg))
+				published, calls := catalog.host.state.Load(), store.loadCalls
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				catalog.mu.Lock()
+				defer catalog.mu.Unlock()
+				done := make(chan error, 1)
+				go func() {
+					var err error
+					switch operation {
+					case "delete":
+						err = catalog.MutateExpected(ctx, 1, ManagementMutation{Action: "delete", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version})
+					case "disable":
+						err = catalog.MutateExpected(ctx, 1, ManagementMutation{Action: "disable", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version})
+					case "refresh":
+						err = catalog.Refresh(ctx)
+					case "list":
+						_, _, err = catalog.List(ctx)
+					case "read":
+						_, _, err = catalog.ManagementSnapshot(ctx)
+					case "install":
+						err = catalog.Install(ctx, pkg)
+					}
+					done <- err
+				}()
+				synctest.Wait()
+				require.Empty(t, done, "operation must wait for the held catalog lock")
+				cancel()
+				synctest.Wait()
+				require.Len(t, done, 1, "canceled operation must return while the catalog lock is held")
+				err = <-done
 				require.ErrorIs(t, err, context.Canceled)
 				if operation == "delete" || operation == "disable" {
 					require.ErrorIs(t, err, ErrCatalogNotCommitted)
 				}
-			case <-time.After(time.Second):
-				catalog.mu.Unlock()
-				t.Fatal("canceled operation waited for the held mutex")
-			}
-			require.Same(t, published, catalog.host.state.Load())
-			require.Equal(t, calls, store.loadCalls)
-			catalog.mu.Unlock()
+				require.Same(t, published, catalog.host.state.Load())
+				require.Equal(t, calls, store.loadCalls)
+			})
 		})
 	}
 }
@@ -657,6 +634,16 @@ func TestManagementDeletionRefreshCancellationIsNotCommitted(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.ErrorIs(t, err, ErrCatalogNotCommitted)
 	require.Nil(t, catalog.host.state.Load(), "refresh preserves its fail-closed decision")
+	require.Len(t, store.snapshot.Packages, 1)
+	require.EqualValues(t, 1, store.snapshot.Revision)
+
+	store.onLoad = nil
+	require.NoError(t, catalog.Refresh(t.Context()))
+	store.loadErrors = []error{ErrCatalogUnavailable}
+	err = catalog.MutateExpected(t.Context(), 1, ManagementMutation{Action: "delete", Key: manifest.Key, Version: manifest.Version})
+	require.ErrorIs(t, err, ErrCatalogUnavailable)
+	require.ErrorIs(t, err, ErrCatalogNotCommitted)
+	require.Nil(t, catalog.host.state.Load())
 	require.Len(t, store.snapshot.Packages, 1)
 	require.EqualValues(t, 1, store.snapshot.Revision)
 }

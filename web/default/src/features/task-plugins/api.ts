@@ -124,11 +124,11 @@ function requestError(
       z.object({
         code: z.literal('invalid_channel_mapping'),
         channel_id: z.union([
-          z.string().regex(/^[1-9][0-9]*$/),
+          z.string().regex(/^(?:0|-?[1-9][0-9]*)$/),
           z
             .number()
             .int()
-            .positive()
+            .min(Number.MIN_SAFE_INTEGER)
             .max(Number.MAX_SAFE_INTEGER)
             .transform(String),
         ]),

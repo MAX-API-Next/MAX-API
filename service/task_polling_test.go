@@ -18,6 +18,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
+	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -380,23 +381,31 @@ func TestVideoTerminalPollRejectsNewerSameStatusProgress(t *testing.T) {
 }
 
 func TestVideoPollingRecoversAppliedEvidenceWithoutChannelOrTimeout(t *testing.T) {
-	for _, state := range []string{model.BillingSettlementStatusApplied, model.BillingSettlementStatusManual} {
-		t.Run(state, func(t *testing.T) {
+	for _, test := range []struct {
+		name, state, rawURL string
+		wantProxy           bool
+	}{
+		{name: "applied", state: model.BillingSettlementStatusApplied, rawURL: "https://fixture.invalid/stored"},
+		{name: "empty URL", state: model.BillingSettlementStatusApplied, wantProxy: true},
+		{name: "data URL", state: model.BillingSettlementStatusApplied, rawURL: "data:video/mp4;base64,AA==", wantProxy: true},
+		{name: "manual", state: model.BillingSettlementStatusManual, rawURL: "https://fixture.invalid/stored"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			truncate(t)
 			timeout := constant.TaskTimeoutMinutes
 			constant.TaskTimeoutMinutes = 0
 			t.Cleanup(func() { constant.TaskTimeoutMinutes = timeout })
-			row := &model.Task{TaskID: "restart-" + state, UserId: 71, Quota: 80, ChannelId: 9899, Status: model.TaskStatusInProgress,
+			row := &model.Task{TaskID: "restart-" + test.state, UserId: 71, Quota: 80, ChannelId: 9899, Status: model.TaskStatusInProgress,
 				Data: []byte(`{"provider":"stored"}`), PrivateData: model.TaskPrivateData{PendingTerminalStatus: model.TaskStatusSuccess,
-					PendingTerminalFinishTime: 99, PendingTerminalResultURL: "https://fixture.invalid/stored"}}
+					PendingTerminalFinishTime: 99, PendingTerminalResultURL: test.rawURL}}
 			require.NoError(t, model.DB.Create(row).Error)
 			key := model.BillingTaskFinalizeOperationKey(row.ID)
-			require.NoError(t, model.DB.Create(&model.BillingSettlement{OperationKey: key, Status: state, TaskID: row.ID,
+			require.NoError(t, model.DB.Create(&model.BillingSettlement{OperationKey: key, Status: test.state, TaskID: row.ID,
 				UserID: row.UserId, Source: model.BillingSettlementSourceWallet, TaskQuota: 80, TaskQuotaTarget: 80}).Error)
 			err := updateVideoTasks(t.Context(), "fixture", row.ChannelId, []string{row.TaskID}, map[string]*model.Task{row.TaskID: row})
 			stored, readErr := model.GetTaskPlaceholderByID(row.ID)
 			require.NoError(t, readErr)
-			if state == model.BillingSettlementStatusManual {
+			if test.state == model.BillingSettlementStatusManual {
 				require.ErrorContains(t, err, "CacheGetChannel failed")
 				require.EqualValues(t, model.TaskStatusInProgress, stored.Status)
 				require.EqualValues(t, model.TaskStatusSuccess, stored.PrivateData.PendingTerminalStatus)
@@ -404,7 +413,11 @@ func TestVideoPollingRecoversAppliedEvidenceWithoutChannelOrTimeout(t *testing.T
 				require.NoError(t, err)
 				require.EqualValues(t, model.TaskStatusSuccess, stored.Status)
 				require.EqualValues(t, 99, stored.FinishTime)
-				require.Equal(t, "https://fixture.invalid/stored", stored.PrivateData.ResultURL)
+				wantURL := test.rawURL
+				if test.wantProxy {
+					wantURL = taskcommon.BuildProxyURL(row.TaskID)
+				}
+				require.Equal(t, wantURL, stored.PrivateData.ResultURL)
 				require.Empty(t, stored.PrivateData.PendingTerminalStatus)
 			}
 			require.JSONEq(t, `{"provider":"stored"}`, string(stored.Data))
@@ -414,6 +427,63 @@ func TestVideoPollingRecoversAppliedEvidenceWithoutChannelOrTimeout(t *testing.T
 			require.EqualValues(t, 1, records)
 		})
 	}
+}
+
+type onFetchTaskPollingAdaptor struct {
+	TaskPollingAdaptor
+	onFetch func()
+}
+
+func (a *onFetchTaskPollingAdaptor) FetchTask(baseURL, key string, body map[string]any, proxy string) (*http.Response, error) {
+	a.onFetch()
+	return a.TaskPollingAdaptor.FetchTask(baseURL, key, body, proxy)
+}
+
+func TestVideoPollingUsesEvidenceAppliedDuringFetch(t *testing.T) {
+	truncate(t)
+	const userID, tokenID = 971, 972
+	seedUser(t, userID, 900)
+	seedToken(t, tokenID, userID, "synthetic-video-delay", 900)
+	task := &model.Task{TaskID: "video-delayed-poll", UserId: userID, Quota: 80, Status: model.TaskStatusInProgress,
+		PrivateData: model.TaskPrivateData{UpstreamTaskID: "delayed-provider", TokenId: tokenID}}
+	persistTask(t, task)
+	input := model.BillingSettlementInput{
+		OperationKey: model.BillingTaskFinalizeOperationKey(task.ID), Source: model.BillingSettlementSourceWallet,
+		UserID: userID, TaskID: task.ID, TaskQuota: 80, TaskQuotaTarget: 80,
+	}
+	const originalURL = "https://fixture.invalid/settled"
+	fetched := false
+	adaptor := &onFetchTaskPollingAdaptor{
+		TaskPollingAdaptor: &h3TerminalPollingAdaptor{result: &relaycommon.TaskInfo{
+			Status: string(model.TaskStatusFailure), Reason: "superseded response",
+		}},
+		onFetch: func() {
+			fetched = true
+			latest, err := model.GetTaskPlaceholderByID(task.ID)
+			require.NoError(t, err)
+			latest.Data = []byte(`{"source":"durable"}`)
+			persistPendingTaskTerminalEvidence(latest, &relaycommon.TaskInfo{Status: string(model.TaskStatusSuccess), Url: originalURL}, 99)
+			won, err := latest.UpdateWithStatusAndSettlementIntent(latest.Status, latest.UpdatedAt, input)
+			require.NoError(t, err)
+			require.True(t, won)
+			delta, applied, err := model.ApplyBillingSettlementOnce(input)
+			require.NoError(t, err)
+			require.Zero(t, delta)
+			require.False(t, applied)
+		},
+	}
+	require.NoError(t, updateVideoSingleTask(t.Context(), adaptor, &model.Channel{Type: constant.ChannelTypeMiniMax}, task.TaskID,
+		map[string]*model.Task{task.TaskID: task}))
+	require.True(t, fetched)
+	stored, err := model.GetTaskPlaceholderByID(task.ID)
+	require.NoError(t, err)
+	require.Equal(t, model.TaskStatus(model.TaskStatusSuccess), stored.Status)
+	require.Equal(t, originalURL, stored.PrivateData.ResultURL)
+	require.Equal(t, int64(99), stored.FinishTime)
+	require.JSONEq(t, `{"source":"durable"}`, string(stored.Data))
+	require.Equal(t, 80, stored.Quota)
+	require.EqualValues(t, 900, getUserQuota(t, userID))
+	require.EqualValues(t, 900, getTokenRemainQuota(t, tokenID))
 }
 
 func TestVideoPollingPublishesAppliedEvidenceAfterTerminalCASLoss(t *testing.T) {

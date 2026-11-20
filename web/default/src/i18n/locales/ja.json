@@ -6068,7 +6068,7 @@
     "Bind registered API extensions to channels.": "登録済み API 拡張をチャネルに関連付けます。",
     "Disabling blocks new bindings while keeping installed files and historical tasks available.": "無効化すると、この拡張への新しいタスクのルーティングを停止します。インストール済みファイルと過去のタスクは保持され、チャネルからのモデル参照は引き続き許可されます。",
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles, audit identity and historical revocation are retained. Re-importing the same file remains blocked.": "タスク・チャネル・料金設定から参照されていなければ直接削除できます。インストール済みソースを削除し、配布パッケージ・監査用識別情報・過去の失効記録は保持します。同じファイルの再インポートは引き続きブロックされます。",
-    "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.": "タスク・チャネル・料金設定から参照されていなければ直接削除できます。インストール済みソースを削除し、配布パッケージと監査用識別情報を保持します。同じファイルを再インポートできます。",
+    "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.": "?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????",
     "Task plugin version is still referenced; remove task, channel or pricing references before deleting": "このバージョンは参照されています。削除する前にタスク・チャネル・料金設定の参照を解除してください。",
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "このバージョンは過去に永久失効されています。管理者に履歴レコードの処理を依頼してください。",
     "Task plugin version has different content; import the original file or use a new version": "このバージョンの内容が履歴と異なります。元のファイルをインポートするか、新しいバージョンを使用してください。",

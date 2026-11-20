@@ -23,6 +23,17 @@ func TestTaskPrivateHistoryUsesJSONFieldFolding(t *testing.T) {
 	require.Equal(t, "wallet", object["billing_source"])
 }
 
+func TestUnrelatedHistoricalVersionsKeepCaseSensitiveKeys(t *testing.T) {
+	var private TaskPrivateData
+	require.NoError(t, private.Scan(`{"token_id":7,"legacy":{"version":"schema-v1","Version":"provider-v2"}}`))
+	private.ResultURL = "updated"
+	raw, err := common.Marshal(private)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"version":"schema-v1"`)
+	require.Contains(t, string(raw), `"Version":"provider-v2"`)
+	require.Error(t, private.Scan(`{"legacy":{"plugin_key":"stored","version":"schema-v1","Version":"provider-v2"}}`))
+}
+
 func TestTaskPrivateBillingAliasesCannotChooseAnIdentity(t *testing.T) {
 	for _, raw := range []string{
 		`{"token_id":11,"Token_ID":22}`,

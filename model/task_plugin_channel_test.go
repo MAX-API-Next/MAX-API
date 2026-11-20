@@ -242,6 +242,26 @@ func TestTypedCreateGuardAllowsResolvedInsertTargets(t *testing.T) {
 	require.Equal(t, "ok", row.Value)
 }
 
+func TestChannelTableMetadataUpdateStillWorksWithGuard(t *testing.T) {
+	db := deletionDB(t)
+	row := &Channel{Name: "original", Models: "ordinary"}
+	require.NoError(t, db.Create(row).Error)
+	table := db.Table("channels").Where("id = ?", row.Id)
+	require.ErrorIs(t, table.Updates(map[string]any{"models": "new"}).Error, taskplugin.ErrCatalogInvalid)
+	require.NoError(t, db.Table("channels").Where("id = ?", row.Id).Updates(map[string]any{"name": "new"}).Error)
+	require.NoError(t, db.Model(&Channel{}).Where("id = ?", row.Id).Updates(map[string]any{"models": "typed"}).Error)
+	var stored Channel
+	require.NoError(t, db.First(&stored, row.Id).Error)
+	require.Equal(t, "new", stored.Name)
+	require.Equal(t, "typed", stored.Models)
+}
+
+func TestCatalogGuardResolvesAliasedTableExpression(t *testing.T) {
+	table, resolved := taskPluginStatementTable(&gorm.Statement{Table: "c", TableExpr: &clause.Expr{SQL: "`main`.`channels` AS c"}})
+	require.True(t, resolved)
+	require.Equal(t, "channels", table)
+}
+
 func TestTypedChannelUpsertChecksConflictAssignments(t *testing.T) {
 	for _, kind := range []string{"models", "model_mapping", "expression", "metadata", "update-all", "reused-update-all"} {
 		t.Run(kind, func(t *testing.T) {

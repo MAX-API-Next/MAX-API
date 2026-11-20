@@ -352,3 +352,69 @@ func TestTaskSubmitFailureCleanupCoordinatesRealFunding(t *testing.T) {
 		}
 	}
 }
+
+func TestFreeTaskDefiniteRejectionRecoversStatusWithoutRefund(t *testing.T) {
+	for _, owner := range []string{"unclaimed", "reservation", "upstream"} {
+		t.Run(owner, func(t *testing.T) {
+			db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "free-rejection.sqlite")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+			require.NoError(t, err)
+			previous, oldSQLite := model.DB, common.UsingSQLite
+			model.DB, common.UsingSQLite = db, true
+			t.Cleanup(func() {
+				model.DB, common.UsingSQLite = previous, oldSQLite
+				pool, _ := db.DB()
+				_ = pool.Close()
+			})
+			require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.BillingSettlement{}, &model.BillingPreConsumeSelection{}, &model.SubscriptionPreConsumeRecord{}))
+			request := "free-rejection-" + owner
+			row := &model.Task{TaskID: request, UserId: 71, Status: model.TaskStatusSubmitted, PrivateData: model.TaskPrivateData{
+				AwaitingUpstreamID: true, BillingRequestId: request, TokenId: 72,
+			}}
+			require.NoError(t, db.Create(row).Error)
+			attempts := 0
+			require.NoError(t, db.Callback().Update().Before("gorm:update").Register("reject-immediate-free-task-write", func(tx *gorm.DB) {
+				if tx.Statement.Table == "tasks" {
+					attempts++
+					deadline, bounded := tx.Statement.Context.Deadline()
+					require.True(t, bounded)
+					require.LessOrEqual(t, time.Until(deadline), 2*time.Second)
+					tx.AddError(errors.New("synthetic task-write outage"))
+				}
+			}))
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			info := &relaycommon.RelayInfo{UserId: row.UserId, TokenId: 72, RequestId: request, TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: row.ID}}
+			CleanupDefiniteTaskSubmitFailure(ctx, info, "definite free rejection")
+			require.Equal(t, 3, attempts)
+			require.NoError(t, db.Callback().Update().Remove("reject-immediate-free-task-write"))
+			var journal model.TaskSubmitFailureRecovery
+			require.NoError(t, db.First(&journal, "task_id = ?", row.ID).Error)
+			require.Equal(t, model.TaskSubmitFailureRecoveryPending, journal.Status)
+			require.Zero(t, journal.FundingDelta)
+			if owner == "reservation" {
+				require.NoError(t, db.Create(&model.BillingPreConsumeSelection{RequestID: request, UserID: 71, TokenID: 72,
+					Source: model.BillingSettlementSourceWallet, EffectiveQuota: 10}).Error)
+			}
+			if owner == "upstream" {
+				confirmed := row.PrivateData
+				confirmed.UpstreamTaskID, confirmed.AwaitingUpstreamID = "confirmed", false
+				require.NoError(t, db.Model(row).UpdateColumn("private_data", confirmed).Error)
+			}
+			model.ProcessPendingBillingSettlementsOnce()
+			model.ProcessPendingBillingSettlementsOnce()
+			stored, err := model.GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, err)
+			require.NoError(t, db.First(&journal, "task_id = ?", row.ID).Error)
+			if owner == "unclaimed" {
+				require.EqualValues(t, model.TaskStatusFailure, stored.Status)
+				require.Equal(t, "definite free rejection", stored.FailReason)
+				require.Equal(t, model.TaskSubmitFailureStatusRecorded, journal.Status)
+			} else {
+				require.EqualValues(t, model.TaskStatusSubmitted, stored.Status)
+				require.Equal(t, model.TaskSubmitFailureRecoveryManual, journal.Status)
+			}
+			var settlements int64
+			require.NoError(t, db.Model(&model.BillingSettlement{}).Count(&settlements).Error)
+			require.Zero(t, settlements)
+		})
+	}
+}

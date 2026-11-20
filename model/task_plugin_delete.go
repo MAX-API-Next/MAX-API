@@ -99,6 +99,9 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 			}
 			return err
 		}
+		if head.Revision <= 0 || head.MutationID == "" {
+			return taskplugin.ErrCatalogInvalid
+		}
 		if head.Revision != revision {
 			return taskplugin.ErrCatalogConflict
 		}
@@ -434,6 +437,9 @@ func rejectTaskPluginDefaultRemoval(tx *gorm.DB, pkg *taskplugin.Package, remain
 				}
 				return taskplugin.ErrCatalogUnavailable
 			}
+			if err := before.indexPluginSchemas(tx.Statement.Context); err != nil {
+				return err
+			}
 		}
 		beforeContexts, err := before.contextsContext(tx.Statement.Context, model)
 		if err != nil {
@@ -444,6 +450,7 @@ func rejectTaskPluginDefaultRemoval(tx *gorm.DB, pkg *taskplugin.Package, remain
 		}
 		after := *before
 		after.plugins = remaining
+		after.excludedPluginDigest = pkg.Digest()
 		afterContexts, err := after.contextsContext(tx.Statement.Context, model)
 		if err != nil {
 			return err
@@ -488,11 +495,14 @@ func visitTaskPluginReferencePath(value any, path []string, typed bool, visit fu
 		}
 		boundVersion, hasVersion, versionConflict := taskPluginReferenceString(v, "version")
 		explicit, ok, explicitConflict := taskPluginReferenceString(v, "plugin_version")
+		if (versionConflict || explicitConflict) && (key != "" || selected != "" || digest != "") {
+			return visit(taskPluginReferenceIdentity{ambiguous: true})
+		}
 		conflictingVersions := ok && hasVersion && boundVersion != explicit
 		if ok && !conflictingVersions {
 			boundVersion = explicit
 		}
-		if versionConflict || explicitConflict || conflictingVersions {
+		if conflictingVersions {
 			boundVersion = "" // Ambiguity cannot establish a version pin.
 		}
 		if digest != "" && visit(taskPluginReferenceIdentity{digest: digest}) {

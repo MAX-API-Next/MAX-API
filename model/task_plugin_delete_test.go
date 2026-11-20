@@ -44,6 +44,36 @@ func deletionDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestTaskPluginDeletionRejectsCorruptLockedHead(t *testing.T) {
+	for _, field := range []string{"revision", "mutation_id"} {
+		t.Run(field, func(t *testing.T) {
+			db := deletionDB(t)
+			store := NewTaskPluginCatalogStore(db)
+			_, entry := catalogFixture(t, "stored", "1.0.0", "corrupt-head-fixture")
+			_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+			require.NoError(t, err)
+			var head TaskPluginCatalogHead
+			require.NoError(t, db.First(&head).Error)
+			var corrupt any = ""
+			if field == "revision" {
+				corrupt = 0
+			}
+			require.NoError(t, db.Model(&head).UpdateColumn(field, corrupt).Error)
+			require.NoError(t, db.First(&head).Error)
+			_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+			require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+			var after TaskPluginCatalogHead
+			require.NoError(t, db.First(&after).Error)
+			require.Equal(t, head, after)
+			var packages, receipts int64
+			require.NoError(t, db.Model(&TaskPluginVersion{}).Count(&packages).Error)
+			require.NoError(t, db.Model(&TaskPluginDeletion{}).Count(&receipts).Error)
+			require.EqualValues(t, 1, packages)
+			require.Zero(t, receipts)
+		})
+	}
+}
+
 func TestTaskPluginDeletionReferencesRollbackAndRefresh(t *testing.T) {
 	db := deletionDB(t)
 	ctx := t.Context()

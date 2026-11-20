@@ -130,7 +130,7 @@ func (catalog *Catalog) deleteExpected(ctx context.Context, expected int64, key,
 		return errors.Join(ErrCatalogNotCommitted, err)
 	}
 	if err := catalog.refreshLocked(ctx); err != nil {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || errors.Is(err, ErrCatalogUnavailable) {
 			return errors.Join(ErrCatalogNotCommitted, err)
 		}
 		return err

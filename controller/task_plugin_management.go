@@ -271,6 +271,9 @@ func MutateTaskPluginManagement(c *gin.Context) {
 		} else {
 			rows, revision, readErr := catalog.ManagementSnapshot(ctx)
 			if readErr != nil {
+				if ctx.Err() != nil || errors.Is(readErr, taskplugin.ErrCatalogUnavailable) {
+					readErr = errors.Join(taskplugin.ErrCatalogNotCommitted, readErr)
+				}
 				taskPluginAdminError(c, readErr)
 				return
 			}

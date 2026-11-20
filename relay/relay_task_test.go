@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -43,7 +44,9 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	t.Cleanup(func() { model.DB = previous })
 	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.Channel{}))
 	service.InitHttpClient()
+	var providerCalls atomic.Int32
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		providerCalls.Add(1)
 		_, _ = io.WriteString(w, `{"name":"models/synthetic/operations/one","done":false}`)
 	}))
 	defer provider.Close()
@@ -61,8 +64,19 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	require.Equal(t, "50%", progress.Progress)
 	require.Greater(t, progress.UpdatedAt, stale.UpdatedAt)
 	progress.Progress = "80%"
+	won, err := progress.UpdatePollingProgress(progress.Status)
+	require.NoError(t, err)
+	require.True(t, won)
+	sameStatus := stale
+	require.NotEmpty(t, tryRealtimeFetch(&sameStatus, false))
+	require.Equal(t, "80%", sameStatus.Progress)
+	observedVersion := progress.UpdatedAt
+	sameStored, err := model.GetTaskPlaceholderByID(task.ID)
+	require.NoError(t, err)
+	require.Equal(t, observedVersion, sameStored.UpdatedAt)
+	require.Equal(t, "80%", sameStored.Progress)
 	progress.Status = model.TaskStatusQueued
-	won, err := progress.UpdatePollingProgress(model.TaskStatusInProgress)
+	won, err = progress.UpdatePollingProgress(model.TaskStatusInProgress)
 	require.NoError(t, err)
 	require.True(t, won)
 
@@ -77,6 +91,13 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "80%", stored.Progress)
 	require.Equal(t, progress.UpdatedAt, stored.UpdatedAt)
+	require.NoError(t, db.Model(stored).UpdateColumn("status", model.TaskStatusFailure).Error)
+	terminal, err := model.GetTaskPlaceholderByID(task.ID)
+	require.NoError(t, err)
+	before := providerCalls.Load()
+	require.Nil(t, tryRealtimeFetch(terminal, false))
+	require.Equal(t, before, providerCalls.Load())
+	require.EqualValues(t, model.TaskStatusFailure, terminal.Status)
 }
 
 func placeholderSnapshotInQuery(tx *gorm.DB) *model.Task {

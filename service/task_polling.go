@@ -740,6 +740,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			return nil
 		}
 	}
+	if taskFinalizeApplied {
+		// The finalize can become applied after the pre-fetch check. Its
+		// durable provider evidence wins over a later, different response.
+		if handled, err := recoverAppliedVideoTaskFromStore(task); handled || err != nil {
+			return err
+		}
+	}
 	terminalDecision := taskTerminalBillingDecision{}
 	if providerTerminal && !taskFinalizeApplied {
 		terminalDecision = prepareTaskTerminalBillingDecision(ctx, adaptor, task, taskResult, ch.Type, ch.GetOtherSettings())
@@ -794,16 +801,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		if task.FinishTime == 0 {
 			task.FinishTime = now
 		}
-		if strings.HasPrefix(taskResult.Url, "data:") {
-			// data: URI (e.g. Vertex base64 encoded video) — keep in Data, not in ResultURL
-			task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
-		} else if taskResult.Url != "" {
-			// Direct upstream URL (e.g. Kling, Ali, Doubao, etc.)
-			task.PrivateData.ResultURL = taskResult.Url
-		} else {
-			// No URL from adaptor — construct proxy URL using public task ID
-			task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
-		}
+		task.PrivateData.ResultURL = videoTaskResultURL(task.TaskID, taskResult.Url)
 		shouldSettle = true
 	case model.TaskStatusFailure:
 		logger.LogJson(ctx, fmt.Sprintf("Task %s failed", taskId), task)
@@ -884,6 +882,13 @@ func hasPendingVideoTerminalEvidence(task *model.Task) bool {
 	return task != nil && (task.PrivateData.PendingTerminalStatus == model.TaskStatusSuccess || task.PrivateData.PendingTerminalStatus == model.TaskStatusFailure)
 }
 
+func videoTaskResultURL(taskID, providerURL string) string {
+	if providerURL == "" || strings.HasPrefix(providerURL, "data:") {
+		return taskcommon.BuildProxyURL(taskID)
+	}
+	return providerURL
+}
+
 func recoverAppliedVideoTaskFromStore(task *model.Task) (bool, error) {
 	latest, err := model.GetTaskPlaceholderByID(task.ID)
 	if err != nil {
@@ -943,8 +948,8 @@ func recoverAppliedTaskTerminalEvidence(task *model.Task) (appliedTaskRecoveryOu
 		candidate.FinishTime = time.Now().Unix()
 	}
 	candidate.FailReason = candidate.PrivateData.PendingTerminalReason
-	if pending == model.TaskStatusSuccess && candidate.PrivateData.PendingTerminalResultURL != "" {
-		candidate.PrivateData.ResultURL = candidate.PrivateData.PendingTerminalResultURL
+	if pending == model.TaskStatusSuccess {
+		candidate.PrivateData.ResultURL = videoTaskResultURL(candidate.TaskID, candidate.PrivateData.PendingTerminalResultURL)
 	}
 	clearPendingTaskTerminalEvidence(&candidate)
 	won, err := candidate.PublishRecoveredTaskTerminalStatus(oldStatus, task.UpdatedAt)
@@ -1105,9 +1110,8 @@ func recoverManualTaskBillingSettlement(
 	if err != nil || !found || (status != model.BillingSettlementStatusManual && status != model.BillingSettlementStatusPending) {
 		return false, err
 	}
-	// Persist the provider terminal facts before promoting the manual settlement
-	// to a funding operation. A crash after promotion must remain recoverable as
-	// the provider's terminal state, not be misclassified as missing evidence.
+	// Keep the replacement provider evidence and its promoted funding intent
+	// in the same transaction. An existing pending intent owns its evidence.
 	candidate := *task
 	if task.PrivateData.BillingContext != nil {
 		billingContext := *task.PrivateData.BillingContext
@@ -1117,16 +1121,8 @@ func recoverManualTaskBillingSettlement(
 		candidate.PrivateData.BillingContext.PricingUsageEnvelope = types.CloneTaskPricingUsageEnvelope(decision.PricingUsageEnvelope)
 	}
 	persistPendingTaskTerminalEvidence(&candidate, providerResult, time.Now().Unix())
-	won, err := candidate.UpdateWithStatusAndPendingTerminalEvidence(fromStatus, expectedUpdatedAt)
-	if err != nil {
-		return false, fmt.Errorf("persist manual task terminal evidence: %w", err)
-	}
-	if !won {
-		return false, nil
-	}
-	*task = candidate
-	usageManualReasonPrefix, recoveryNote := taskUsageRecoveryReason(task)
-	ready, err := model.PromoteManualTaskBillingSettlement(*decision.Settlement, usageManualReasonPrefix, recoveryNote)
+	usageManualReasonPrefix, recoveryNote := taskUsageRecoveryReason(&candidate)
+	ready, err := model.PromoteManualTaskBillingSettlementWithEvidence(&candidate, fromStatus, expectedUpdatedAt, *decision.Settlement, usageManualReasonPrefix, recoveryNote)
 	if errors.Is(err, model.ErrBillingSettlementOperationConflict) {
 		// A different manual reason or a concurrent/permanent recovery failure
 		// must remain operator-gated; do not turn that durable state into a
@@ -1139,6 +1135,11 @@ func recoverManualTaskBillingSettlement(
 	if !applyTaskBillingSettlement(ctx, task, decision.Settlement) {
 		return false, nil
 	}
+	latest, err := model.GetTaskPlaceholderByID(task.ID)
+	if err != nil {
+		return false, err
+	}
+	*task = *latest
 	return true, nil
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 type h3TerminalPollingAdaptor struct {
@@ -812,7 +813,9 @@ func TestUpdateVideoSingleTaskAppliesAlreadyPromotedManualH3Settlement(t *testin
 
 	beforeUserQuota := getUserQuota(t, task.UserId)
 	beforeTokenQuota := getTokenRemainQuota(t, task.PrivateData.TokenId)
-	adaptor := &h3TerminalPollingAdaptor{result: providerResult}
+	lateResult := *providerResult
+	lateResult.Url = "https://cdn.example.com/late-promoted-response.mp4"
+	adaptor := &h3TerminalPollingAdaptor{result: &lateResult}
 	ch := &model.Channel{Id: task.ChannelId, Type: constant.ChannelTypeMiniMax, Key: "test"}
 	require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, ch, task.GetUpstreamTaskID(), map[string]*model.Task{
 		task.GetUpstreamTaskID(): task,
@@ -821,6 +824,7 @@ func TestUpdateVideoSingleTaskAppliesAlreadyPromotedManualH3Settlement(t *testin
 	var stored model.Task
 	require.NoError(t, model.DB.First(&stored, task.ID).Error)
 	require.Equal(t, model.TaskStatus(model.TaskStatusSuccess), stored.Status)
+	require.Equal(t, providerResult.Url, stored.PrivateData.ResultURL)
 	require.EqualValues(t, decision.Settlement.TaskQuotaTarget, stored.Quota)
 	require.EqualValues(t, beforeUserQuota-decision.Settlement.FundingDelta, getUserQuota(t, task.UserId))
 	require.EqualValues(t, beforeTokenQuota-int(decision.Settlement.TokenDelta), getTokenRemainQuota(t, task.PrivateData.TokenId))
@@ -889,13 +893,38 @@ func TestUpdateVideoSingleTaskRecoversManualH3SubscriptionFullRefund(t *testing.
 		Source:           types.TaskUsageSourceProviderResponse,
 		Completeness:     types.TaskUsageCompletenessComplete,
 	}
-	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task,
-		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), completeUsage), constant.ChannelTypeMiniMax)
+	providerResult := serviceH3TaskInfo(t, string(model.TaskStatusSuccess), completeUsage)
+	providerResult.Url = "https://cdn.example.com/new-manual-evidence.mp4"
+	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, providerResult, constant.ChannelTypeMiniMax)
 	require.Empty(t, decision.ManualReason)
 	require.NotNil(t, decision.Settlement)
 	require.EqualValues(t, -100, decision.Settlement.FundingDelta)
 	require.True(t, decision.Settlement.FinalizeSubscriptionPreConsume)
 	require.True(t, decision.Settlement.AllowMissingToken)
+
+	const failedPromotion = "test:fail-manual-task-promotion"
+	forcedErr := errors.New("synthetic settlement promotion write failure")
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(failedPromotion, func(tx *gorm.DB) {
+		if tx.Statement.Table == "billing_settlements" {
+			_ = tx.AddError(forcedErr)
+		}
+	}))
+	t.Cleanup(func() { _ = model.DB.Callback().Update().Remove(failedPromotion) })
+	recovered, err := recoverManualTaskBillingSettlement(t.Context(), task, decision, providerResult, task.Status, task.UpdatedAt)
+	require.ErrorIs(t, err, forcedErr)
+	require.False(t, recovered)
+	afterFailure, err := model.GetTaskPlaceholderByID(task.ID)
+	require.NoError(t, err)
+	require.Equal(t, task.PrivateData.PendingTerminalStatus, afterFailure.PrivateData.PendingTerminalStatus)
+	require.Equal(t, task.PrivateData.PendingTerminalResultURL, afterFailure.PrivateData.PendingTerminalResultURL)
+	require.Equal(t, task.UpdatedAt, afterFailure.UpdatedAt)
+	status, found, err := model.GetBillingSettlementStatus(decision.Settlement.OperationKey)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, model.BillingSettlementStatusManual, status)
+	require.EqualValues(t, 5_000, getSubscriptionUsed(t, subscriptionID))
+	require.EqualValues(t, 100, getTokenRemainQuota(t, tokenID))
+	require.NoError(t, model.DB.Callback().Update().Remove(failedPromotion))
 
 	adaptor := &h3TerminalPollingAdaptor{result: &relaycommon.TaskInfo{
 		Status: string(model.TaskStatusSuccess), Usage: completeUsage,

@@ -197,11 +197,17 @@ export function PluginDetailSheet(props: Props) {
                 </Button>
               </div>
               <p className='text-muted-foreground text-xs leading-relaxed'>
-                {t(
-                  detail.revoked
-                    ? 'Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles, audit identity and historical revocation are retained. Re-importing the same file remains blocked.'
-                    : 'Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.'
-                )}
+                {detail.revoked
+                  ? t(
+                      'Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles, audit identity and historical revocation are retained. Re-importing the same file remains blocked.'
+                    )
+                  : t(
+                      'Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.',
+                      {
+                        defaultValue:
+                          'Delete directly when there are no task, channel or pricing references. Deletion removes installed source and keeps distribution bundles and audit identity. If you may need this version again, validate the original file before deleting. Reimport requires the same file to pass current validation.',
+                      }
+                    )}
               </p>
               {confirmation && confirmation.entry.digest === detail.digest && (
                 <div className='space-y-3 rounded-lg border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-900 dark:bg-amber-950/20'>

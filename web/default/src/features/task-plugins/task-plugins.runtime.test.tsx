@@ -693,7 +693,7 @@ test('delete is available directly and rejects referenced versions without retry
   )
   assert.equal(
     panel.queryByText(
-      'Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.'
+      'Delete directly when there are no task, channel or pricing references. Deletion removes installed source and keeps distribution bundles and audit identity. If you may need this version again, validate the original file before deleting. Reimport requires the same file to pass current validation.'
     ),
     null
   )

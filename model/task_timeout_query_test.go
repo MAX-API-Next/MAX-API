@@ -3,6 +3,7 @@ package model
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -15,6 +16,33 @@ import (
 	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+func TestPollingBatchQuarantinesUnadvanceableVersions(t *testing.T) {
+	truncateTables(t)
+	quarantined := make(map[int64]int64)
+	for _, version := range []int64{10, math.MaxInt64 - 2, math.MaxInt64 - 1, math.MaxInt64} {
+		row := &Task{TaskID: fmt.Sprint(version), Status: TaskStatusSubmitted, UpdatedAt: version}
+		require.NoError(t, DB.Create(row).Error)
+		if version >= math.MaxInt64-1 {
+			quarantined[row.ID] = version
+		}
+	}
+	tasks := GetAllUnFinishSyncTasks(10)
+	require.Len(t, tasks, 2)
+	require.Equal(t, "10", tasks[0].TaskID)
+	require.Less(t, tasks[0].UpdatedAt, int64(math.MaxInt64-2))
+	require.EqualValues(t, math.MaxInt64-1, tasks[1].UpdatedAt)
+	for _, task := range tasks {
+		stored, err := GetTaskPlaceholderByID(task.ID)
+		require.NoError(t, err)
+		require.Equal(t, task.UpdatedAt, stored.UpdatedAt)
+	}
+	for id, version := range quarantined {
+		stored, err := GetTaskPlaceholderByID(id)
+		require.NoError(t, err)
+		require.Equal(t, version, stored.UpdatedAt)
+	}
+}
 
 func TestClaimedNullTimestampSupportsFirstManualDecision(t *testing.T) {
 	truncateTables(t)
@@ -148,17 +176,26 @@ func TestManualSettlementCASPreservesTimestampNullability(t *testing.T) {
 			if change {
 				require.NoError(t, DB.Model(row).UpdateColumn("updated_at", 0).Error)
 			}
+			observed.PrivateData.PendingTerminalStatus = TaskStatusSuccess
+			observed.PrivateData.PendingTerminalResultURL = "https://example.invalid/new-evidence"
 			won, err := observed.UpdateWithStatusAndManualSettlement(TaskStatusSubmitted, 0, BillingSettlementInput{OperationKey: BillingTaskFinalizeOperationKey(row.ID), Source: BillingSettlementSourceWallet, UserID: 1, TaskID: row.ID, TaskQuota: 10, TaskQuotaTarget: 10}, "missing provider evidence")
 			require.NoError(t, err)
 			require.Equal(t, !change, won)
+			stored, err := GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, err)
+			require.Equal(t, TaskStatus(TaskStatusSubmitted), stored.Status)
 			var records []BillingSettlement
 			require.NoError(t, DB.Find(&records).Error)
 			if change {
 				require.Empty(t, records)
+				require.Empty(t, stored.PrivateData.PendingTerminalStatus)
+				require.Empty(t, stored.PrivateData.PendingTerminalResultURL)
 			} else {
 				require.Len(t, records, 1)
 				require.Equal(t, BillingSettlementStatusManual, records[0].Status)
 				require.Zero(t, records[0].AppliedFundingDelta)
+				require.Equal(t, TaskStatus(TaskStatusSuccess), stored.PrivateData.PendingTerminalStatus)
+				require.Equal(t, "https://example.invalid/new-evidence", stored.PrivateData.PendingTerminalResultURL)
 			}
 		})
 	}

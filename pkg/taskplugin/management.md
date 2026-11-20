@@ -277,8 +277,9 @@ successful receipt contains `committed: true`, its exact resulting revision and
 A store-confirmed deletion still returns its committed receipt when the local
 follow-up refresh fails. The local Host remains suspended until an authoritative
 read succeeds; that publication failure does not make the confirmed deletion
-unknown or suppress its management audit. A store that does not confirm the
-commit still produces the existing unknown-result error, without automatic replay.
+unknown or suppress its management audit. When the outcome of a deletion attempt
+cannot be established, the console requires a fresh read before another write.
+Known rejections show their repair or conflict response directly.
 
 Interaction/protocol reference: QuantumNous/new-api `70e6af64`, task-plugin
 list/upload/version/detail workflows (AGPL-3.0). MAX uses its independent pinned
@@ -440,9 +441,14 @@ Pre-upgrade timeouts and existing manual settlement records retain their
 reconciliation workflow because their refund ownership cannot be inferred.
 A timed-out legacy task with both `awaiting_upstream_id` and a non-empty
 `upstream_task_id` keeps its quota for manual reconciliation. The contradictory
-state has no automatic late-refund marker. Identify these `FAILURE` rows using
-both private fields and the positive task quota, then reconcile the upstream task
-and the original reservation using the stored billing request ID.
+state has no automatic late-refund marker. Match both private fields and the
+positive quota on `FAILURE` rows and on nonterminal rows with a manual
+task-finalize settlement. Reconcile the upstream task and the original
+reservation using the stored billing request ID.
+Definite rejections of free submissions can use a status-only recovery journal.
+Replay verifies the original request, task state and absence of a funding
+reservation before recording failure. It creates no refund intent. Upgrade all
+recovery workers together so status-only rows are handled automatically.
 If the database cannot save even the recovery record, use the original task
 and reservation records to reconcile the logged task ID after service returns.
 Historical private metadata retains unknown fields, including nested typed

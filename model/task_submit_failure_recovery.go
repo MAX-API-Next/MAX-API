@@ -20,6 +20,7 @@ const (
 	TaskSubmitFailureRecoveryPending  = "pending"
 	TaskSubmitFailureRecoveryRecorded = "intent_recorded"
 	TaskSubmitFailureRecoveryManual   = "manual"
+	TaskSubmitFailureStatusRecorded   = "failure_recorded"
 )
 
 var ErrTaskSubmitFailureRecoveryRequiresReview = errors.New("task submission rejection requires manual review")
@@ -139,12 +140,78 @@ func RecordTaskSubmitFailureRecovery(taskID int64, reason string, input BillingS
 // RecordTaskSubmitFailureRecoveryWithStatus also reports the current durable
 // journal status, including an existing record that still requires review.
 func RecordTaskSubmitFailureRecoveryWithStatus(taskID int64, reason string, input BillingSettlementInput) (string, error) {
-	if DB == nil {
-		return "", errors.New("database is not initialized")
-	}
 	record, err := taskSubmitFailureRecoveryRecord(taskID, reason, input)
 	if err != nil {
 		return "", err
+	}
+	return recordTaskSubmitFailureRecovery(record)
+}
+
+// RecordTaskSubmitFailureStatusRecovery records a definite no-charge rejection
+// without granting refund authority. Replay verifies the persisted placeholder.
+func RecordTaskSubmitFailureStatusRecovery(taskID int64, requestID, reason string, userID, tokenID int) (string, error) {
+	if strings.TrimSpace(requestID) == "" {
+		return "", ErrTaskSubmitRefundIdentityMismatch
+	}
+	reasonRunes := []rune(common.SanitizePersistedLogContent(reason))
+	record := TaskSubmitFailureRecovery{TaskID: taskID, OperationKey: BillingRequestFinalizeOperationKey(requestID),
+		UserID: userID, TokenID: tokenID, Reason: string(reasonRunes[:min(len(reasonRunes), 512)]), Status: TaskSubmitFailureRecoveryPending}
+	if _, err := record.statusOnlyRequestID(); err != nil {
+		return "", err
+	}
+	return recordTaskSubmitFailureRecovery(record)
+}
+
+func (record TaskSubmitFailureRecovery) statusOnlyRequestID() (string, error) {
+	requestKey, prefixed := strings.CutPrefix(record.OperationKey, billingRequestOperationPrefix)
+	requestID, suffixed := strings.CutSuffix(requestKey, billingRequestFinalizeSuffix)
+	if !prefixed || !suffixed || strings.TrimSpace(requestID) == "" || len(record.OperationKey) > 191 || record.TaskID <= 0 || record.UserID <= 0 || record.TokenID < 0 ||
+		record.refundInput() != (BillingSettlementInput{OperationKey: record.OperationKey, UserID: record.UserID, TokenID: record.TokenID}) {
+		return "", ErrTaskSubmitRefundIdentityMismatch
+	}
+	return requestID, nil
+}
+
+func verifyTaskSubmitFailureStatusOnly(tx *gorm.DB, task *Task, record TaskSubmitFailureRecovery) error {
+	requestID, err := record.statusOnlyRequestID()
+	if err != nil {
+		return err
+	}
+	private := task.PrivateData
+	if task.UserId != record.UserID || private.TokenId != record.TokenID || private.BillingRequestId != requestID ||
+		task.Quota != 0 || private.BillingSource != "" || private.SubscriptionId != 0 || private.UpstreamTaskID != "" || !private.AwaitingUpstreamID {
+		return ErrTaskSubmitRefundIdentityMismatch
+	}
+	// Check the canonical funding selection and older durable debit records.
+	// A status-only item has no authority over even an unapplied reservation.
+	var selection BillingPreConsumeSelection
+	if err := withRowLock(tx).Select("request_id").Where("request_id = ?", requestID).Take(&selection).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+		if err != nil {
+			return err
+		}
+		return ErrTaskSubmitRefundIdentityMismatch
+	}
+	var subscription SubscriptionPreConsumeRecord
+	if err := withRowLock(tx).Select("request_id").Where("request_id = ?", requestID).Take(&subscription).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+		if err != nil {
+			return err
+		}
+		return ErrTaskSubmitRefundIdentityMismatch
+	}
+	var settlement BillingSettlement
+	operationKeys := []string{billingRequestOperationPrefix + requestID + ":pre-consume", record.OperationKey, BillingTaskFinalizeOperationKey(task.ID)}
+	if err := withRowLock(tx).Select("id").Where("operation_key IN ?", operationKeys).Take(&settlement).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+		if err != nil {
+			return err
+		}
+		return ErrTaskSubmitRefundIdentityMismatch
+	}
+	return nil
+}
+
+func recordTaskSubmitFailureRecovery(record TaskSubmitFailureRecovery) (string, error) {
+	if DB == nil {
+		return "", errors.New("database is not initialized")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -158,7 +225,7 @@ func RecordTaskSubmitFailureRecoveryWithStatus(taskID int64, reason string, inpu
 			return err
 		}
 		var existing TaskSubmitFailureRecovery
-		if err := withRowLock(tx).First(&existing, "task_id = ?", taskID).Error; err != nil {
+		if err := withRowLock(tx).First(&existing, "task_id = ?", record.TaskID).Error; err != nil {
 			return err
 		}
 		if existing.refundInput() != record.refundInput() {
@@ -289,14 +356,23 @@ func processPendingTaskSubmitFailures() {
 		if ctx.Err() != nil {
 			break
 		}
-		input := record.refundInput()
-		if _, err := taskSubmitFailureRecoveryRecord(record.TaskID, record.Reason, input); err != nil {
-			updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryManual, err)
-			continue
+		var input *BillingSettlementInput
+		if record.FundingDelta == 0 {
+			if _, err := record.statusOnlyRequestID(); err != nil {
+				updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryManual, err)
+				continue
+			}
+		} else {
+			original := record.refundInput()
+			if _, err := taskSubmitFailureRecoveryRecord(record.TaskID, record.Reason, original); err != nil {
+				updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryManual, err)
+				continue
+			}
+			input = &original
 		}
 		claimCtx, cancelClaim := context.WithTimeout(ctx, 2*time.Second)
 		claimDB := DB.WithContext(claimCtx)
-		won, err := claimTaskSubmitFailureWithSettlementDB(claimDB, record.TaskID, record.Reason, &input, true)
+		won, err := claimTaskSubmitFailureWithSettlementDB(claimDB, record.TaskID, record.Reason, input, &record)
 		cancelClaim()
 		if err != nil {
 			status := TaskSubmitFailureRecoveryPending
@@ -306,6 +382,14 @@ func processPendingTaskSubmitFailures() {
 			updateTaskSubmitFailureRecovery(record, status, err)
 			continue
 		}
+		if input == nil {
+			if won {
+				updateTaskSubmitFailureRecovery(record, TaskSubmitFailureStatusRecorded, nil)
+			} else {
+				updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryManual, ErrTaskFinalizeOwned)
+			}
+			continue
+		}
 		if !won {
 			var settlement BillingSettlement
 			err := db.Where("operation_key = ?", input.OperationKey).First(&settlement).Error
@@ -313,7 +397,7 @@ func processPendingTaskSubmitFailures() {
 				updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryPending, err)
 				continue
 			}
-			if err != nil || validateBillingSettlement(settlement, input) != nil {
+			if err != nil || validateBillingSettlement(settlement, *input) != nil {
 				updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryManual, ErrTaskFinalizeOwned)
 				continue
 			}

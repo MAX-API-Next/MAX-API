@@ -304,6 +304,25 @@ func TestMarkTaskSubmitFailedWithSettlementReportsLostClaim(t *testing.T) {
 	require.Zero(t, count)
 }
 
+func TestSubmitFailureRefundRejectsTaskQuotaProjection(t *testing.T) {
+	truncateTables(t)
+	row := &Task{TaskID: "request-refund-projection", UserId: 7, Status: TaskStatusSubmitted, Quota: 20,
+		PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingSource: BillingSettlementSourceWallet, BillingRequestId: "request-refund-projection"}}
+	insertTask(t, row)
+	input := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey(row.TaskID), Source: BillingSettlementSourceWallet,
+		UserID: row.UserId, FundingDelta: -20, TaskID: row.ID, TaskQuota: 20}
+	won, err := ClaimTaskSubmitFailureWithSettlement(row.ID, "known rejection", &input)
+	require.False(t, won)
+	require.ErrorIs(t, err, ErrTaskSubmitRefundIdentityMismatch)
+	latest, err := GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, TaskStatusSubmitted, latest.Status)
+	require.Equal(t, 20, latest.Quota)
+	var intents int64
+	require.NoError(t, DB.Model(&BillingSettlement{}).Count(&intents).Error)
+	require.Zero(t, intents)
+}
+
 func TestStrictTaskLookupRetainsNullablePollingSnapshot(t *testing.T) {
 	truncateTables(t)
 	for _, changed := range []string{"", "quota", "updated_at"} {

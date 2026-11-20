@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"unicode"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
@@ -30,20 +31,24 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 		channelTable = foldTaskPluginTableName(channelTable)
 		taskTable = foldTaskPluginTableName(taskTable)
 	}
-	return db.Callback().Create().Before("gorm:before_create").Register("max:task_plugin_typed_create", func(tx *gorm.DB) {
+	if err := db.Callback().Create().Before("gorm:before_create").Register("max:task_plugin_typed_create", func(tx *gorm.DB) {
 		if tx.Statement.SkipHooks {
 			return
 		}
-		table := tx.Statement.Table
+		table, resolved := taskPluginStatementTable(tx.Statement)
 		if explicit, exists := tx.Statement.Clauses["INSERT"]; exists {
-			insert, resolved := explicit.Expression.(clause.Insert)
-			if !resolved || insert.Table.Raw || insert.Table.Alias != "" || strings.ContainsAny(insert.Table.Name, "\"`[]") {
+			insert, knownInsert := explicit.Expression.(clause.Insert)
+			if !knownInsert || insert.Table.Raw || insert.Table.Alias != "" || strings.ContainsAny(insert.Table.Name, "\"`[]") {
 				tx.AddError(taskplugin.ErrCatalogInvalid)
 				return
 			}
 			if name := insert.Table.Name; name != "" && name != clause.CurrentTable {
-				table = name[strings.LastIndexByte(name, '.')+1:]
+				table, resolved = taskPluginPlainTableName(name)
 			}
+		}
+		if !resolved {
+			tx.AddError(taskplugin.ErrCatalogInvalid)
+			return
 		}
 		if foldTableNames {
 			table = foldTaskPluginTableName(table)
@@ -71,7 +76,71 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 		if typ != guardedType || tx.Statement.Schema == nil || tx.Statement.Schema.ModelType != guardedType {
 			tx.AddError(taskplugin.ErrCatalogInvalid)
 		}
+	}); err != nil {
+		return err
+	}
+	return db.Callback().Update().Before("gorm:before_update").Register("max:task_plugin_channel_update", func(tx *gorm.DB) {
+		if tx.Statement.SkipHooks || tx.Statement.Schema != nil && tx.Statement.Schema.ModelType == channelType {
+			return
+		}
+		table, resolved := taskPluginStatementTable(tx.Statement)
+		statementTable := tx.Statement.Table
+		if foldTableNames {
+			table = foldTaskPluginTableName(table)
+			statementTable = foldTaskPluginTableName(statementTable)
+		}
+		if !resolved && statementTable == channelTable {
+			tx.AddError(taskplugin.ErrCatalogInvalid)
+			return
+		}
+		if table != channelTable {
+			return
+		}
+		if _, explicit := tx.Statement.Clauses["SET"]; explicit {
+			tx.AddError(taskplugin.ErrCatalogInvalid)
+			return
+		}
+		value := reflect.Indirect(reflect.ValueOf(tx.Statement.Dest))
+		if !value.IsValid() || value.Kind() != reflect.Map || value.Type().Key().Kind() != reflect.String {
+			tx.AddError(taskplugin.ErrCatalogInvalid)
+			return
+		}
+		for _, key := range value.MapKeys() {
+			column := key.String()
+			column = strings.Trim(column[strings.LastIndexByte(column, '.')+1:], "\"`[]")
+			switch strings.ToLower(column) {
+			case "models", "modelmapping", "model_mapping":
+				tx.AddError(taskplugin.ErrCatalogInvalid)
+				return
+			}
+		}
 	})
+}
+
+func taskPluginStatementTable(statement *gorm.Statement) (string, bool) {
+	if statement.TableExpr == nil {
+		return statement.Table, true
+	}
+	expression := statement.TableExpr
+	parts := strings.Fields(expression.SQL)
+	if len(expression.Vars) != 0 || len(parts) == 0 || len(parts) > 3 || len(parts) == 3 && !strings.EqualFold(parts[1], "AS") {
+		return "", false
+	}
+	return taskPluginPlainTableName(parts[0])
+}
+
+func taskPluginPlainTableName(name string) (string, bool) {
+	parts := strings.Split(name, ".")
+	for i, part := range parts {
+		part = strings.Trim(part, "\"`[]")
+		if part == "" || strings.ContainsFunc(part, func(r rune) bool {
+			return r != '_' && r != '$' && r != '-' && !unicode.IsLetter(r) && !unicode.IsDigit(r)
+		}) {
+			return "", false
+		}
+		parts[i] = part
+	}
+	return parts[len(parts)-1], true
 }
 
 func foldTaskPluginTableName(table string) string {
