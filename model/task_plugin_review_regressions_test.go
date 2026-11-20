@@ -659,6 +659,7 @@ func TestTaskPluginDeletionOwnsSnapshotBoundary(t *testing.T) {
 	metadata := 0
 	metadataBeforeHead := 0
 	nonlockingBeforeHead := 0
+	taskCandidates := 0
 	headLocked := false
 	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("check_deletion_read_view", func(tx *gorm.DB) {
 		if _, inTransaction := tx.Statement.ConnPool.(gorm.TxCommitter); !inTransaction {
@@ -672,20 +673,79 @@ func TestTaskPluginDeletionOwnsSnapshotBoundary(t *testing.T) {
 		}
 	}))
 	require.NoError(t, db.Callback().Row().Before("gorm:row").Register("check_metadata_snapshot_boundary", func(tx *gorm.DB) {
+		_, inTransaction := tx.Statement.ConnPool.(gorm.TxCommitter)
+		if inTransaction && tx.Statement.Table == db.NamingStrategy.TableName("Task") {
+			taskCandidates++
+			if !headLocked {
+				nonlockingBeforeHead++
+			}
+		}
 		if !strings.Contains(tx.Statement.SQL.String(), "sqlite_master") {
 			return
 		}
 		metadata++
-		if _, inTransaction := tx.Statement.ConnPool.(gorm.TxCommitter); inTransaction && !headLocked {
+		if inTransaction && !headLocked {
 			metadataBeforeHead++
 		}
 	}))
 	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
 	require.NoError(t, err)
 	require.Positive(t, metadata, "exercise real migrator metadata queries")
+	require.Positive(t, taskCandidates, "exercise the Rows query for deletion candidates")
 	require.True(t, headLocked, "deletion acquired a current-read head lock")
 	require.Zero(t, metadataBeforeHead, "schema preflight cannot establish a pre-lock read view")
 	require.Zero(t, nonlockingBeforeHead, "the first consistent read follows the catalog head lock")
+}
+
+func TestTaskPluginCatalogInheritedCASProtectsOuterTransaction(t *testing.T) {
+	for _, kind := range []string{"disabled", "canceled", "success"} {
+		t.Run(kind, func(t *testing.T) {
+			db := deletionDB(t)
+			store := NewTaskPluginCatalogStore(db)
+			_, first := catalogFixture(t, "first", "1.0.0", "first")
+			_, second := catalogFixture(t, "second", "1.0.0", "second")
+			_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{first})
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var headUpdated bool
+			require.NoError(t, db.Callback().Update().After("gorm:update").Register("observe-savepoint-head", func(tx *gorm.DB) {
+				if tx.Statement.Table == "task_plugin_catalog_heads" && tx.RowsAffected == 1 && tx.Error == nil {
+					headUpdated = true
+					if kind == "canceled" {
+						cancel()
+					}
+				}
+			}))
+			outer := db.Begin()
+			require.NoError(t, outer.Error)
+			t.Cleanup(func() { _ = outer.Rollback().Error })
+			inherited := outer.Session(&gorm.Session{DisableNestedTransaction: kind == "disabled"})
+			revision, err := NewTaskPluginCatalogStore(inherited).CompareAndSwap(ctx, 1, []taskplugin.StoredPackage{first, second})
+			switch kind {
+			case "disabled":
+				require.ErrorIs(t, err, taskplugin.ErrCatalogNotCommitted)
+				require.False(t, headUpdated)
+			case "canceled":
+				require.Error(t, err)
+				require.ErrorIs(t, ctx.Err(), context.Canceled)
+				require.True(t, headUpdated, "the provisional head write must have succeeded before cancellation")
+			case "success":
+				require.NoError(t, err)
+				require.EqualValues(t, 2, revision)
+			}
+			require.NoError(t, outer.Commit().Error)
+			current, err := store.Load(t.Context())
+			require.NoError(t, err)
+			if kind == "success" {
+				require.EqualValues(t, 2, current.Revision)
+				require.Len(t, current.Packages, 2)
+			} else {
+				require.EqualValues(t, 1, current.Revision)
+				require.Equal(t, []taskplugin.StoredPackage{first}, current.Packages)
+			}
+		})
+	}
 }
 
 func TestTaskPluginStatusOnlyUpdateIgnoresUnsavedReferences(t *testing.T) {
@@ -910,6 +970,26 @@ func TestTaskPluginPricingRejectsLostReceiptSet(t *testing.T) {
 		err = db.Transaction(func(tx *gorm.DB) error { return (&pricingAuthority{}).readCatalog(tx, lock) })
 		require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
 	}
+}
+
+func TestTaskPluginTaskReferenceRequiresPresentDeletionReceipts(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	_, removed := catalogFixture(t, "removed", "1.0.0", "removed")
+	pkg, retained := catalogFixture(t, "retained", "1.0.0", "retained")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{removed, retained})
+	require.NoError(t, err)
+	_, err = store.DeleteVersion(t.Context(), 1, "removed", "1.0.0")
+	require.NoError(t, err)
+	private := TaskPrivateData{PluginBinding: &types.TaskPluginBinding{
+		PluginKey: pkg.Manifest().Key, Version: pkg.Manifest().Version, PackageDigest: pkg.Digest(),
+	}}
+	require.NoError(t, db.Create(&Task{TaskID: "binding-before", PrivateData: private}).Error)
+	require.NoError(t, db.Where("1 = 1").Delete(&TaskPluginDeletion{}).Error)
+	_, err = store.Load(t.Context())
+	require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
+	require.ErrorIs(t, db.Create(&Task{TaskID: "binding-after", PrivateData: private}).Error, taskplugin.ErrCatalogInvalid)
+	require.NoError(t, db.Create(&Task{TaskID: "binding-free"}).Error)
 }
 
 func TestTaskPluginReferenceDigestUsesExactBytesOnCaseInsensitiveStorage(t *testing.T) {
@@ -1372,7 +1452,7 @@ func TestPricingAuthorityReusesValidatedPackageWithinSnapshot(t *testing.T) {
 }
 
 func TestTaskUpsertConflictPrivateDataUsesReferenceGuard(t *testing.T) {
-	for _, kind := range []string{"literal", "expression", "metadata", "excluded"} {
+	for _, kind := range []string{"literal", "expression", "metadata", "excluded", "raw target"} {
 		t.Run(kind, func(t *testing.T) {
 			db := deletionDB(t)
 			store := NewTaskPluginCatalogStore(db)
@@ -1393,12 +1473,16 @@ func TestTaskUpsertConflictPrivateDataUsesReferenceGuard(t *testing.T) {
 				values["private_data"] = clause.Column{Table: "excluded", Name: "private_data"}
 			}
 			candidate := &Task{ID: row.ID, TaskID: row.TaskID, PrivateData: TaskPrivateData{NodeName: "candidate"}}
-			err = db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.Assignments(values)}).Create(candidate).Error
+			assignments := clause.Assignments(values)
+			if kind == "raw target" {
+				assignments = append(assignments, clause.Assignment{Column: clause.Column{Name: "private_data", Raw: true}, Value: "{}"})
+			}
+			err = db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: assignments}).Create(candidate).Error
 			var saved Task
 			require.NoError(t, db.First(&saved, row.ID).Error)
 			if kind == "literal" {
 				require.ErrorIs(t, err, taskplugin.ErrBindingRejected)
-			} else if kind == "expression" {
+			} else if kind == "expression" || kind == "raw target" {
 				require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid)
 			} else {
 				require.NoError(t, err)

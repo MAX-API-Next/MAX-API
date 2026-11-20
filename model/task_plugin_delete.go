@@ -589,11 +589,14 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 	}
 	if conflict, ok := tx.Statement.Clauses["ON CONFLICT"].Expression.(clause.OnConflict); ok {
 		for _, assignment := range conflict.DoUpdates {
+			if assignment.Column.Raw {
+				return taskplugin.ErrCatalogInvalid
+			}
 			if !strings.EqualFold(assignment.Column.Name, "private_data") {
 				continue
 			}
 			if column, ok := assignment.Value.(clause.Column); ok {
-				if column.Table == "excluded" && strings.EqualFold(column.Name, "private_data") {
+				if !column.Raw && column.Table == "excluded" && strings.EqualFold(column.Name, "private_data") {
 					continue
 				}
 				return taskplugin.ErrCatalogInvalid
@@ -700,9 +703,15 @@ func guardTaskPluginPersistenceValue(tx *gorm.DB, task *Task, value any) error {
 	if err := tx.Model(&TaskPluginCatalogHead{}).Where("id = ?", 1).UpdateColumn("mutation_id", gorm.Expr("mutation_id")).Error; err != nil {
 		return err
 	}
-	var head TaskPluginCatalogHead
-	if err := tx.Session(&gorm.Session{NewDB: true}).Clauses(clause.Locking{Strength: "UPDATE"}).First(&head, 1).Error; err != nil {
+	head, err := taskPluginChannelHead(tx)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return taskplugin.ErrBindingRejected
+	}
+	if err != nil {
+		return err
+	}
+	if err := validateTaskPluginCurrentReceiptPresence(tx, head); err != nil {
+		return err
 	}
 	// A locking/current read matters under MySQL REPEATABLE READ: a funding
 	// transaction may have established its consistent snapshot before deletion.
@@ -790,6 +799,16 @@ func guardTaskPluginPersistenceValue(tx *gorm.DB, task *Task, value any) error {
 // writer. Only a genuinely absent optional table permits legacy bypass.
 func taskPluginDeletionTableAvailable(tx *gorm.DB) (bool, error) {
 	return taskPluginTableAvailable(tx, &TaskPluginDeletion{})
+}
+
+func validateTaskPluginCurrentReceiptPresence(tx *gorm.DB, head TaskPluginCatalogHead) error {
+	var receipt TaskPluginDeletion
+	err := tx.Session(&gorm.Session{NewDB: true}).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Select("identity").Take(&receipt).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	return validateTaskPluginDeletionPresence(head, err == nil)
 }
 
 func taskPluginTableAvailable(tx *gorm.DB, target any) (bool, error) {

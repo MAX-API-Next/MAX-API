@@ -6071,7 +6071,7 @@
     "Bind registered API extensions to channels.": "将已注册的接口扩展绑定到渠道。",
     "Disabling blocks new bindings while keeping installed files and historical tasks available.": "停用会停止向此扩展路由新任务，保留已安装文件和历史任务。渠道仍可引用其模型。",
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles, audit identity and historical revocation are retained. Re-importing the same file remains blocked.": "无任务、渠道或价格引用时可直接删除。删除会移除已安装源码，保留发行包、审计标识和历史撤销记录；仍无法重新导入原文件。",
-    "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.": "???????????????????????????????????????????????????????????????????????????????????????",
+    "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.": "没有任务、渠道或价格配置引用时可直接删除。删除会移除已安装的源码，保留发行包和审计标识。如果之后可能用到此版本，请在删除前校验原文件。重新导入时，原文件需要通过当前版本的校验。",
     "Task plugin version is still referenced; remove task, channel or pricing references before deleting": "该接口扩展版本仍被引用，暂不能删除。请先移除任务、渠道或价格配置中的引用。",
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "该接口扩展版本曾被永久撤销，请联系管理员处理历史撤销记录。",
     "Task plugin version has different content; import the original file or use a new version": "该接口扩展版本的内容与历史记录不同，请导入原始文件或使用新的版本号。",

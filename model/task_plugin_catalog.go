@@ -28,6 +28,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"math"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
@@ -346,6 +347,11 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 	if revision < 0 || revision == math.MaxInt64 {
 		return 0, taskplugin.ErrCatalogInvalid
 	}
+	db := store.db.WithContext(ctx)
+	_, inherited := db.Statement.ConnPool.(gorm.TxCommitter)
+	if inherited && db.DisableNestedTransaction {
+		return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, taskplugin.ErrCatalogUnavailable)
+	}
 	next := taskplugin.CatalogSnapshot{Revision: revision + 1, Packages: packages}
 	if err := taskplugin.ValidateStoredCatalogSnapshotContext(ctx, next); err != nil {
 		return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, err)
@@ -363,9 +369,8 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 		retained[identity] = true
 	}
 	mutationID := common.GetUUID()
-	_, inherited := store.db.Statement.ConnPool.(gorm.TxCommitter)
 	readyToCommit := false
-	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	write := func(tx *gorm.DB) error {
 		if revision == 0 {
 			head := TaskPluginCatalogHead{ID: 1, Revision: 1, MutationID: mutationID}
 			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&head).Error; err != nil {
@@ -443,7 +448,13 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 		}
 		readyToCommit = true
 		return nil
-	})
+	}
+	var err error
+	if inherited {
+		err = withTaskPluginCatalogSavepoint(db, "task_plugin_"+mutationID, write)
+	} else {
+		err = db.Transaction(write)
+	}
 	if err != nil {
 		if errors.Is(err, taskplugin.ErrCatalogConflict) || errors.Is(err, taskplugin.ErrCatalogInvalid) {
 			return 0, err
@@ -454,4 +465,35 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 		return 0, taskplugin.ErrCatalogUnavailable
 	}
 	return revision + 1, nil
+}
+
+// The savepoint name comes from the internal mutation UUID. Run cleanup with
+// time for rollback even if the CAS request expires while its outer transaction is live.
+func withTaskPluginCatalogSavepoint(db *gorm.DB, name string, write func(*gorm.DB) error) (err error) {
+	if err := db.Exec("SAVEPOINT " + name).Error; err != nil {
+		return err
+	}
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(db.Statement.Context), time.Second)
+		defer cancel()
+		cleanup := db.WithContext(ctx)
+		if cleanup.Exec("ROLLBACK TO SAVEPOINT "+name).Error != nil {
+			// An unverified rollback cannot leave the outer transaction able to
+			// commit our provisional generation.
+			_ = cleanup.Rollback().Error
+			err = taskplugin.ErrCatalogUnavailable
+		}
+	}()
+	if err = write(db); err != nil {
+		return err
+	}
+	if err = db.Statement.Context.Err(); err != nil {
+		return err
+	}
+	success = true
+	return nil
 }

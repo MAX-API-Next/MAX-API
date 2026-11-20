@@ -71,11 +71,15 @@ type unknownManagementStore struct {
 
 type installValidationStore struct {
 	memoryCatalogStore
-	writes int
+	writes    int
+	beforeCAS func()
 }
 
 func (store *installValidationStore) CompareAndSwap(ctx context.Context, revision int64, packages []StoredPackage) (int64, error) {
 	store.writes++
+	if store.beforeCAS != nil {
+		store.beforeCAS()
+	}
 	return store.memoryCatalogStore.CompareAndSwap(ctx, revision, packages)
 }
 
@@ -101,6 +105,7 @@ func TestManagementInstallPreflightIsReadOnlyAndDetectsHistoricalRestrictions(t 
 			catalog, err := OpenCatalog(t.Context(), store)
 			require.NoError(t, err)
 			before := cloneCatalogSnapshot(store.snapshot)
+			published := catalog.host.state.Load()
 			err = catalog.ValidateInstall(t.Context(), pkg)
 			if tc.want == nil {
 				require.NoError(t, err)
@@ -109,6 +114,7 @@ func TestManagementInstallPreflightIsReadOnlyAndDetectsHistoricalRestrictions(t 
 			}
 			require.Equal(t, before, store.snapshot, "preflight never changes persisted state")
 			require.Equal(t, before, catalog.snapshot, "preflight never publishes a tentative active version")
+			require.Same(t, published, catalog.host.state.Load(), "runtime must retain its authoritative generation")
 			require.Zero(t, store.writes)
 		})
 	}
@@ -119,6 +125,25 @@ func TestManagementInstallPreflightIsReadOnlyAndDetectsHistoricalRestrictions(t 
 	require.NoError(t, catalog.Install(t.Context(), pkg))
 	require.ErrorIs(t, catalog.MutateExpected(t.Context(), 0, ManagementMutation{Action: "install", Package: pkg}), ErrCatalogConflict, "a successful preflight does not bypass write CAS")
 	require.Equal(t, 1, store.writes)
+}
+
+func TestManagementInstallConflictsWithCommitAfterRead(t *testing.T) {
+	pkg := testPackage(t, validManifest(), "candidate")
+	otherManifest := validManifest()
+	otherManifest.Key = "concurrent-extension"
+	other := testPackage(t, otherManifest, "concurrent source")
+	winner := CatalogSnapshot{Revision: 1, Packages: []StoredPackage{
+		{Document: other.Document(), Digest: other.Digest(), Active: true, Enabled: true},
+	}}
+	store := &installValidationStore{}
+	catalog, err := OpenCatalog(t.Context(), store)
+	require.NoError(t, err)
+	store.beforeCAS = func() { store.snapshot = cloneCatalogSnapshot(winner) }
+	err = catalog.MutateExpected(t.Context(), 0, ManagementMutation{Action: "install", Package: pkg})
+	require.ErrorIs(t, err, ErrCatalogConflict)
+	require.Equal(t, 1, store.writes, "the conflict must come from the store CAS")
+	require.Equal(t, winner, store.snapshot)
+	require.Nil(t, catalog.host.state.Load())
 }
 
 func (s *unknownManagementStore) CompareAndSwap(ctx context.Context, r int64, p []StoredPackage) (int64, error) {
@@ -626,6 +651,7 @@ func TestManagementDeletionRefreshCancellationIsNotCommitted(t *testing.T) {
 	require.NoError(t, err)
 	pkg := testPackage(t, validManifest(), "source")
 	require.NoError(t, catalog.Install(t.Context(), pkg))
+	published := catalog.host.state.Load()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	store.onLoad = func(int) { cancel() }
@@ -633,7 +659,7 @@ func TestManagementDeletionRefreshCancellationIsNotCommitted(t *testing.T) {
 	err = catalog.MutateExpected(ctx, 1, ManagementMutation{Action: "delete", Key: manifest.Key, Version: manifest.Version})
 	require.ErrorIs(t, err, context.Canceled)
 	require.ErrorIs(t, err, ErrCatalogNotCommitted)
-	require.Nil(t, catalog.host.state.Load(), "refresh preserves its fail-closed decision")
+	require.Same(t, published, catalog.host.state.Load(), "unchanged completed read preserves the healthy publication")
 	require.Len(t, store.snapshot.Packages, 1)
 	require.EqualValues(t, 1, store.snapshot.Revision)
 
@@ -691,17 +717,18 @@ func TestRefreshReusesOnlyCurrentlyPublishedIdenticalGeneration(t *testing.T) {
 	}
 }
 
-func TestCatalogRefreshDoesNotReuseSnapshotWhenComparisonIsCanceled(t *testing.T) {
+func TestCatalogRefreshKeepsMatchingSnapshotWhenComparisonIsCanceled(t *testing.T) {
 	store := &memoryCatalogStore{}
 	catalog, err := OpenCatalog(t.Context(), store)
 	require.NoError(t, err)
 	pkg := testPackage(t, validManifest(), "validated-source")
 	require.NoError(t, catalog.Install(t.Context(), pkg))
-	require.NotNil(t, catalog.host.state.Load())
+	published := catalog.host.state.Load()
+	require.NotNil(t, published)
 	ctx := newCancelAfterCatalogRead(t)
 	store.onLoad = func(int) { ctx.armed = true }
 	require.ErrorIs(t, catalog.Refresh(ctx), context.Canceled)
-	require.Nil(t, catalog.host.state.Load())
+	require.Same(t, published, catalog.host.state.Load())
 	store.onLoad = nil
 	require.NoError(t, catalog.Refresh(t.Context()))
 	require.NotNil(t, catalog.host.state.Load())

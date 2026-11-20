@@ -323,6 +323,76 @@ func TestSubmitFailureRefundRejectsTaskQuotaProjection(t *testing.T) {
 	require.Zero(t, intents)
 }
 
+func TestSubmitFailureClaimAcceptsOnlyRefundDirection(t *testing.T) {
+	truncateTables(t)
+	row := &Task{TaskID: "request-refund-direction", UserId: 7, Status: TaskStatusSubmitted, Quota: 20,
+		PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingSource: BillingSettlementSourceWallet, BillingRequestId: "request-refund-direction", TokenId: 8}}
+	insertTask(t, row)
+	input := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey(row.TaskID), Source: BillingSettlementSourceWallet,
+		UserID: row.UserId, TokenID: 8}
+	for _, deltas := range [][2]int64{{20, 0}, {0, 0}, {-20, 1}} {
+		input.FundingDelta, input.TokenDelta = deltas[0], deltas[1]
+		won, err := ClaimTaskSubmitFailureWithSettlement(row.ID, "definite rejection", &input)
+		require.False(t, won)
+		require.ErrorIs(t, err, ErrBillingSettlementOperationConflict)
+	}
+	var intents int64
+	require.NoError(t, DB.Model(&BillingSettlement{}).Count(&intents).Error)
+	require.Zero(t, intents)
+	latest, err := GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, TaskStatusSubmitted, latest.Status)
+	require.Equal(t, 20, latest.Quota)
+	input.FundingDelta, input.TokenDelta = -20, -20
+	won, err := ClaimTaskSubmitFailureWithSettlement(row.ID, "definite rejection", &input)
+	require.NoError(t, err)
+	require.True(t, won)
+	var refund BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", input.OperationKey).Take(&refund).Error)
+	require.EqualValues(t, -20, refund.FundingDelta)
+	require.EqualValues(t, -20, refund.TokenDelta)
+}
+
+func TestTaskTerminalSettlementIntentChecksObservedQuota(t *testing.T) {
+	for _, change := range []string{"unchanged", "same-version quota", "NULL quota becomes zero"} {
+		t.Run(change, func(t *testing.T) {
+			truncateTables(t)
+			row := &Task{TaskID: "settlement-quota-cas", Status: TaskStatusInProgress, UserId: 7, Quota: 20}
+			insertTask(t, row)
+			if change == "NULL quota becomes zero" {
+				require.NoError(t, DB.Model(row).UpdateColumn("quota", nil).Error)
+			}
+			observed, err := GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, err)
+			switch change {
+			case "same-version quota":
+				require.NoError(t, DB.Model(row).UpdateColumn("quota", 10).Error)
+			case "NULL quota becomes zero":
+				require.NoError(t, DB.Model(row).UpdateColumn("quota", 0).Error)
+			}
+			observed.PrivateData.PendingTerminalStatus = TaskStatusSuccess
+			key := BillingTaskFinalizeOperationKey(row.ID)
+			won, err := observed.UpdateWithStatusAndSettlementIntent(observed.Status, observed.UpdatedAt, BillingSettlementInput{
+				OperationKey: key, UserID: row.UserId, Source: BillingSettlementSourceWallet,
+				TaskID: row.ID, TaskQuota: int64(observed.Quota), TaskQuotaTarget: int64(observed.Quota),
+			})
+			require.NoError(t, err)
+			latest, err := GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, err)
+			_, found, err := GetBillingSettlementStatus(key)
+			require.NoError(t, err)
+			require.Equal(t, change == "unchanged", won)
+			require.Equal(t, won, found)
+			if won {
+				require.EqualValues(t, TaskStatusSuccess, latest.PrivateData.PendingTerminalStatus)
+			} else {
+				require.Empty(t, latest.PrivateData.PendingTerminalStatus)
+				require.Equal(t, observed.UpdatedAt, latest.UpdatedAt)
+			}
+		})
+	}
+}
+
 func TestStrictTaskLookupRetainsNullablePollingSnapshot(t *testing.T) {
 	truncateTables(t)
 	for _, changed := range []string{"", "quota", "updated_at"} {

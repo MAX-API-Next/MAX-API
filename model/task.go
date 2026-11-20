@@ -1121,9 +1121,8 @@ func (t *Task) UpdateWithStatusAndSettlementIntent(fromStatus TaskStatus, expect
 		if !t.preserveDataOnStatusUpdate && (t.Data != nil || t.includeDataInUpdate) {
 			updates["data"] = t.Data
 		}
-		result := tx.Model(&Task{ID: t.ID}).
-			Where("id = ? AND status = ? AND updated_at = ?", t.ID, fromStatus, expectedUpdatedAt).
-			Updates(updates)
+		query := tx.Model(&Task{ID: t.ID}).Where("id = ? AND status = ?", t.ID, fromStatus)
+		result := t.whereQuotaSnapshot(t.whereTimestampSnapshot(query, expectedUpdatedAt)).Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -1139,6 +1138,7 @@ func (t *Task) UpdateWithStatusAndSettlementIntent(fromStatus TaskStatus, expect
 		return false, err
 	}
 	t.UpdatedAt = updatedAt
+	t.updatedAtWasNull = false
 	return true, nil
 }
 
@@ -1286,22 +1286,38 @@ func ClaimTaskSubmitFailure(taskID int64, reason string) (bool, error) {
 // The request-refund intent and terminal claim commit together. The caller may
 // apply the existing operation after commit; a crash leaves durable recovery.
 func ClaimTaskSubmitFailureWithSettlement(taskID int64, reason string, input *BillingSettlementInput) (bool, error) {
-	return claimTaskSubmitFailureWithSettlementDB(DB, taskID, reason, input, nil)
+	return claimTaskSubmitFailureWithSettlementDB(DB, taskID, reason, input, nil, false)
 }
 
 func ClaimTaskSubmitFailureWithSettlementContext(ctx context.Context, taskID int64, reason string, input *BillingSettlementInput) (bool, error) {
 	if DB == nil {
 		return false, errors.New("database is not initialized")
 	}
-	return claimTaskSubmitFailureWithSettlementDB(DB.WithContext(ctx), taskID, reason, input, nil)
+	return claimTaskSubmitFailureWithSettlementDB(DB.WithContext(ctx), taskID, reason, input, nil, false)
 }
 
-func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason string, input *BillingSettlementInput, journalReplay *TaskSubmitFailureRecovery) (bool, error) {
+func ClaimTaskSubmitFailureStatusContext(ctx context.Context, taskID int64, requestID, reason string, userID, tokenID int) (bool, error) {
+	if DB == nil {
+		return false, errors.New("database is not initialized")
+	}
+	record, err := taskSubmitFailureStatusRecoveryRecord(taskID, requestID, reason, userID, tokenID)
+	if err != nil {
+		return false, err
+	}
+	return claimTaskSubmitFailureWithSettlementDB(DB.WithContext(ctx), taskID, record.Reason, nil, &record, false)
+}
+
+func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason string, input *BillingSettlementInput, recovery *TaskSubmitFailureRecovery, journalReplay bool) (bool, error) {
 	if taskID <= 0 {
 		return false, nil
 	}
 	if db == nil {
 		return false, errors.New("database is not initialized")
+	}
+	if input != nil {
+		if err := validateTaskSubmitFailureRefundShape(*input); err != nil {
+			return false, err
+		}
 	}
 	reason = common.SanitizePersistedLogContent(reason)
 	if common.UsingSQLite {
@@ -1311,7 +1327,7 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 	won := false
-	statusOnly := journalReplay != nil && input == nil
+	statusOnly := recovery != nil && input == nil
 	claim := func(tx *gorm.DB) error {
 		if tx.Dialector.Name() == "sqlite" {
 			// Reserve the WAL writer before any read establishes a snapshot.
@@ -1332,21 +1348,21 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 			var journal TaskSubmitFailureRecovery
 			err := withRowLock(tx).Where("task_id = ?", taskID).Take(&journal).Error
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				if journalReplay != nil {
+				if journalReplay {
 					return nil
 				}
 			} else if err != nil {
 				return err
 			} else {
 				if journal.Status != TaskSubmitFailureRecoveryPending {
-					if journalReplay == nil && journal.Status == TaskSubmitFailureRecoveryManual {
+					if !journalReplay && journal.Status == TaskSubmitFailureRecoveryManual {
 						return ErrTaskSubmitFailureRecoveryRequiresReview
 					}
 					return nil
 				}
 				var observed BillingSettlementInput
-				if journalReplay != nil {
-					observed = journalReplay.refundInput()
+				if recovery != nil {
+					observed = recovery.refundInput()
 				} else {
 					observed = *input
 					observed.TokenKey = ""
@@ -1357,7 +1373,7 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 			}
 		}
 		if statusOnly {
-			if err := verifyTaskSubmitFailureStatusOnly(tx, task, *journalReplay); err != nil {
+			if err := verifyTaskSubmitFailureStatusOnly(tx, task, *recovery); err != nil {
 				return err
 			}
 			if task.Status == TaskStatusFailure && !task.SubmitTimeoutRetainedFunding && task.FailReason == reason {
@@ -1368,14 +1384,11 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 		unprojectedRetry := task.PrivateData.AwaitingUpstreamID &&
 			task.Quota == 0 && task.PrivateData.BillingSource == "" && task.PrivateData.SubscriptionId == 0
 		lateRejection := task.Status == TaskStatusFailure && task.SubmitTimeoutRetainedFunding &&
-			task.PrivateData.AwaitingUpstreamID && (task.Quota > 0 || unprojectedRetry) && input != nil
+			task.PrivateData.AwaitingUpstreamID && (task.Quota > 0 || unprojectedRetry) && (input != nil || statusOnly)
 		if task.Status == TaskStatusSuccess || task.Status == TaskStatusFailure && !lateRejection || task.PrivateData.UpstreamTaskID != "" {
 			return nil
 		}
 		if input != nil {
-			if err := validateBillingSettlementInput(*input); err != nil {
-				return err
-			}
 			if input.UserID != task.UserId || input.TokenID != task.PrivateData.TokenId || task.PrivateData.BillingRequestId == "" ||
 				input.OperationKey != BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId) ||
 				input.TaskID != 0 || input.TaskQuota != 0 || input.TaskQuotaTarget != 0 {
@@ -1385,7 +1398,7 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 				return ErrTaskSubmitRefundIdentityMismatch
 			}
 		}
-		if lateRejection || unprojectedRetry && input != nil {
+		if input != nil && (lateRejection || unprojectedRetry) {
 			if _, err := taskSubmitFailureRecoveryRecord(taskID, reason, *input); err != nil {
 				return err
 			}

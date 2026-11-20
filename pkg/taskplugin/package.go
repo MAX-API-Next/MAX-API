@@ -27,6 +27,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -162,7 +164,7 @@ func validPackageFields(data []byte) bool {
 	if err != nil || opening != json.Delim('{') {
 		return false
 	}
-	fields, err := readUniquePackageFields(decoder, opening)
+	fields, err := readUniquePackageFields(decoder, opening, reflect.TypeFor[PackageDocument]())
 	if err != nil || len(fields) != 3 || !fields["format_version"] || !fields["manifest"] || !fields["source"] {
 		return false
 	}
@@ -170,12 +172,16 @@ func validPackageFields(data []byte) bool {
 	return err == io.EOF
 }
 
-func readUniquePackageFields(decoder *json.Decoder, opening json.Token) (map[string]bool, error) {
+func readUniquePackageFields(decoder *json.Decoder, opening json.Token, valueType reflect.Type) (map[string]bool, error) {
 	var fields map[string]bool
+	var childType reflect.Type
 	switch opening {
 	case json.Delim('{'):
 		fields = make(map[string]bool)
 	case json.Delim('['):
+		if valueType != nil && valueType.Kind() == reflect.Slice {
+			childType = valueType.Elem()
+		}
 	default:
 		return nil, nil
 	}
@@ -183,21 +189,47 @@ func readUniquePackageFields(decoder *json.Decoder, opening json.Token) (map[str
 		if fields != nil {
 			token, err := decoder.Token()
 			key, ok := token.(string)
-			if err != nil || !ok || fields[key] {
+			if err != nil || !ok {
 				return nil, errors.New("invalid or repeated package JSON member")
 			}
-			fields[key] = true
+			var name string
+			name, childType = packageJSONField(valueType, key)
+			if fields[name] || valueType == reflect.TypeFor[PackageDocument]() && name != key {
+				return nil, errors.New("invalid or repeated package JSON member")
+			}
+			fields[name] = true
 		}
 		token, err := decoder.Token()
 		if err != nil {
 			return nil, err
 		}
-		if _, err := readUniquePackageFields(decoder, token); err != nil {
+		if _, err := readUniquePackageFields(decoder, token, childType); err != nil {
 			return nil, err
 		}
 	}
 	_, err := decoder.Token()
 	return fields, err
+}
+
+func packageJSONField(valueType reflect.Type, key string) (string, reflect.Type) {
+	if valueType == nil {
+		return key, nil
+	}
+	if valueType.Kind() == reflect.Map {
+		return key, valueType.Elem()
+	}
+	if valueType.Kind() == reflect.Struct {
+		for field := range valueType.Fields() {
+			name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+			if name == "" {
+				name = field.Name
+			}
+			if name != "-" && strings.EqualFold(key, name) {
+				return name, field.Type
+			}
+		}
+	}
+	return key, nil
 }
 
 func (p *Package) Manifest() Manifest { return cloneManifest(p.manifest) }

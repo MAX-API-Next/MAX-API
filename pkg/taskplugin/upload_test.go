@@ -32,6 +32,24 @@ func TestPinnedPackageRejectsRepeatedJSONMembers(t *testing.T) {
 	}
 }
 
+func TestPackageFieldAliasesRetainLegacyInterpretation(t *testing.T) {
+	const envelope = `{"format_version":1,"manifest":{"APIVersion":1,"Key":"aliases","Name":"First","name":"Second","Version":"1.0.0","Models":["model"]},"source":"source"}`
+	raw := []byte(envelope)
+	digest := fmt.Sprintf("%x", sha256.Sum256(raw))
+	_, err := LoadPackage(bytes.NewReader(raw), digest)
+	require.ErrorContains(t, err, "repeated")
+	_, err = LoadUpload(bytes.NewReader(raw), "")
+	require.ErrorContains(t, err, "repeated")
+	retained, err := (StoredPackage{Document: raw, Digest: digest}).LoadRetainedPackage(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "Second", retained.Manifest().Name)
+	require.Equal(t, raw, retained.Document())
+	const fields = `{"format_version":1,"manifest":{"UsageSchema":{"field":{"Type":"number"},"Field":{"Type":"number"}}},"source":"source"}`
+	require.True(t, validPackageFields([]byte(fields)), "map keys retain their case-sensitive identity")
+	const nested = `{"format_version":1,"manifest":{"UsageSchema":{"field":{"Type":"number","type":"boolean"}}},"source":"source"}`
+	require.False(t, validPackageFields([]byte(nested)), "typed fields within schema maps still have one assignment")
+}
+
 func TestFormatOneUploadUsesLegacyReaderNumberRange(t *testing.T) {
 	const document = `{"format_version":1,"manifest":{"APIVersion":1,"Key":"range-check","Name":"Range Check","Version":"1.0.0","Models":["model"],"future":[{"counter":%s}]},"source":"source"}`
 	tolerated := fmt.Sprintf(document, "1e308")

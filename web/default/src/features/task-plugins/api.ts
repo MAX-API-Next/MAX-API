@@ -97,7 +97,13 @@ function classifyRequestError(
   if (
     write &&
     status === 503 &&
-    z.object({ committed: z.literal(false) }).safeParse(payload).success
+    z
+      .object({
+        success: z.literal(false),
+        code: z.literal('catalog_operation_not_committed'),
+        committed: z.literal(false),
+      })
+      .safeParse(payload).success
   )
     return 'rejected'
   if (status === 409) return 'conflict'
@@ -179,10 +185,7 @@ async function request<T>(
       const status = error.response?.status
       const message: unknown = error.response?.data?.message
       const kind = classifyRequestError(status, write, error.response?.data)
-      const knownNoCommit =
-        kind === 'rejected' &&
-        status === 503 &&
-        error.response?.data?.code === 'catalog_operation_not_committed'
+      const knownNoCommit = kind === 'rejected' && status === 503
       let fallback = 'Task plugin request failed'
       if (knownNoCommit)
         fallback =

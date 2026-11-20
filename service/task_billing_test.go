@@ -736,7 +736,7 @@ func TestPollingProgressPreservesUnknownTextReference(t *testing.T) {
 	}
 	var stored []byte
 	require.NoError(t, model.DB.Model(row).Select("private_data").Row().Scan(&stored))
-	require.Contains(t, string(stored), "extension_history")
+	require.Equal(t, raw, stored)
 	require.Equal(t, "50%", loaded.Progress)
 	require.Positive(t, taskWrites)
 	require.Zero(t, privateWrites, "progress-only polling omits the unchanged private column")

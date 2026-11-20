@@ -274,7 +274,7 @@ func TestSubmitFailureClaimHonorsDeadlineWhileWaitingForSQLiteWriters(t *testing
 			ctx, cancel := context.WithTimeout(t.Context(), deadline)
 			defer cancel()
 			start := time.Now()
-			won, err := claimTaskSubmitFailureWithSettlementDB(db.WithContext(ctx), row.ID, "known rejection", nil, nil)
+			won, err := claimTaskSubmitFailureWithSettlementDB(db.WithContext(ctx), row.ID, "known rejection", nil, nil, false)
 			if lock == "process" {
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 			} else {
@@ -293,7 +293,7 @@ func TestSubmitFailureClaimHonorsDeadlineWhileWaitingForSQLiteWriters(t *testing
 			require.Equal(t, 5000, busy, "ordinary pool configuration must be preserved")
 			finish()
 			<-released
-			won, err = claimTaskSubmitFailureWithSettlementDB(db.WithContext(t.Context()), row.ID, "known rejection", nil, nil)
+			won, err = claimTaskSubmitFailureWithSettlementDB(db.WithContext(t.Context()), row.ID, "known rejection", nil, nil, false)
 			require.NoError(t, err)
 			require.True(t, won)
 			require.NoError(t, db.First(&stored, row.ID).Error)

@@ -80,10 +80,24 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 		return err
 	}
 	return db.Callback().Update().Before("gorm:before_update").Register("max:task_plugin_channel_update", func(tx *gorm.DB) {
-		if tx.Statement.SkipHooks || tx.Statement.Schema != nil && tx.Statement.Schema.ModelType == channelType {
+		if tx.Statement.SkipHooks {
 			return
 		}
 		table, resolved := taskPluginStatementTable(tx.Statement)
+		if explicit, exists := tx.Statement.Clauses["UPDATE"]; exists {
+			update, known := explicit.Expression.(clause.Update)
+			if !known || update.Table.Raw || update.Table.Alias != "" || strings.ContainsAny(update.Table.Name, "\"\x60[]") {
+				tx.AddError(taskplugin.ErrCatalogInvalid)
+				return
+			}
+			if name := update.Table.Name; name != "" && name != clause.CurrentTable {
+				table, resolved = taskPluginPlainTableName(name)
+				if !resolved {
+					tx.AddError(taskplugin.ErrCatalogInvalid)
+					return
+				}
+			}
+		}
 		statementTable := tx.Statement.Table
 		if foldTableNames {
 			table = foldTaskPluginTableName(table)
@@ -94,6 +108,9 @@ func registerTaskPluginTypedCreateGuard(db *gorm.DB) error {
 			return
 		}
 		if table != channelTable {
+			return
+		}
+		if tx.Statement.Schema != nil && tx.Statement.Schema.ModelType == channelType {
 			return
 		}
 		if _, explicit := tx.Statement.Clauses["SET"]; explicit {

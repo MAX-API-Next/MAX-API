@@ -50,6 +50,47 @@ func (s *failingMidjourneyBillingSettler) PrepareRefundSettlement() (*model.Bill
 	return nil, nil
 }
 
+func TestMidjourneyFreeRejectionRetainsJournalIdentity(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/midjourney-rejection.db"), &gorm.Config{})
+	require.NoError(t, err)
+	pool, err := db.DB()
+	require.NoError(t, err)
+	previous, sqliteBackend := model.DB, common.UsingSQLite
+	model.DB, common.UsingSQLite = db, true
+	t.Cleanup(func() {
+		model.DB, common.UsingSQLite = previous, sqliteBackend
+		_ = pool.Close()
+	})
+	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.BillingSettlement{},
+		&model.BillingPreConsumeSelection{}, &model.SubscriptionPreConsumeRecord{}))
+	row := &model.Task{TaskID: "mj-free-rejection", UserId: 71, Status: model.TaskStatusSubmitted,
+		PrivateData: model.TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: "mj-free-request", TokenId: 72}}
+	require.NoError(t, db.Create(row).Error)
+	const hook = "synthetic:skip-midjourney-task-write"
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register(hook, func(tx *gorm.DB) {
+		if tx.Statement.Table == "tasks" {
+			_ = tx.AddError(errors.New("synthetic task write failure"))
+		}
+	}))
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	relayInfo := &relaycommon.RelayInfo{RequestId: row.PrivateData.BillingRequestId, UserId: row.UserId, TokenId: 72,
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: row.ID + 5}}
+	failMidjourneySubmission(c, relayInfo, row, "definite free rejection")
+	require.NoError(t, db.Callback().Update().Remove(hook))
+	require.Equal(t, row.ID+5, relayInfo.PersistedTaskID)
+	var recovery model.TaskSubmitFailureRecovery
+	require.NoError(t, db.Where("task_id = ?", row.ID).Take(&recovery).Error)
+	require.Equal(t, model.TaskSubmitFailureRecoveryPending, recovery.Status)
+	require.Equal(t, model.BillingRequestFinalizeOperationKey(relayInfo.RequestId), recovery.OperationKey)
+	require.Equal(t, relayInfo.UserId, recovery.UserID)
+	require.Equal(t, relayInfo.TokenId, recovery.TokenID)
+	require.Zero(t, recovery.FundingDelta)
+	model.ProcessPendingBillingSettlementsOnce()
+	recovered, err := model.GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, model.TaskStatusFailure, recovered.Status)
+}
+
 func TestWriteMidjourneyStatusCodeUsesChannelMapping(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

@@ -98,6 +98,25 @@ func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
 	require.Nil(t, tryRealtimeFetch(terminal, false))
 	require.Equal(t, before, providerCalls.Load())
 	require.EqualValues(t, model.TaskStatusFailure, terminal.Status)
+
+	require.NoError(t, db.Model(stored).UpdateColumns(map[string]any{
+		"status": model.TaskStatusInProgress, "private_data": `{"upstream_task_id":42}`,
+	}).Error)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/video/status", nil)
+	c.Set("task_id", stored.TaskID)
+	c.Set("id", stored.UserId)
+	publicResponse, taskErr := videoFetchByIDRespBodyBuilder(c)
+	require.Nil(t, taskErr)
+	var public dto.TaskResponse[dto.TaskDto]
+	require.NoError(t, common.Unmarshal(publicResponse, &public))
+	require.Equal(t, stored.TaskID, public.Data.TaskID)
+	require.EqualValues(t, model.TaskStatusInProgress, public.Data.Status)
+	require.Equal(t, "80%", public.Data.Progress)
+	require.Empty(t, public.Data.ResultURL)
+	require.Equal(t, before, providerCalls.Load(), "unreadable private metadata cannot dispatch")
+	_, _, err = model.GetByTaskId(stored.UserId, stored.TaskID)
+	require.Error(t, err, "the strict billing lookup rejects the same broken private data")
 }
 
 func placeholderSnapshotInQuery(tx *gorm.DB) *model.Task {

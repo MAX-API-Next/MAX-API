@@ -177,9 +177,9 @@ func (catalog *Catalog) refreshLocked(ctx context.Context) error {
 	return catalog.refreshLockedForRead(ctx, false)
 }
 
-// Only upload preflight may preserve an unchanged published generation when
-// its own read budget expires. Never restore state after a conflict or ignore
-// an authoritative invalid/changed generation or an unknown write outcome.
+// A completed read may preserve an unchanged publication if the caller's
+// budget expires. Upload preflight also preserves it for an unobserved
+// cancellation. Conflicts and changed observations still suspend the Host.
 func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool) error {
 	if err := managementContextError(ctx); err != nil {
 		return err
@@ -215,7 +215,8 @@ func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool
 		changed := observed && (observation.Revision != catalog.snapshot.Revision ||
 			observation.Snapshot != nil && !sameCatalogSnapshot(*observation.Snapshot, catalog.snapshot) ||
 			observation.Packages != nil && !sameCatalogSnapshot(CatalogSnapshot{Packages: *observation.Packages}, CatalogSnapshot{Packages: catalog.snapshot.Packages}))
-		if !preflight || ctx.Err() == nil || changed || errors.Is(err, ErrCatalogInvalid) || err == nil && !sameCatalogSnapshot(snapshot, catalog.snapshot) {
+		confirmedCurrent := err == nil && snapshot.Revision >= catalog.highestObservedRevision && sameCatalogSnapshot(snapshot, catalog.snapshot)
+		if !confirmedCurrent && (!preflight || ctx.Err() == nil || changed || errors.Is(err, ErrCatalogInvalid) || err == nil) {
 			catalog.host.state.Store(nil)
 		}
 		if ctx.Err() == nil && errors.Is(err, ErrCatalogInvalid) {
@@ -231,9 +232,8 @@ func (catalog *Catalog) refreshLockedForRead(ctx context.Context, preflight bool
 		same := sameCatalogSnapshotContext(ctx, snapshot, catalog.snapshot)
 		if err := ctx.Err(); err != nil {
 			catalog.observeRevision(snapshot.Revision)
-			// An interrupted comparison is inconclusive. Upload preflight may
-			// recheck the already-observed bytes, without I/O or compilation.
-			if !preflight || !sameCatalogSnapshot(snapshot, catalog.snapshot) {
+			// Recheck the completed read without I/O or compilation.
+			if !sameCatalogSnapshot(snapshot, catalog.snapshot) {
 				catalog.host.state.Store(nil)
 			}
 			return errors.Join(ErrCatalogUnavailable, err)

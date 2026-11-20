@@ -418,3 +418,55 @@ func TestFreeTaskDefiniteRejectionRecoversStatusWithoutRefund(t *testing.T) {
 		})
 	}
 }
+
+func TestFreeTaskDefiniteRejectionAfterTimeout(t *testing.T) {
+	for _, mode := range []string{"direct", "replayed", "funded"} {
+		t.Run(mode, func(t *testing.T) {
+			isolateTaskPluginBillingDatabase(t)
+			request := "late-free-" + mode
+			row := &model.Task{TaskID: request, Status: model.TaskStatusFailure, UserId: 71,
+				SubmitTimeoutRetainedFunding: true, FinishTime: 99, FailReason: "unknown outcome",
+				PrivateData: model.TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: request, TokenId: 72}}
+			require.NoError(t, model.DB.Create(row).Error)
+			require.NoError(t, model.DB.Model(row).UpdateColumn("quota", nil).Error)
+			if mode == "funded" {
+				require.NoError(t, model.DB.Create(&model.BillingPreConsumeSelection{
+					RequestID: request, UserID: 71, TokenID: 72, Source: model.BillingSettlementSourceWallet, EffectiveQuota: 10,
+				}).Error)
+			}
+			const reason = "definite late rejection"
+			if mode == "direct" {
+				ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+				info := &relaycommon.RelayInfo{RequestId: request, UserId: 71, TokenId: 72,
+					TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: row.ID}}
+				CleanupDefiniteTaskSubmitFailure(ctx, info, reason)
+			} else {
+				status, err := model.RecordTaskSubmitFailureStatusRecovery(row.ID, request, reason, 71, 72)
+				require.NoError(t, err)
+				require.Equal(t, model.TaskSubmitFailureRecoveryPending, status)
+				model.ProcessPendingBillingSettlementsOnce()
+				model.ProcessPendingBillingSettlementsOnce()
+				var journal model.TaskSubmitFailureRecovery
+				require.NoError(t, model.DB.First(&journal, "task_id = ?", row.ID).Error)
+				if mode == "funded" {
+					require.Equal(t, model.TaskSubmitFailureRecoveryManual, journal.Status)
+				} else {
+					require.Equal(t, model.TaskSubmitFailureStatusRecorded, journal.Status)
+				}
+			}
+			stored, err := model.GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, err)
+			require.EqualValues(t, model.TaskStatusFailure, stored.Status)
+			require.EqualValues(t, 99, stored.FinishTime)
+			require.Equal(t, mode == "funded", stored.SubmitTimeoutRetainedFunding)
+			if mode == "funded" {
+				require.Equal(t, "unknown outcome", stored.FailReason)
+			} else {
+				require.Equal(t, reason, stored.FailReason)
+			}
+			var settlements int64
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Count(&settlements).Error)
+			require.Zero(t, settlements)
+		})
+	}
+}

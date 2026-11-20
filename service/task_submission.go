@@ -39,7 +39,11 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 		var err error
 		claimCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		for attempt := 0; attempt < 3; attempt++ {
-			won, err = model.ClaimTaskSubmitFailureWithSettlementContext(claimCtx, info.PersistedTaskID, reason, intent)
+			if info.Billing == nil {
+				won, err = model.ClaimTaskSubmitFailureStatusContext(claimCtx, info.PersistedTaskID, info.RequestId, reason, info.UserId, info.TokenId)
+			} else {
+				won, err = model.ClaimTaskSubmitFailureWithSettlementContext(claimCtx, info.PersistedTaskID, reason, intent)
+			}
 			if err == nil || claimCtx.Err() != nil || errors.Is(err, model.ErrTaskSubmitRefundIdentityMismatch) || errors.Is(err, model.ErrBillingSettlementOperationConflict) || errors.Is(err, model.ErrTaskSubmitFailureRecoveryRequiresReview) {
 				break
 			}

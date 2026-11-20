@@ -257,7 +257,24 @@ test('mutations classify conflicts and unknown receipts without retrying', async
 
 test('only explicit not-committed 503 responses reject a mutation safely', async () => {
   for (const [payload, kind] of [
-    [{ committed: false }, 'rejected'],
+    [{ code: 'catalog_operation_not_committed', committed: false }, 'rejected'],
+    [
+      {
+        code: 'catalog_operation_not_committed',
+        success: true,
+        committed: false,
+      },
+      'unknown',
+    ],
+    [
+      {
+        code: 'catalog_operation_not_committed',
+        success: undefined,
+        committed: false,
+      },
+      'unknown',
+    ],
+    [{ committed: false }, 'unknown'],
     [{ committed: true }, 'unknown'],
     [{ committed: 'false' }, 'unknown'],
     [{}, 'unknown'],

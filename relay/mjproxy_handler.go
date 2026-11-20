@@ -314,6 +314,9 @@ func failMidjourneySubmission(c *gin.Context, info *relaycommon.RelayInfo, task 
 	// Use the actual persisted task without changing the caller's relay metadata.
 	failureInfo := &relaycommon.RelayInfo{
 		Billing:       info.Billing,
+		RequestId:     info.RequestId,
+		UserId:        info.UserId,
+		TokenId:       info.TokenId,
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: task.ID},
 	}
 	service.CleanupDefiniteTaskSubmitFailure(c, failureInfo, reason)

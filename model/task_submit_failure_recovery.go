@@ -61,11 +61,10 @@ func (record TaskSubmitFailureRecovery) refundInput() BillingSettlementInput {
 
 func taskSubmitFailureRecoveryRecord(taskID int64, reason string, input BillingSettlementInput) (TaskSubmitFailureRecovery, error) {
 	input.TokenKey = "" // Existing settlement replay resolves cache identity by ID.
-	if taskID <= 0 || input.FundingDelta >= 0 || input.TokenDelta > 0 ||
-		!strings.HasPrefix(input.OperationKey, billingRequestOperationPrefix) || !strings.HasSuffix(input.OperationKey, billingRequestFinalizeSuffix) {
+	if taskID <= 0 {
 		return TaskSubmitFailureRecovery{}, ErrBillingSettlementOperationConflict
 	}
-	if err := validateBillingSettlementInput(input); err != nil {
+	if err := validateTaskSubmitFailureRefundShape(input); err != nil {
 		return TaskSubmitFailureRecovery{}, err
 	}
 	reasonRunes := []rune(common.SanitizePersistedLogContent(reason))
@@ -81,6 +80,14 @@ func taskSubmitFailureRecoveryRecord(taskID int64, reason string, input BillingS
 		return TaskSubmitFailureRecovery{}, ErrBillingSettlementOperationConflict
 	}
 	return record, nil
+}
+
+func validateTaskSubmitFailureRefundShape(input BillingSettlementInput) error {
+	if input.FundingDelta >= 0 || input.TokenDelta > 0 ||
+		!strings.HasPrefix(input.OperationKey, billingRequestOperationPrefix) || !strings.HasSuffix(input.OperationKey, billingRequestFinalizeSuffix) {
+		return ErrBillingSettlementOperationConflict
+	}
+	return validateBillingSettlementInput(input)
 }
 
 // A timeout can win before the first paid retry projects its reservation onto
@@ -150,16 +157,24 @@ func RecordTaskSubmitFailureRecoveryWithStatus(taskID int64, reason string, inpu
 // RecordTaskSubmitFailureStatusRecovery records a definite no-charge rejection
 // without granting refund authority. Replay verifies the persisted placeholder.
 func RecordTaskSubmitFailureStatusRecovery(taskID int64, requestID, reason string, userID, tokenID int) (string, error) {
+	record, err := taskSubmitFailureStatusRecoveryRecord(taskID, requestID, reason, userID, tokenID)
+	if err != nil {
+		return "", err
+	}
+	return recordTaskSubmitFailureRecovery(record)
+}
+
+func taskSubmitFailureStatusRecoveryRecord(taskID int64, requestID, reason string, userID, tokenID int) (TaskSubmitFailureRecovery, error) {
 	if strings.TrimSpace(requestID) == "" {
-		return "", ErrTaskSubmitRefundIdentityMismatch
+		return TaskSubmitFailureRecovery{}, ErrTaskSubmitRefundIdentityMismatch
 	}
 	reasonRunes := []rune(common.SanitizePersistedLogContent(reason))
 	record := TaskSubmitFailureRecovery{TaskID: taskID, OperationKey: BillingRequestFinalizeOperationKey(requestID),
 		UserID: userID, TokenID: tokenID, Reason: string(reasonRunes[:min(len(reasonRunes), 512)]), Status: TaskSubmitFailureRecoveryPending}
 	if _, err := record.statusOnlyRequestID(); err != nil {
-		return "", err
+		return TaskSubmitFailureRecovery{}, err
 	}
-	return recordTaskSubmitFailureRecovery(record)
+	return record, nil
 }
 
 func (record TaskSubmitFailureRecovery) statusOnlyRequestID() (string, error) {
@@ -372,7 +387,7 @@ func processPendingTaskSubmitFailures() {
 		}
 		claimCtx, cancelClaim := context.WithTimeout(ctx, 2*time.Second)
 		claimDB := DB.WithContext(claimCtx)
-		won, err := claimTaskSubmitFailureWithSettlementDB(claimDB, record.TaskID, record.Reason, input, &record)
+		won, err := claimTaskSubmitFailureWithSettlementDB(claimDB, record.TaskID, record.Reason, input, &record, true)
 		cancelClaim()
 		if err != nil {
 			status := TaskSubmitFailureRecoveryPending

@@ -902,6 +902,8 @@ func TestUpdateVideoSingleTaskRecoversManualH3SubscriptionFullRefund(t *testing.
 	require.True(t, decision.Settlement.FinalizeSubscriptionPreConsume)
 	require.True(t, decision.Settlement.AllowMissingToken)
 
+	beforeFailure, err := model.GetTaskPlaceholderByID(task.ID)
+	require.NoError(t, err)
 	const failedPromotion = "test:fail-manual-task-promotion"
 	forcedErr := errors.New("synthetic settlement promotion write failure")
 	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(failedPromotion, func(tx *gorm.DB) {
@@ -915,9 +917,10 @@ func TestUpdateVideoSingleTaskRecoversManualH3SubscriptionFullRefund(t *testing.
 	require.False(t, recovered)
 	afterFailure, err := model.GetTaskPlaceholderByID(task.ID)
 	require.NoError(t, err)
-	require.Equal(t, task.PrivateData.PendingTerminalStatus, afterFailure.PrivateData.PendingTerminalStatus)
-	require.Equal(t, task.PrivateData.PendingTerminalResultURL, afterFailure.PrivateData.PendingTerminalResultURL)
-	require.Equal(t, task.UpdatedAt, afterFailure.UpdatedAt)
+	require.Equal(t, beforeFailure.Status, afterFailure.Status)
+	require.Equal(t, beforeFailure.PrivateData.PendingTerminalStatus, afterFailure.PrivateData.PendingTerminalStatus)
+	require.Equal(t, beforeFailure.PrivateData.PendingTerminalResultURL, afterFailure.PrivateData.PendingTerminalResultURL)
+	require.Equal(t, beforeFailure.UpdatedAt, afterFailure.UpdatedAt)
 	status, found, err := model.GetBillingSettlementStatus(decision.Settlement.OperationKey)
 	require.NoError(t, err)
 	require.True(t, found)

@@ -444,6 +444,22 @@ func TestTaskPluginChannelBeforeFirstInstallation(t *testing.T) {
 	}
 }
 
+func TestTaskPluginRequiresTypedChannelForExplicitUpdateTarget(t *testing.T) {
+	db := deletionDB(t)
+	channel := &Channel{Name: "original", Models: "ordinary"}
+	require.NoError(t, db.Create(channel).Error)
+	change := func(column string, value any) error {
+		return db.Table("scratch").Clauses(clause.Update{Table: clause.Table{Name: "channels"}}).
+			Where("id = ?", channel.Id).Update(column, value).Error
+	}
+	require.ErrorIs(t, change("models", "other-model"), taskplugin.ErrCatalogInvalid)
+	require.NoError(t, change("name", "metadata-only"))
+	var stored Channel
+	require.NoError(t, db.First(&stored, channel.Id).Error)
+	require.Equal(t, "ordinary", stored.Models)
+	require.Equal(t, "metadata-only", stored.Name)
+}
+
 func TestTaskPluginChannelMapAliasesCannotBypassDeletion(t *testing.T) {
 	db := deletionDB(t)
 	// GORM itself supports both DB and Go field names. This regression exercises
