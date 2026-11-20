@@ -133,7 +133,7 @@ func TestEnsureTaskPlaceholderNullVersionMatchesOnlyNull(t *testing.T) {
 }
 
 func TestEnsureTaskPlaceholderRetriesOnlyClaimChanges(t *testing.T) {
-	for _, change := range []string{"claim", "continuous-claims", "private-data", "manual-finalize", "confirmed-upstream"} {
+	for _, change := range []string{"claim", "continuous-claims", "private-data", "manual-finalize", "confirmed-upstream", "terminal"} {
 		t.Run(change, func(t *testing.T) {
 			db, err := gorm.Open(sqlite.Open(t.TempDir()+"/retry.db"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 			require.NoError(t, err)
@@ -164,6 +164,9 @@ func TestEnsureTaskPlaceholderRetriesOnlyClaimChanges(t *testing.T) {
 					return
 				}
 				updates := map[string]any{"updated_at": loaded.UpdatedAt + 1}
+				if change == "terminal" {
+					updates["status"] = model.TaskStatusFailure
+				}
 				if change == "private-data" || change == "confirmed-upstream" {
 					private := loaded.PrivateData
 					if change == "private-data" {
@@ -196,6 +199,10 @@ func TestEnsureTaskPlaceholderRetriesOnlyClaimChanges(t *testing.T) {
 				}
 				if change == "confirmed-upstream" {
 					require.Equal(t, "accepted-provider-id", fresh.PrivateData.UpstreamTaskID)
+				}
+				if change == "terminal" || change == "confirmed-upstream" {
+					require.Equal(t, "task_lifecycle_advanced", taskErr.Code)
+					require.Equal(t, http.StatusConflict, taskErr.StatusCode)
 				}
 			}
 			if change == "continuous-claims" {

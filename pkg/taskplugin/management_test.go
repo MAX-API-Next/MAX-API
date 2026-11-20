@@ -613,7 +613,7 @@ func TestPreflightSnapshotOrderDoesNotSuspendUnchangedHost(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			interrupted := &cancelAfterCatalogRead{Context: t.Context()}
+			interrupted := newCancelAfterCatalogRead(t)
 			store.onLoad = func(int) { interrupted.armed = true }
 			assertCanceledPreflight := func(readCtx context.Context) {
 				require.ErrorIs(t, catalog.ValidateInstall(readCtx, a), context.Canceled)
@@ -638,18 +638,26 @@ func TestPreflightSnapshotOrderDoesNotSuspendUnchangedHost(t *testing.T) {
 
 type cancelAfterCatalogRead struct {
 	context.Context
+	cancel context.CancelFunc
 	armed  bool
 	checks int
+}
+
+func newCancelAfterCatalogRead(t *testing.T) *cancelAfterCatalogRead {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	return &cancelAfterCatalogRead{Context: ctx, cancel: cancel}
 }
 
 func (ctx *cancelAfterCatalogRead) Err() error {
 	if ctx.armed {
 		ctx.checks++
 		if ctx.checks > 1 {
-			return context.Canceled
+			ctx.cancel()
 		}
 	}
-	return nil
+	return ctx.Context.Err()
 }
 
 func TestRefreshReusesOnlyCurrentlyPublishedIdenticalGeneration(t *testing.T) {
@@ -665,7 +673,7 @@ func TestRefreshReusesOnlyCurrentlyPublishedIdenticalGeneration(t *testing.T) {
 				store.snapshot.Packages[0].Enabled = false
 			}
 			if change {
-				ctx := &cancelAfterCatalogRead{Context: t.Context()}
+				ctx := newCancelAfterCatalogRead(t)
 				store.onLoad = func(int) { ctx.armed = true }
 				err = catalog.Refresh(ctx)
 				require.ErrorIs(t, err, context.Canceled)
@@ -685,7 +693,7 @@ func TestCatalogRefreshDoesNotReuseSnapshotWhenComparisonIsCanceled(t *testing.T
 	pkg := testPackage(t, validManifest(), "validated-source")
 	require.NoError(t, catalog.Install(t.Context(), pkg))
 	require.NotNil(t, catalog.host.state.Load())
-	ctx := &cancelAfterCatalogRead{Context: t.Context()}
+	ctx := newCancelAfterCatalogRead(t)
 	store.onLoad = func(int) { ctx.armed = true }
 	require.ErrorIs(t, catalog.Refresh(ctx), context.Canceled)
 	require.Nil(t, catalog.host.state.Load())
@@ -701,7 +709,7 @@ func TestSuspendedCatalogRevalidatesEvenWhenSnapshotIsIdentical(t *testing.T) {
 	pkg := testPackage(t, validManifest(), "validated-source")
 	require.NoError(t, catalog.Install(t.Context(), pkg))
 	catalog.host.state.Store(nil)
-	ctx := &cancelAfterCatalogRead{Context: t.Context()}
+	ctx := newCancelAfterCatalogRead(t)
 	store.onLoad = func(int) { ctx.armed = true }
 	require.ErrorIs(t, catalog.Refresh(ctx), context.Canceled)
 	require.Nil(t, catalog.host.state.Load())

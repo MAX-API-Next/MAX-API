@@ -43,10 +43,16 @@ func CleanupDefiniteTaskSubmitFailure(c *gin.Context, info *relaycommon.RelayInf
 		}
 		if err != nil {
 			if intent != nil {
-				if journalErr := model.RecordTaskSubmitFailureRecovery(info.PersistedTaskID, reason, *intent); journalErr != nil {
+				status, journalErr := model.RecordTaskSubmitFailureRecoveryWithStatus(info.PersistedTaskID, reason, *intent)
+				switch {
+				case journalErr != nil:
 					common.SysError(fmt.Sprintf("task submit rejection recovery was not recorded: task_id=%d; inspect the original placeholder and preconsume records", info.PersistedTaskID))
-				} else {
+				case status == model.TaskSubmitFailureRecoveryPending:
 					common.SysLog(fmt.Sprintf("task submit rejection queued for recovery: task_id=%d", info.PersistedTaskID))
+				case status == model.TaskSubmitFailureRecoveryRecorded:
+					common.SysLog(fmt.Sprintf("task submit rejection already has a recorded refund intent: task_id=%d", info.PersistedTaskID))
+				default:
+					common.SysError(fmt.Sprintf("task submit rejection still requires manual review: task_id=%d", info.PersistedTaskID))
 				}
 			} else {
 				common.SysError(fmt.Sprintf("task submit failure ownership could not be determined: task_id=%d", info.PersistedTaskID))

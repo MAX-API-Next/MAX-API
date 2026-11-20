@@ -40,10 +40,11 @@ disabling or revoking it first is not required. Deletion refuses historical task
 mapped channel models, and plugin pricing references. It removes the installed
 source and version row without promoting another version. Distribution files
 embedded in the program remain available in the bundled picker. A source-free
-deletion receipt retains the identity and digest: identical bytes can be
-explicitly reinstalled if the version was not historically revoked. A revoked
-receipt continues to reject identical bytes. Changed bytes under the same
-identity are always rejected.
+deletion receipt retains the identity and digest. A version without historical
+revocation can be reinstalled with identical bytes that pass current upload
+validation. Validate the original file before deletion if reinstallation may
+be needed. A revoked receipt continues to reject identical bytes. Changed bytes
+under the same identity are always rejected.
 
 Unversioned channel models and plugin-key prices conservatively reference every
 matching installed version. Keeping another version with the same declaration

@@ -130,16 +130,24 @@ func verifyUnprojectedTaskRetryRefund(tx *gorm.DB, requestID string, input Billi
 // RecordTaskSubmitFailureRecovery is a trusted-host seam. It records a definite
 // rejection for later ownership checks; it does not authorize or apply money.
 func RecordTaskSubmitFailureRecovery(taskID int64, reason string, input BillingSettlementInput) error {
+	_, err := RecordTaskSubmitFailureRecoveryWithStatus(taskID, reason, input)
+	return err
+}
+
+// RecordTaskSubmitFailureRecoveryWithStatus also reports the current durable
+// journal status, including an existing record that still requires review.
+func RecordTaskSubmitFailureRecoveryWithStatus(taskID int64, reason string, input BillingSettlementInput) (string, error) {
 	if DB == nil {
-		return errors.New("database is not initialized")
+		return "", errors.New("database is not initialized")
 	}
 	record, err := taskSubmitFailureRecoveryRecord(taskID, reason, input)
 	if err != nil {
-		return err
+		return "", err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	record.NextAttempt = time.Now().Unix()
+	status := ""
 	save := func(tx *gorm.DB) error {
 		// Persist the rejection even if the task table cannot currently be
 		// updated. Replay independently verifies task and funding ownership.
@@ -154,53 +162,65 @@ func RecordTaskSubmitFailureRecovery(taskID int64, reason string, input BillingS
 		if existing.refundInput() != record.refundInput() {
 			return ErrBillingSettlementOperationConflict
 		}
+		status = existing.Status
 		return nil
 	}
 	db := DB.WithContext(ctx)
 	if db.Dialector.Name() != "sqlite" {
-		return db.Transaction(save)
+		if err := db.Transaction(save); err != nil {
+			return "", err
+		}
+		return status, nil
 	}
 	for {
 		if err := billingSettlementSQLiteWriteMu.lockContext(ctx); err != nil {
-			return err
+			return "", err
 		}
-		retry := false
-		err := withTaskSubmitFailureWriteBudget(db, func(conn *gorm.DB) error {
-			completedWrite := false
-			err := conn.Transaction(func(tx *gorm.DB) error {
-				err := save(tx)
-				completedWrite = err == nil
-				return err
-			})
-			var code interface{ Code() int }
-			if !errors.As(err, &code) || code.Code()&0xff != sqlite3.SQLITE_BUSY {
-				return err
-			}
-			if completedWrite {
-				// A busy COMMIT leaves SQLite's transaction open, although
-				// database/sql has already closed its Tx handle. Roll back on
-				// the pinned connection before it can be reused.
-				pinned := conn.Statement.ConnPool.(*sql.Conn)
-				if _, rollbackErr := pinned.ExecContext(context.Background(), "ROLLBACK"); rollbackErr != nil {
-					_ = pinned.Raw(func(any) error { return driver.ErrBadConn })
-					return errors.Join(err, rollbackErr)
-				}
-			}
-			retry = true
-			return err
-		})
+		retry, err := taskSubmitFailureTransaction(db, save)
 		billingSettlementSQLiteWriteMu.Unlock()
+		if err == nil {
+			return status, nil
+		}
 		if !retry {
-			return err
+			return "", err
 		}
 		// The failed transaction has rolled back. Release the process gate
 		// before retrying so unrelated local writers can use their own budget.
 		select {
 		case <-ctx.Done():
-			return errors.Join(err, ctx.Err())
+			return "", errors.Join(err, ctx.Err())
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+}
+
+func taskSubmitFailureTransaction(db *gorm.DB, write func(*gorm.DB) error) (retryable bool, err error) {
+	err = withTaskSubmitFailureWriteBudget(db, func(conn *gorm.DB) error {
+		prepared := false
+		err := conn.Transaction(func(tx *gorm.DB) error {
+			err := write(tx)
+			prepared = err == nil
+			return err
+		})
+		var code interface{ Code() int }
+		if conn.Dialector.Name() != "sqlite" || !errors.As(err, &code) || code.Code()&0xff != sqlite3.SQLITE_BUSY {
+			return err
+		}
+		if prepared {
+			// SQLite keeps the write open after a busy COMMIT. database/sql
+			// has closed its Tx handle, so roll back on the pinned connection.
+			pinned := conn.Statement.ConnPool.(*sql.Conn)
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(conn.Statement.Context), time.Second)
+			defer cancel()
+			if _, rollbackErr := pinned.ExecContext(ctx, "ROLLBACK"); rollbackErr != nil {
+				_ = pinned.Raw(func(any) error { return driver.ErrBadConn })
+				return errors.Join(err, rollbackErr)
+			}
+		}
+		retryable = true
+		return err
+	})
+	return retryable, err
 }
 
 func withoutPendingTaskSubmitFailure(query *gorm.DB) *gorm.DB {
@@ -212,12 +232,15 @@ func withoutPendingTaskSubmitFailure(query *gorm.DB) *gorm.DB {
 
 func withTaskSubmitFailureWriteBudget(db *gorm.DB, write func(*gorm.DB) error) error {
 	ctx := db.Statement.Context
-	if db.Dialector.Name() != "sqlite" || ctx.Done() == nil {
+	if db.Dialector.Name() != "sqlite" {
 		return write(db)
 	}
 	// Driver cancellation cannot interrupt SQLite's busy handler. Change
 	// only this pinned connection, then restore its configured handler.
 	return db.Connection(func(conn *gorm.DB) error {
+		if ctx.Done() == nil {
+			return write(conn)
+		}
 		pinned := conn.Statement.ConnPool.(*sql.Conn)
 		var original int64
 		if err := pinned.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&original); err != nil {
@@ -228,7 +251,9 @@ func withTaskSubmitFailureWriteBudget(db *gorm.DB, write func(*gorm.DB) error) e
 			wait = max(0, min(wait, time.Until(deadline).Milliseconds()))
 		}
 		defer func() {
-			if _, err := pinned.ExecContext(context.Background(), fmt.Sprintf("PRAGMA busy_timeout = %d", original)); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+			defer cancel()
+			if _, err := pinned.ExecContext(cleanupCtx, fmt.Sprintf("PRAGMA busy_timeout = %d", original)); err != nil {
 				_ = pinned.Raw(func(any) error { return driver.ErrBadConn })
 				common.SysError("failed to restore SQLite timeout after task submission recovery")
 			}
@@ -304,7 +329,7 @@ func updateTaskSubmitFailureRecovery(record TaskSubmitFailureRecovery, status st
 	if status == TaskSubmitFailureRecoveryPending {
 		next = time.Now().Add(time.Duration(1<<min(record.Attempts+1, 6)) * time.Second).Unix()
 	}
-	err := withTaskSubmitFailureWriteBudget(DB.WithContext(ctx), func(conn *gorm.DB) error {
+	_, err := taskSubmitFailureTransaction(DB.WithContext(ctx), func(conn *gorm.DB) error {
 		return conn.Model(&TaskSubmitFailureRecovery{}).Where("task_id = ? AND status = ?", record.TaskID, TaskSubmitFailureRecoveryPending).
 			Updates(map[string]any{"status": status, "attempts": gorm.Expr("attempts + 1"), "last_error": message, "next_attempt": next, "updated_at": time.Now().Unix()}).Error
 	})

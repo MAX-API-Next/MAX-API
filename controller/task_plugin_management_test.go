@@ -3,17 +3,39 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTaskPluginInstallPackageDeadlineIsNotCommitted(t *testing.T) {
+	fields := map[string]json.RawMessage{"document": json.RawMessage(`"invalid package fixture"`)}
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+	_, err := taskPluginInstallPackage(ctx, fields)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, taskplugin.ErrCatalogNotCommitted)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	taskPluginAdminError(c, err)
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	var response map[string]any
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Equal(t, "catalog_operation_not_committed", response["code"])
+	require.Equal(t, false, response["committed"])
+	_, err = taskPluginInstallPackage(t.Context(), fields)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, taskplugin.ErrCatalogNotCommitted)
+}
 
 func TestTaskPluginManagementRejectsDuplicateMembers(t *testing.T) {
 	for _, raw := range []string{

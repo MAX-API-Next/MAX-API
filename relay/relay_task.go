@@ -88,8 +88,8 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 			if err != nil {
 				return nil, TaskPersistenceError(err, "load_persisted_task_failed", "failed to observe persisted task")
 			}
-			if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure || task.PrivateData.UpstreamTaskID != "" {
-				return nil, service.TaskErrorWrapperLocal(errors.New("task lifecycle already advanced"), "task_lifecycle_advanced", http.StatusConflict)
+			if conflict := taskPlaceholderLifecycleConflict(&task); conflict != nil {
+				return nil, conflict
 			}
 			fresh := model.InitTask(platform, info)
 			task.Platform = platform
@@ -106,9 +106,14 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 						break
 					}
 					reloaded, readErr := model.GetTaskPlaceholderByID(task.ID)
-					if readErr == nil && taskPlaceholderClaimOnly(observed, privateSnapshot, reloaded) {
-						task = *reloaded
-						continue
+					if readErr == nil {
+						if conflict := taskPlaceholderLifecycleConflict(reloaded); conflict != nil {
+							return nil, conflict
+						}
+						if taskPlaceholderClaimOnly(observed, privateSnapshot, reloaded) {
+							task = *reloaded
+							continue
+						}
 					}
 				}
 				return nil, TaskPersistenceError(err, "update_persisted_task_failed", "failed to update persisted task")
@@ -127,6 +132,13 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 	}
 	info.PersistedTaskID = task.ID
 	return task, nil
+}
+
+func taskPlaceholderLifecycleConflict(task *model.Task) *dto.TaskError {
+	if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure || task.PrivateData.UpstreamTaskID != "" {
+		return service.TaskErrorWrapperLocal(errors.New("task lifecycle already advanced"), "task_lifecycle_advanced", http.StatusConflict)
+	}
+	return nil
 }
 
 func taskPlaceholderClaimOnly(before model.Task, privateSnapshot []byte, after *model.Task) bool {

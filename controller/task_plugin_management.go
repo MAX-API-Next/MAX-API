@@ -174,6 +174,14 @@ func taskPluginAdminPackage(ctx context.Context, fields map[string]json.RawMessa
 	return taskplugin.LoadUploadContext(ctx, bytes.NewReader([]byte(taskPluginAdminString(fields, "document"))), taskPluginAdminString(fields, "expected_sha256"))
 }
 
+func taskPluginInstallPackage(ctx context.Context, fields map[string]json.RawMessage) (*taskplugin.Package, error) {
+	pkg, err := taskPluginAdminPackage(ctx, fields)
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		err = errors.Join(taskplugin.ErrCatalogNotCommitted, err)
+	}
+	return pkg, err
+}
+
 func GetTaskPluginManagement(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	catalog, err := service.CurrentTaskPluginCatalog()
@@ -239,7 +247,7 @@ func MutateTaskPluginManagement(c *gin.Context) {
 		}
 	}
 	if mutation.Action == "install" {
-		mutation.Package, err = taskPluginAdminPackage(ctx, fields)
+		mutation.Package, err = taskPluginInstallPackage(ctx, fields)
 		if err != nil {
 			taskPluginAdminError(c, err)
 			return

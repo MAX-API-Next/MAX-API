@@ -209,7 +209,7 @@ func TestBuildTaskExactFinalSettlementUsesAllowlistedUsageMetadata(t *testing.T)
 	require.NotContains(t, usageMetadata, "unit_price")
 }
 
-func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T) {
+func TestSweepTimedOutAwaitingSubmitHoldsQuotaWithOrWithoutProviderID(t *testing.T) {
 	truncate(t)
 	resetTimedOutTaskSweepCursorForTest(t)
 	originalTimeout := constant.TaskTimeoutMinutes
@@ -246,7 +246,7 @@ func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T)
 	require.NoError(t, model.DB.First(&withProviderID, withProviderID.ID).Error)
 	require.EqualValues(t, model.TaskStatusFailure, withProviderID.Status)
 	require.Equal(t, 30, withProviderID.Quota)
-	require.False(t, withProviderID.SubmitTimeoutRetainedFunding)
+	require.False(t, withProviderID.SubmitTimeoutRetainedFunding, "the contradictory provider ID requires manual reconciliation and cannot authorize late auto-refund")
 	var settlementCount int64
 	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Count(&settlementCount).Error)
 	require.Zero(t, settlementCount)

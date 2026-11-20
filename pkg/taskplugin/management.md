@@ -434,6 +434,11 @@ that reservation only when the canonical pre-consume receipt and source
 selection agree with the task, request, token and exact refund amount.
 Pre-upgrade timeouts and existing manual settlement records retain their
 reconciliation workflow because their refund ownership cannot be inferred.
+A timed-out legacy task with both `awaiting_upstream_id` and a non-empty
+`upstream_task_id` keeps its quota for manual reconciliation. The contradictory
+state has no automatic late-refund marker. Identify these `FAILURE` rows using
+both private fields and the positive task quota, then reconcile the upstream task
+and the original reservation using the stored billing request ID.
 If the database cannot save even the recovery record, use the original task
 and reservation records to reconcile the logged task ID after service returns.
 Historical private metadata retains unknown fields, including nested typed

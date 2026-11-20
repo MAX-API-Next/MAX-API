@@ -361,9 +361,9 @@ func TestVideoTerminalPollRejectsNewerSameStatusProgress(t *testing.T) {
 			require.Equal(t, row.Progress, stored.Progress)
 			require.Equal(t, row.Quota, stored.Quota)
 			require.JSONEq(t, string(row.Data), string(stored.Data))
-			_, found, err := model.GetBillingSettlementStatus(model.BillingTaskFinalizeOperationKey(row.ID))
-			require.NoError(t, err)
-			require.False(t, found)
+			var intents int64
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Where("task_id = ?", row.ID).Count(&intents).Error)
+			require.Zero(t, intents)
 		})
 	}
 }
@@ -516,7 +516,15 @@ func TestSunoBatchSkipsDuplicateResponsesAfterStaleProgress(t *testing.T) {
 
 	taskIDs := []string{row.TaskID, staleSuccess.TaskID, staleFailure.TaskID, neighbor.TaskID}
 	tasks := map[string]*model.Task{row.TaskID: row, staleSuccess.TaskID: staleSuccess, staleFailure.TaskID: staleFailure, neighbor.TaskID: neighbor}
+	staleUpdates := 0
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register("count-stale-suno-update", func(tx *gorm.DB) {
+		if candidate, ok := tx.Statement.Model.(*model.Task); ok && candidate.ID == row.ID {
+			staleUpdates++
+		}
+	}))
+	t.Cleanup(func() { _ = model.DB.Callback().Update().Remove("count-stale-suno-update") })
 	require.NoError(t, updateSunoTasks(t.Context(), 7201, taskIDs, tasks))
+	require.Equal(t, 1, staleUpdates)
 	require.Equal(t, "10%", row.Progress)
 	require.EqualValues(t, model.TaskStatusSuccess, neighbor.Status)
 	for _, stale := range []*model.Task{row, staleSuccess, staleFailure} {

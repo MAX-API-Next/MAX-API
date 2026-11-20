@@ -313,7 +313,7 @@ func TestTypedPricingIdentityNamedFactsCompleteAndSettleOnce(t *testing.T) {
 				Facts: types.TaskPricingFacts{"seconds": 8, "input_images": 0, "input_video_seconds": 0, "package_digest": "standard"},
 			}}
 			adaptor := &expressionPollingFixture{result: result}
-			if missing {
+			if missing || phase == "request" {
 				delete(result.PricingUsageEnvelope.Facts, "package_digest")
 			}
 			channel := &model.Channel{Id: 902, Type: constant.ChannelTypeMiniMax, Key: "synthetic"}

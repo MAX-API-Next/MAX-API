@@ -317,11 +317,13 @@ func TestTaskPluginCatalogMixedDeletionReadIsConflict(t *testing.T) {
 }
 
 func TestTaskPluginPricingAndDeletionLockOrder(t *testing.T) {
-	db := deletionDB(t)
+	db := setupModelPricingTest(t)
+	require.NoError(t, db.AutoMigrate(&Task{}, &TaskPluginDeletion{}))
 	pkg, entry := catalogFixture(t, "stored", "1.0.0", "source")
 	store := NewTaskPluginCatalogStore(db)
 	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
 	require.NoError(t, err)
+	price := pricingEntryForTest(t, db, "ordinary")
 	var order []string
 	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("record_price_writer_lock", func(tx *gorm.DB) {
 		if tx.Statement.Table == db.NamingStrategy.TableName("Option") && strings.Contains(fmt.Sprint(tx.Statement.Clauses["WHERE"].Expression), modelPricingLockOption) {
@@ -345,17 +347,10 @@ func TestTaskPluginPricingAndDeletionLockOrder(t *testing.T) {
 			}
 		}
 	}))
-	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
-		if err := lockModelPricingRows(tx); err != nil {
-			return err
-		}
-		authority, err := readPricingAuthority(tx, true)
-		if err != nil {
-			return err
-		}
-		require.Len(t, authority.plugins, 1)
-		return nil
-	}))
+	commit, err := updateModelPricing(db, []types.ModelPricingChange{pricingChangeForTest(price, types.ModelPricingValues{"ModelPrice": float64(7)})})
+	require.NoError(t, err)
+	require.Len(t, commit.Entries, 1)
+	require.Equal(t, "ordinary", commit.Entries[0].ModelName)
 	index := func(name string) int {
 		for i, item := range order {
 			if item == name {

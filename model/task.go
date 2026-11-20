@@ -1366,9 +1366,7 @@ func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason st
 		}
 		return nil
 	}
-	err := withTaskSubmitFailureWriteBudget(db, func(conn *gorm.DB) error {
-		return conn.Transaction(claim)
-	})
+	_, err := taskSubmitFailureTransaction(db, claim)
 	return won && err == nil, err
 }
 

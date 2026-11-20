@@ -386,3 +386,88 @@ func TestSubmitFailureJournalRollsBackBusySQLiteCommit(t *testing.T) {
 	require.NoError(t, db.Model(&TaskSubmitFailureRecovery{}).Count(&count).Error)
 	require.EqualValues(t, 1, count)
 }
+
+func TestSubmitFailureWorkerCanReplayAfterBusySQLiteCommit(t *testing.T) {
+	db := deletionDB(t)
+	require.NoError(t, db.AutoMigrate(&BillingSettlement{}))
+	previous, oldSQLite := DB, common.UsingSQLite
+	DB, common.UsingSQLite = db, true
+	t.Cleanup(func() { DB, common.UsingSQLite = previous, oldSQLite })
+	pool, err := db.DB()
+	require.NoError(t, err)
+	pool.SetMaxOpenConns(1)
+	var journal string
+	require.NoError(t, db.Raw("PRAGMA journal_mode=DELETE").Scan(&journal).Error)
+	require.Equal(t, "delete", strings.ToLower(journal))
+	var location struct{ File string }
+	require.NoError(t, db.Raw("PRAGMA database_list").Scan(&location).Error)
+	other, err := gorm.Open(sqlite.Open(location.File), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	readerPool, err := other.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, readerPool.Close()) })
+	requestID := "claim-busy-commit"
+	row := &Task{TaskID: requestID, UserId: 71, Quota: 100, Status: TaskStatusSubmitted,
+		PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingSource: BillingSettlementSourceWallet, BillingRequestId: requestID, TokenId: 72}}
+	require.NoError(t, db.Create(row).Error)
+	input := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey(requestID), Source: BillingSettlementSourceWallet, UserID: 71, TokenID: 72, FundingDelta: -100, TokenDelta: -100}
+	require.NoError(t, RecordTaskSubmitFailureRecovery(row.ID, "definite rejection", input))
+	reader := other.Begin()
+	require.NoError(t, reader.Error)
+	t.Cleanup(func() { _ = reader.Rollback().Error })
+	var count int64
+	require.NoError(t, reader.Model(&Task{}).Count(&count).Error)
+	attemptedIntent := false
+	require.NoError(t, db.Callback().Create().After("gorm:create").Register("observe-claim-before-busy-commit", func(tx *gorm.DB) {
+		if tx.Statement.Table == "billing_settlements" && tx.Error == nil {
+			attemptedIntent = true
+		}
+	}))
+	processPendingTaskSubmitFailures()
+	require.True(t, attemptedIntent, "the task and intent SQL must have run before the busy commit")
+	require.NoError(t, reader.Rollback().Error)
+	stored, err := GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, TaskStatusSubmitted, stored.Status)
+	require.Equal(t, 100, stored.Quota)
+	require.NoError(t, db.Model(&BillingSettlement{}).Count(&count).Error)
+	require.Zero(t, count)
+	var busyTimeout int
+	require.NoError(t, db.Raw("PRAGMA busy_timeout").Scan(&busyTimeout).Error)
+	require.Equal(t, 5000, busyTimeout)
+	processPendingTaskSubmitFailures()
+	processPendingTaskSubmitFailures()
+	var record TaskSubmitFailureRecovery
+	require.NoError(t, db.First(&record, row.ID).Error)
+	require.Equal(t, TaskSubmitFailureRecoveryRecorded, record.Status)
+	var intents []BillingSettlement
+	require.NoError(t, db.Find(&intents).Error)
+	require.Len(t, intents, 1)
+	require.Equal(t, input.OperationKey, intents[0].OperationKey)
+	require.EqualValues(t, -100, intents[0].FundingDelta)
+	stored, err = GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, TaskStatusFailure, stored.Status)
+	require.Zero(t, stored.Quota)
+}
+
+func TestSubmitFailureJournalReportsExistingManualStatus(t *testing.T) {
+	db := deletionDB(t)
+	previous := DB
+	DB = db
+	t.Cleanup(func() { DB = previous })
+	input := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey("manual-journal"), Source: BillingSettlementSourceWallet, UserID: 71, FundingDelta: -100}
+	status, err := RecordTaskSubmitFailureRecoveryWithStatus(1, "definite rejection", input)
+	require.NoError(t, err)
+	require.Equal(t, TaskSubmitFailureRecoveryPending, status)
+	var record TaskSubmitFailureRecovery
+	require.NoError(t, db.First(&record, 1).Error)
+	updateTaskSubmitFailureRecovery(record, TaskSubmitFailureRecoveryManual, ErrTaskFinalizeOwned)
+	status, err = RecordTaskSubmitFailureRecoveryWithStatus(1, "duplicate rejection", input)
+	require.NoError(t, err)
+	require.Equal(t, TaskSubmitFailureRecoveryManual, status)
+	require.NoError(t, db.First(&record, 1).Error)
+	require.Equal(t, TaskSubmitFailureRecoveryManual, record.Status)
+	require.Equal(t, "definite rejection", record.Reason)
+	require.Zero(t, record.NextAttempt)
+}
