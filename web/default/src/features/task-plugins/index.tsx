@@ -1,20 +1,11 @@
 // Copyright (C) 2023-2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 // Selective workflow reference: QuantumNous/new-api 70e6af64 plugin list,
 // upload and detail sheet. No upstream JS execution/editor/marketplace code.
-import { useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Plus, RefreshCw, Info } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { SectionPageLayout } from '@/components/layout'
 import {
   taskPluginAPI,
@@ -24,6 +15,8 @@ import {
   type PluginEntry,
   type PluginMutation,
 } from './api'
+import { readPluginFile } from './file-reader'
+import { PluginCatalog } from './plugin-catalog'
 import {
   PluginDetailSheet,
   type PluginConfirmation,
@@ -51,13 +44,13 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
     readAfterUnknown,
     refresh,
   } = catalog
-  const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<string>()
   const [installOpen, setInstallOpen] = useState(false)
   const [installRevision, setInstallRevision] = useState('')
   const [document, setDocument] = useState('')
   const [fileName, setFileName] = useState('')
   const [expectedHash, setExpectedHash] = useState('')
+  const [bundledHash, setBundledHash] = useState<string>()
   const [validated, setValidated] = useState<PluginEntry>()
   const [validating, setValidating] = useState(false)
   const [nodesReady, setNodesReady] = useState(false)
@@ -71,11 +64,22 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
     refetchOnWindowFocus: false,
   })
   const bundles = bundleList.isError ? [] : (bundleList.data ?? [])
+  const refetchBundles = bundleList.refetch
   const [bundleLoading, setBundleLoading] = useState(false)
   const [confirm, setConfirm] = useState<PluginConfirmation>()
   const validation = useRef(new PluginRequestOrder())
   const files = useRef(new PluginRequestOrder())
   const mounted = useRef(true)
+  const catalogSearch = useRef<HTMLInputElement>(null)
+  const detailOpener = useRef<HTMLElement | null>(null)
+  const detailFinalFocus = useCallback(() => {
+    return detailOpener.current?.isConnected
+      ? detailOpener.current
+      : catalogSearch.current
+  }, [])
+  const onSearchReady = useCallback((element: HTMLInputElement | null) => {
+    catalogSearch.current = element
+  }, [])
   const resetValidation = () => {
     validation.current.next()
     setValidated(undefined)
@@ -83,8 +87,8 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
   }
   useEffect(() => {
     if (installOpen && transport.bundled)
-      void bundleList.refetch({ cancelRefetch: true })
-  }, [installOpen, transport, bundleList.refetch])
+      void refetchBundles({ cancelRefetch: true })
+  }, [installOpen, transport, refetchBundles])
 
   useEffect(() => {
     mounted.current = true
@@ -109,6 +113,9 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
     const id = files.current.next()
     setBundleLoading(true)
     setDocument('')
+    setFileName('')
+    setBundledHash(undefined)
+    setExpectedHash('')
     setError('')
     try {
       const upload = await queryClient.fetchQuery({
@@ -120,6 +127,7 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
       if (mounted.current && files.current.current(id)) {
         setDocument(upload.document)
         setExpectedHash(upload.expected_sha256)
+        setBundledHash(upload.expected_sha256)
         setFileName(`${key}@${version}/plugin.js`)
         setNodesReady(false)
       }
@@ -127,7 +135,7 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
       if (mounted.current && files.current.current(id))
         setError(
           e instanceof PluginError
-            ? e.message
+            ? e
             : 'Official plugin source could not be read'
         )
     } finally {
@@ -136,6 +144,8 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
   }
 
   async function loadFile(file: File | undefined) {
+    if (bundledHash !== undefined) setExpectedHash('')
+    setBundledHash(undefined)
     setBundleLoading(false)
     setNodesReady(false)
     resetValidation()
@@ -149,7 +159,7 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
       return
     }
     try {
-      const text = await file.text()
+      const text = await readPluginFile(file)
       if (mounted.current && files.current.current(id)) setDocument(text)
     } catch {
       if (mounted.current && files.current.current(id))
@@ -164,14 +174,12 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
     try {
       const entry = await transport.validate({
         document,
-        expected_sha256: expectedHash,
+        expected_sha256: expectedHash || undefined,
       })
       if (mounted.current && validation.current.current(id)) setValidated(entry)
     } catch (e) {
       if (mounted.current && validation.current.current(id))
-        setError(
-          e instanceof PluginError ? e.message : 'Task plugin request failed'
-        )
+        setError(e instanceof PluginError ? e : 'Task plugin request failed')
     } finally {
       if (mounted.current && validation.current.current(id))
         setValidating(false)
@@ -180,22 +188,30 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
   async function mutate(command: PluginMutation) {
     if (busy || unknown || !snapshot) return
     setConfirm(undefined)
+    const deletingOpener =
+      command.action === 'delete' ? detailOpener.current : null
     await catalog.mutate(command, () => {
       if (command.action === 'install') {
         setInstallOpen(false)
         resetValidation()
+      }
+      if (command.action === 'delete') {
+        const entryId = `${command.key}@${command.version}`
+        const search = catalogSearch.current
+        const activeEntry = search?.ownerDocument.activeElement?.closest(
+          '[data-task-plugin-entry]'
+        )
+        if (activeEntry?.getAttribute('data-task-plugin-entry') === entryId) {
+          search?.focus()
+        }
+        if (detailOpener.current === deletingOpener) detailOpener.current = null
+        setSelected((current) => (current === entryId ? undefined : current))
       }
     })
   }
   const detail = snapshot?.entries.find(
     (e) => `${e.key}@${e.version}` === selected
   )
-  const rows =
-    snapshot?.entries.filter((e) =>
-      `${e.key} ${e.name} ${e.version} ${e.models.join(' ')}`
-        .toLowerCase()
-        .includes(search.toLowerCase())
-    ) ?? []
   const disabled = busy || loading || unknown || !snapshot
   const feedbackProps = {
     error,
@@ -226,6 +242,10 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
             disabled={busy || loading}
             onClick={() => void refresh()}
           >
+            <RefreshCw
+              className={loading ? 'size-4 animate-spin' : 'size-4'}
+              aria-hidden='true'
+            />
             {t('Refresh')}
           </Button>
           <Button
@@ -236,12 +256,14 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
               setInstallOpen(true)
             }}
           >
+            <Plus className='size-4' aria-hidden='true' />
             {t('Install plugin package')}
           </Button>
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
-          <div className='space-y-4'>
-            <p className='text-muted-foreground text-sm'>
+          <div className='space-y-5'>
+            <p className='text-muted-foreground bg-muted/30 flex items-start gap-2.5 rounded-lg border px-4 py-3 text-xs leading-relaxed'>
+              <Info className='mt-0.5 size-4 shrink-0' aria-hidden='true' />
               {t(
                 'Manage installed packages and versions. Enabling a package does not enable task execution or paid admission.'
               )}
@@ -249,68 +271,23 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
             {!selected && !installOpen && (
               <TaskPluginFeedback {...feedbackProps} />
             )}
-            <Input
-              aria-label={t('Search task plugins')}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={t('Search task plugins')}
+            <PluginCatalog
+              onSearchReady={onSearchReady}
+              entries={snapshot?.entries ?? []}
+              available={!!snapshot}
+              loading={loading}
+              status={status}
+              onDetails={(entry, opener) => {
+                detailOpener.current = opener
+                setSelected(`${entry.key}@${entry.version}`)
+              }}
             />
-            {loading && <p role='status'>{t('Loading...')}</p>}
-            {!loading && snapshot && rows.length === 0 && (
-              <p>{t('No task plugin packages found')}</p>
-            )}
-            <div className='overflow-x-auto rounded-md border'>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t('Plugin')}</TableHead>
-                    <TableHead>{t('Version')}</TableHead>
-                    <TableHead>{t('Status')}</TableHead>
-                    <TableHead>{t('Models')}</TableHead>
-                    <TableHead>{t('Protocols')}</TableHead>
-                    <TableHead>{t('Execution')}</TableHead>
-                    <TableHead>{t('Actions')}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {rows.map((entry) => (
-                    <TableRow key={`${entry.key}@${entry.version}`}>
-                      <TableCell>
-                        <div className='font-medium'>{entry.name}</div>
-                        <div className='text-muted-foreground text-xs'>
-                          {entry.key}
-                        </div>
-                      </TableCell>
-                      <TableCell>{entry.version}</TableCell>
-                      <TableCell>
-                        <Badge variant='outline'>{status(entry)}</Badge>
-                      </TableCell>
-                      <TableCell>{entry.models.length}</TableCell>
-                      <TableCell>
-                        {entry.protocols.map((p) => p.name).join(', ') || '—'}
-                      </TableCell>
-                      <TableCell>{t('Execution not ready')}</TableCell>
-                      <TableCell>
-                        <Button
-                          size='sm'
-                          variant='outline'
-                          onClick={() =>
-                            setSelected(`${entry.key}@${entry.version}`)
-                          }
-                        >
-                          {t('Details')}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
           </div>
         </SectionPageLayout.Content>
       </SectionPageLayout>
 
       <PluginDetailSheet
+        finalFocus={detailFinalFocus}
         selected={selected}
         setSelected={setSelected}
         detail={detail}
@@ -346,7 +323,9 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
         loadBundled={loadBundled}
         fileName={fileName}
         expectedHash={expectedHash}
+        expectedHashLocked={bundledHash !== undefined}
         setExpectedHash={(value) => {
+          if (bundledHash !== undefined) return
           if (bundleLoading) files.current.next()
           setBundleLoading(false)
           setExpectedHash(value)

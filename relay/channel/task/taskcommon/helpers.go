@@ -1,15 +1,31 @@
 package taskcommon
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
-	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
+
+const taskQueryContextKey = "_max_task_query_context"
+
+// WithTaskQueryContext carries an internal context through the task query
+// parameters. Adapters use it only when constructing their HTTP request.
+func WithTaskQueryContext(ctx context.Context, body map[string]any) map[string]any {
+	body[taskQueryContextKey] = ctx
+	return body
+}
+
+func TaskQueryContext(body map[string]any) context.Context {
+	if ctx, ok := body[taskQueryContextKey].(context.Context); ok && ctx != nil {
+		return ctx
+	}
+	return context.Background()
+}
 
 // UnmarshalMetadata converts a map[string]any metadata to a typed struct via JSON round-trip.
 // This replaces the repeated pattern: json.Marshal(metadata) → json.Unmarshal(bytes, &target).
@@ -63,7 +79,7 @@ func DecodeLocalTaskID(id string) (string, error) {
 // BuildProxyURL constructs the video proxy URL using the public task ID.
 // e.g., "https://your-server.com/v1/videos/task_xxxx/content"
 func BuildProxyURL(taskID string) string {
-	return fmt.Sprintf("%s/v1/videos/%s/content", system_setting.ServerAddress, taskID)
+	return model.TaskVideoProxyURL(taskID)
 }
 
 // Status-to-progress mapping constants for polling updates.

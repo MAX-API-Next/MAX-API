@@ -106,7 +106,7 @@ func ValidateManifest(manifest Manifest) error {
 	if !semverPattern.MatchString(manifest.Version) {
 		return fmt.Errorf("invalid task plugin version %q", manifest.Version)
 	}
-	modelSet, err := validateModels(manifest.Models)
+	modelSet, err := ValidateModelNames(manifest.Models)
 	if err != nil {
 		return err
 	}
@@ -158,7 +158,8 @@ func ValidateManifest(manifest Manifest) error {
 	return nil
 }
 
-func validateModels(models []string) (map[string]struct{}, error) {
+// ValidateModelNames checks that the model index could come from a manifest.
+func ValidateModelNames(models []string) (map[string]struct{}, error) {
 	if len(models) == 0 {
 		return nil, fmt.Errorf("task plugin must declare at least one model")
 	}

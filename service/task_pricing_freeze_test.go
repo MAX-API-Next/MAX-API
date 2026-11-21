@@ -47,6 +47,10 @@ func newBoundedPricingFixture(t *testing.T) *boundedPricingFixture {
 }
 
 func newBoundedPricingFixtureAt(t *testing.T, path string) *boundedPricingFixture {
+	return newBoundedPricingFixtureWithContractAt(t, path, nil)
+}
+
+func newBoundedPricingFixtureWithContractAt(t *testing.T, path string, configure func(*types.TaskFactContract)) *boundedPricingFixture {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
@@ -55,7 +59,7 @@ func newBoundedPricingFixtureAt(t *testing.T, path string) *boundedPricingFixtur
 	sqlDB.SetMaxOpenConns(1)
 	require.NoError(t, db.AutoMigrate(
 		&model.Option{}, &model.Channel{}, &model.TaskPluginCatalogHead{}, &model.TaskPluginVersion{},
-		&model.Task{}, &model.User{}, &model.Token{}, &model.Log{}, &model.BillingLogReceipt{},
+		&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.User{}, &model.Token{}, &model.Log{}, &model.BillingLogReceipt{},
 		&model.BillingSettlement{}, &model.BillingPreConsumeSelection{}, &model.CacheInvalidationTask{},
 		&model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{},
 	))
@@ -83,6 +87,11 @@ func newBoundedPricingFixtureAt(t *testing.T, path string) *boundedPricingFixtur
 	require.True(t, ok)
 	c, err = taskpricing.NormalizeContract(c)
 	require.NoError(t, err)
+	if configure != nil {
+		configure(&c)
+		c, err = taskpricing.NormalizeContract(c)
+		require.NoError(t, err)
+	}
 	schema := map[string]taskplugin.UsageField{}
 	for key, field := range c.UsageSchema {
 		schema[key] = taskplugin.UsageField{Type: field.Type, Unit: field.Unit, Enum: field.Enum}
@@ -259,6 +268,84 @@ func TestBoundedPricingActualReservationReplaysAndSettlesFrozenPrice(t *testing.
 			require.EqualValues(t, target-reserve, finalized.AppliedFundingDelta)
 			require.Equal(t, model.BillingSettlementStatusApplied, finalized.Status)
 			require.Equal(t, model.BillingSettlementEffectApplied, finalized.EffectStatus)
+		})
+	}
+}
+
+func TestTypedPricingIdentityNamedFactsCompleteAndSettleOnce(t *testing.T) {
+	for _, phase := range []string{"request", "actual", "actual-missing-fact"} {
+		t.Run(phase, func(t *testing.T) {
+			policyPhase := phase
+			missing := phase == "actual-missing-fact"
+			if missing {
+				policyPhase = "actual"
+			}
+			f := newBoundedPricingFixtureWithContractAt(t, filepath.Join(t.TempDir(), "identity-facts.sqlite"), func(c *types.TaskFactContract) {
+				c.UsageSchema["package_digest"] = types.TaskUsageField{Type: "enum", Enum: []string{"standard"}}
+				c.FieldPolicy["package_digest"] = types.TaskFactPolicy{Phase: policyPhase, Required: true}
+			})
+			require.NoError(t, f.db.AutoMigrate(&model.TaskPluginDeletion{}))
+			if phase == "request" {
+				f.submit["package_digest"] = "standard"
+			}
+			prepared, err := f.freeze(t, f.observe(t))
+			require.NoError(t, err)
+			c, info := f.billingInfo(prepared.Plan)
+			require.Nil(t, PreConsumeBilling(c, 1500, info))
+			require.EqualValues(t, 1500, getUserQuota(t, 901))
+			task := makeServiceH3Task(t, 1500, prepared.Plan)
+			task.Properties.OriginModelName, task.Properties.UpstreamModelName = "alias", "MiniMax-H3"
+			task.Action, task.PrivateData.BillingRequestId = "generate", f.actor.RequestID
+			task.PrivateData.BillingContext.OriginModelName = "alias"
+			require.NoError(t, AttachTaskPluginBinding(f.catalog.Host(), task, prepared.Binding))
+			persistTask(t, task)
+			require.Nil(t, BuildTaskSubmissionSettlementEffect(c, info, 1500))
+			require.NoError(t, info.Billing.Settle(1500))
+			var loaded model.Task
+			require.NoError(t, f.db.First(&loaded, task.ID).Error)
+			originalStatus := loaded.Status
+			p := loaded.PrivateData.BillingContext.TaskBillingPlan.ExpressionPlan
+			result := &relaycommon.TaskInfo{Status: string(model.TaskStatusSuccess), PricingUsageEnvelope: &types.TaskPricingUsageEnvelope{
+				ProducerKind: "task_plugin", SourceID: "hailuo", PluginVersion: p.PluginVersion, PackageDigest: p.PackageDigest,
+				ChannelID: 902, RequestID: f.actor.RequestID, Action: "generate", SchemaVersion: 1,
+				ContractDigest: loaded.PrivateData.BillingContext.TaskBillingPlan.UsageContractDigest,
+				Stage:          types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
+				Facts: types.TaskPricingFacts{"seconds": 8, "input_images": 0, "input_video_seconds": 0, "package_digest": "standard"},
+			}}
+			adaptor := &expressionPollingFixture{result: result}
+			if missing || phase == "request" {
+				delete(result.PricingUsageEnvelope.Facts, "package_digest")
+			}
+			channel := &model.Channel{Id: 902, Type: constant.ChannelTypeMiniMax, Key: "synthetic"}
+			for attempt := 0; attempt < 2; attempt++ {
+				require.NoError(t, updateVideoSingleTask(t.Context(), adaptor, channel, loaded.GetUpstreamTaskID(), map[string]*model.Task{loaded.GetUpstreamTaskID(): &loaded}))
+				var restarted model.Task
+				require.NoError(t, f.db.First(&restarted, task.ID).Error)
+				loaded = restarted
+				if missing {
+					require.Equal(t, originalStatus, loaded.Status)
+					require.Equal(t, 1500, loaded.Quota)
+					require.EqualValues(t, 1500, getUserQuota(t, 901))
+					require.Equal(t, 1500, getTokenRemainQuota(t, 903))
+					continue
+				}
+				require.EqualValues(t, model.TaskStatusSuccess, loaded.Status)
+				require.Equal(t, 800, loaded.Quota, "8 seconds * 0.1 * 1000 = 800")
+				require.EqualValues(t, 2200, getUserQuota(t, 901))
+				require.Equal(t, 2200, getTokenRemainQuota(t, 903))
+			}
+			var finalized model.BillingSettlement
+			require.NoError(t, f.db.Where("operation_key = ?", model.BillingTaskFinalizeOperationKey(task.ID)).First(&finalized).Error)
+			if missing {
+				require.Equal(t, model.BillingSettlementStatusManual, finalized.Status)
+				require.Zero(t, finalized.AppliedFundingDelta)
+				require.Zero(t, finalized.AppliedTokenDelta)
+				require.Zero(t, countLogs(t))
+				return
+			}
+			require.EqualValues(t, -700, finalized.AppliedFundingDelta)
+			require.Equal(t, model.BillingSettlementStatusApplied, finalized.Status)
+			require.EqualValues(t, 1, countLogs(t))
 		})
 	}
 }

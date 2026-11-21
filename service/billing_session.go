@@ -36,8 +36,9 @@ type BillingSession struct {
 	compensationFailed      bool  // 资金补偿返回错误且结果不确定；后续仅重试令牌
 	fundingReconcilePending bool  // 已知部分补偿已生效；重试令牌前先补齐资金差额
 	reserveRevision         int64 // 单次请求内累计预留的单调修订号
-	settled                 bool  // Settle 全部完成（资金 + 令牌）
-	refunded                bool  // Refund 已调用
+	failedReserveRevision   int64
+	settled                 bool // Settle 全部完成（资金 + 令牌）
+	refunded                bool // Refund 已调用
 	refundInFlight          bool
 	settleInFlight          bool
 	fundingOutcomeUnknown   bool
@@ -587,6 +588,42 @@ func (s *BillingSession) PrepareRefundSettlement() (*model.BillingSettlementInpu
 	return s.refundSettlementInputLocked()
 }
 
+func (s *BillingSession) prepareTaskSubmitFailureRefund() (*model.BillingSettlementInput, int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	failed := s.failedReserveRevision
+	if s.settled || s.refunded || s.refundInFlight || s.settleInFlight || s.fundingSettled {
+		return nil, 0, nil
+	}
+	if s.needsRefundLocked() {
+		intent, err := s.refundSettlementInputLocked()
+		return intent, failed, err
+	}
+	if failed == 0 {
+		return nil, 0, nil
+	}
+	return &model.BillingSettlementInput{
+		OperationKey:      model.BillingRequestFinalizeOperationKey(s.relayInfo.RequestId),
+		Source:            model.BillingSettlementSourceWallet,
+		UserID:            s.relayInfo.UserId,
+		TokenID:           s.relayInfo.TokenId,
+		TokenKey:          s.relayInfo.TokenKey,
+		AllowMissingToken: true,
+	}, failed, nil
+}
+
+func (s *BillingSession) isUnsettledZeroChargeTask(info *relaycommon.RelayInfo) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	wallet, ok := s.funding.(*WalletFunding)
+	return ok && wallet != nil && wallet.userId == info.UserId && s.relayInfo != nil &&
+		s.relayInfo.RequestId == info.RequestId && s.relayInfo.TokenId == info.TokenId &&
+		wallet.consumed == 0 && s.preConsumedQuota == 0 && s.tokenConsumed == 0 &&
+		s.extraReserved == 0 && s.reserveRevision == 0 && s.failedReserveRevision == 0 && s.appliedFundingDelta == 0 &&
+		!s.settled && !s.refunded && !s.refundInFlight && !s.settleInFlight && !s.fundingSettled &&
+		!s.fundingOutcomeUnknown && !s.compensationFailed && !s.fundingReconcilePending
+}
+
 func (s *BillingSession) finishRefundIntent(applied bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -674,7 +711,7 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.fundingOutcomeUnknown {
+	if s.fundingOutcomeUnknown || s.failedReserveRevision != 0 {
 		return ErrBillingFundingOutcomeUnknown
 	}
 	if s.settled || s.refunded || s.trusted || targetQuota <= s.preConsumedQuota {
@@ -706,6 +743,9 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 				SubscriptionPreConsumeRequestID: subscriptionPreConsumeRequestID(s.funding),
 				ManualOnFailure:                 true,
 			}); err != nil {
+				if s.relayInfo.TaskRelayInfo != nil && s.relayInfo.PersistedTaskID > 0 {
+					s.failedReserveRevision = nextRevision
+				}
 				return err
 			}
 			if wallet, ok := s.funding.(*WalletFunding); ok {
@@ -780,7 +820,13 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.MaxAPIErro
 				// must claim the same durable identity before any debit.
 				tokenDelta = 0
 			}
-			applied, _, err := model.ApplyBillingSettlementOnce(model.BillingSettlementInput{
+			apply := model.ApplyBillingSettlementOnce
+			if s.relayInfo.TaskRelayInfo != nil && s.relayInfo.PersistedTaskID > 0 {
+				apply = func(input model.BillingSettlementInput) (int64, bool, error) {
+					return model.ApplyBoundTaskWalletPreConsumeOnce(input, s.relayInfo.PersistedTaskID)
+				}
+			}
+			applied, _, err := apply(model.BillingSettlementInput{
 				OperationKey:             "request:" + s.relayInfo.RequestId + ":pre-consume",
 				Source:                   model.BillingSettlementSourceWallet,
 				UserID:                   s.relayInfo.UserId,
@@ -795,6 +841,16 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.MaxAPIErro
 				PreConsumeEffectiveQuota: int64(effectiveQuota),
 			})
 			if err != nil {
+				if errors.Is(err, model.ErrBoundTaskWalletDebitOutcomeUnknown) {
+					c.Set(boundWalletDebitRecoveryKey, boundWalletDebitRecovery{
+						taskID: s.relayInfo.PersistedTaskID,
+						refund: model.BillingSettlementInput{
+							OperationKey: model.BillingRequestFinalizeOperationKey(s.relayInfo.RequestId), Source: model.BillingSettlementSourceWallet,
+							UserID: s.relayInfo.UserId, TokenID: s.relayInfo.TokenId, AllowMissingToken: true,
+							FundingDelta: -int64(effectiveQuota), TokenDelta: -tokenDelta,
+						},
+					})
+				}
 				return mapAtomicPreConsumeError(err)
 			}
 			if applied != int64(effectiveQuota) {

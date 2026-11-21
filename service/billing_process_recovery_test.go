@@ -115,6 +115,30 @@ func TestBillingProcessHelper(t *testing.T) {
 	require.NoError(t, db.First(&user, 951).Error)
 	require.Equal(t, "synthetic-process-recovery", user.Username, "only the isolated fixture may be mutated")
 
+	if cfg.Role == "reject_task" {
+		c, info := billingProcessContext(cfg)
+		require.Nil(t, PreConsumeBilling(c, 100, info))
+		require.Equal(t, cfg.Source, info.BillingSource)
+		row := &model.Task{
+			TaskID: "synthetic-process-rejection", UserId: info.UserId, Quota: 100, Status: model.TaskStatusSubmitted,
+			PrivateData: model.TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: info.RequestId,
+				BillingSource: info.BillingSource, SubscriptionId: info.SubscriptionId, TokenId: info.TokenId},
+		}
+		require.NoError(t, db.Create(row).Error)
+		info.TaskRelayInfo = &relaycommon.TaskRelayInfo{PersistedTaskID: row.ID}
+		require.NoError(t, db.Callback().Query().Before("gorm:query").Register("simulate-task-read-outage", func(tx *gorm.DB) {
+			if tx.Statement.Table == "tasks" {
+				tx.AddError(errors.New("synthetic task read outage"))
+			}
+		}))
+		CleanupDefiniteTaskSubmitFailure(c, info, "synthetic definite rejection")
+		var recovery model.TaskSubmitFailureRecovery
+		require.NoError(t, db.First(&recovery, "task_id = ?", row.ID).Error)
+		require.Equal(t, model.TaskSubmitFailureRecoveryPending, recovery.Status)
+		pauseBillingProcess(t, cfg, billingProcessBarrier{Phase: "complete", Database: "ledger", Table: "task_submit_failure_recoveries"})
+		return
+	}
+
 	if cfg.Role == "work" {
 		c, info := billingProcessContext(cfg)
 		if cfg.AdmissionOnly {
@@ -465,6 +489,8 @@ func awaitBillingProcessBarrier(t *testing.T, p *billingTestProcess) billingProc
 	defer ticker.Stop()
 	timer := time.NewTimer(30 * time.Second)
 	defer timer.Stop()
+	exited := p.exited
+	childExited := false
 	for {
 		data, err := os.ReadFile(p.ready)
 		if err == nil {
@@ -474,9 +500,15 @@ func awaitBillingProcessBarrier(t *testing.T, p *billingTestProcess) billingProc
 			return event
 		}
 		require.True(t, billingProcessMarkerNotReady(err), "barrier read: %v", err)
+		if childExited && errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("child exited before its barrier: %v\n%s", <-p.done, p.output.text())
+		}
 		select {
-		case err := <-p.done:
-			t.Fatalf("child exited before its barrier: %v\n%s", err, p.output.text())
+		case <-exited:
+			// A fast recovery child may publish its marker and exit between our
+			// read and select. Re-read, still retrying a sharing violation.
+			childExited = true
+			exited = nil
 		case <-timer.C:
 			t.Fatalf("child never reached its barrier\n%s", p.output.text())
 		case <-ticker.C:
@@ -749,6 +781,46 @@ func TestBillingProcessRefundRecovery(t *testing.T) {
 				require.Equal(t, snapshot, billingProcessSnapshot(t, db))
 			})
 		}
+	}
+}
+
+func TestBillingProcessRejectedTaskRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery test; run without -short")
+	}
+	for _, funding := range billingProcessFundingCases()[:2] {
+		t.Run(funding.name, func(t *testing.T) {
+			dir, db := seedBillingProcessDB(t, funding)
+			require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}))
+			cfg := billingProcessConfig{Role: "reject_task", Phase: "complete", Preference: funding.preference, Source: funding.source}
+			marker := killBillingTestProcess(t, startBillingTestProcess(t, dir, cfg), "complete")
+			require.Equal(t, "task_submit_failure_recoveries", marker.Table)
+			var task model.Task
+			require.NoError(t, db.First(&task).Error)
+			require.EqualValues(t, model.TaskStatusSubmitted, task.Status)
+			require.Equal(t, 100, task.Quota)
+			var count int64
+			require.NoError(t, db.Model(&model.BillingSettlement{}).Where("operation_key = ?", model.BillingRequestFinalizeOperationKey("process-recovery-request")).Count(&count).Error)
+			require.Zero(t, count, "a separate process must recover the claim before funds can move")
+			cfg.Role, cfg.Phase = "recover", ""
+			finishBillingTestProcess(t, startBillingTestProcess(t, dir, cfg))
+			assertBillingProcessLedger(t, db, funding, 0, "complete", true)
+			require.NoError(t, db.First(&task, task.ID).Error)
+			require.EqualValues(t, model.TaskStatusFailure, task.Status)
+			require.Zero(t, task.Quota)
+			var recovery model.TaskSubmitFailureRecovery
+			require.NoError(t, db.First(&recovery, "task_id = ?", task.ID).Error)
+			require.Equal(t, model.TaskSubmitFailureRecoveryRecorded, recovery.Status)
+			snapshot := billingProcessSnapshot(t, db)
+			finishBillingTestProcess(t, startBillingTestProcess(t, dir, cfg))
+			require.Equal(t, snapshot, billingProcessSnapshot(t, db))
+			var replayTask model.Task
+			var replayRecovery model.TaskSubmitFailureRecovery
+			require.NoError(t, db.First(&replayTask, task.ID).Error)
+			require.NoError(t, db.First(&replayRecovery, "task_id = ?", task.ID).Error)
+			require.Equal(t, task, replayTask)
+			require.Equal(t, recovery, replayRecovery)
+		})
 	}
 }
 

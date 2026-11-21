@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -61,8 +62,12 @@ var timedOutTaskScanBudget = 2000
 
 var timedOutTaskSweepCursor struct {
 	sync.Mutex
-	afterSubmitTime int64
-	afterID         int64
+	afterSubmitTime        int64
+	afterID                int64
+	appliedAfterSubmitTime int64
+	appliedAfterID         int64
+	appliedThroughTime     int64
+	appliedThroughID       int64
 }
 
 type appliedTaskRecoveryOutcome uint8
@@ -74,7 +79,7 @@ const (
 )
 
 // sweepTimedOutTasks 在主轮询之前独立清理超时任务。
-// 每次最多转换 100 条、扫描 2000 条，剩余的从游标位置在下个周期继续处理。
+// 每次最多转换100条；已结算恢复与普通超时各最多扫描2000条，分别保留游标。
 // 使用 per-task CAS (UpdateWithStatus) 防止覆盖被正常轮询已推进的任务。
 func sweepTimedOutTasks(ctx context.Context) {
 	if constant.TaskTimeoutMinutes <= 0 {
@@ -89,13 +94,40 @@ func sweepTimedOutTasks(ctx context.Context) {
 	defer timedOutTaskSweepCursor.Unlock()
 
 	remaining := timedOutTaskTransitionBudget
+	// Recovery gets at most half the transition capacity. Unused slots are
+	// reserved for ordinary timeout work rather than consumed by later pages.
+	recoveryRemaining := timedOutTaskTransitionBudget / 2
 	scanBudget := timedOutTaskScanBudget
-	if recovered, err := model.GetAppliedTaskFinalizeRecoveryCandidates(cutoff, remaining); err != nil {
-		logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize recovery query error: %v", err))
-	} else {
+	appliedScanBudget := timedOutTaskScanBudget
+	appliedAfterTime, appliedAfterID := timedOutTaskSweepCursor.appliedAfterSubmitTime, timedOutTaskSweepCursor.appliedAfterID
+	appliedThroughTime, appliedThroughID := timedOutTaskSweepCursor.appliedThroughTime, timedOutTaskSweepCursor.appliedThroughID
+	if appliedThroughID == 0 {
+		var err error
+		appliedThroughTime, appliedThroughID, err = model.GetAppliedTaskFinalizeRecoveryUpperBound(cutoff)
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize upper bound error: %v", err))
+		}
+	}
+	for appliedThroughID > 0 && remaining > 0 && recoveryRemaining > 0 && appliedScanBudget > 0 {
+		queryLimit := min(100, appliedScanBudget)
+		recovered, err := model.GetAppliedTaskFinalizeRecoveryCandidatesInRange(cutoff, appliedAfterTime, appliedAfterID, appliedThroughTime, appliedThroughID, queryLimit)
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize recovery query error after cursor (%d, %d): %v", appliedAfterTime, appliedAfterID, err))
+			break
+		}
+		if len(recovered) == 0 {
+			appliedAfterTime, appliedAfterID = 0, 0
+			appliedThroughTime, appliedThroughID = 0, 0
+			break
+		}
 		for _, task := range recovered {
-			if remaining <= 0 {
+			if remaining <= 0 || recoveryRemaining <= 0 || appliedScanBudget <= 0 {
 				break
+			}
+			appliedAfterTime, appliedAfterID = task.SubmitTime, task.ID
+			appliedScanBudget--
+			if task.PrivateDataUnreadable() {
+				continue
 			}
 			recoveryOutcome, recoveryErr := recoverAppliedTaskTerminalEvidence(task)
 			if recoveryErr != nil {
@@ -117,9 +149,16 @@ func sweepTimedOutTasks(ctx context.Context) {
 			}
 			if recoveryOutcome == appliedTaskRecoveryUpdated {
 				remaining--
+				recoveryRemaining--
 			}
 		}
+		if appliedAfterTime == appliedThroughTime && appliedAfterID == appliedThroughID {
+			appliedAfterTime, appliedAfterID, appliedThroughTime, appliedThroughID = 0, 0, 0, 0
+			break // The next sweep revisits repaired rows, even with newer arrivals.
+		}
 	}
+	timedOutTaskSweepCursor.appliedAfterSubmitTime, timedOutTaskSweepCursor.appliedAfterID = appliedAfterTime, appliedAfterID
+	timedOutTaskSweepCursor.appliedThroughTime, timedOutTaskSweepCursor.appliedThroughID = appliedThroughTime, appliedThroughID
 	afterSubmitTime := timedOutTaskSweepCursor.afterSubmitTime
 	afterID := timedOutTaskSweepCursor.afterID
 	for remaining > 0 && scanBudget > 0 {
@@ -144,6 +183,9 @@ func sweepTimedOutTasks(ctx context.Context) {
 			afterSubmitTime = task.SubmitTime
 			afterID = task.ID
 			scanBudget--
+			if task.PrivateDataUnreadable() {
+				continue
+			}
 			settlementPending, taskFinalizeApplied, settlementErr := taskTerminalSettlementState(task, true)
 			if settlementErr != nil {
 				logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks settlement lookup error for task %s: %v", task.TaskID, settlementErr))
@@ -155,6 +197,9 @@ func sweepTimedOutTasks(ctx context.Context) {
 				// legacy applied rows without evidence retain the historical timeout
 				// path so they cannot be stranded.
 				if taskFinalizeApplied {
+					if recoveryRemaining <= 0 {
+						continue // A late applied result cannot spend ordinary timeout capacity.
+					}
 					latestTask, reloadErr := model.GetTaskByID(task.ID)
 					if reloadErr != nil {
 						logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize task reload error for task %s: %v", task.TaskID, reloadErr))
@@ -177,6 +222,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 					}
 					if recoveryOutcome == appliedTaskRecoveryUpdated {
 						remaining--
+						recoveryRemaining--
 					}
 					continue
 				} else {
@@ -186,9 +232,17 @@ func sweepTimedOutTasks(ctx context.Context) {
 			remaining--
 			isLegacy := task.SubmitTime > 0 && task.SubmitTime < legacyTaskRefundCutoff
 			isUnconfirmedSubmit := task.PrivateData.AwaitingUpstreamID
-			terminalDecision := prepareTaskTerminalBillingDecision(ctx, nil, task, &relaycommon.TaskInfo{
-				Status: string(model.TaskStatusFailure), Reason: reason,
-			}, 0)
+			hasUpstreamID := task.PrivateData.UpstreamTaskID != ""
+			task.PreserveDataOnStatusUpdate()
+			var terminalDecision taskTerminalBillingDecision
+			if !isUnconfirmedSubmit || hasUpstreamID {
+				// Until an upstream ID is known, the timeout owns only the
+				// submission outcome. A usage decision would freeze the older
+				// placeholder quota while a retry may have reserved more.
+				terminalDecision = prepareTaskTerminalBillingDecision(ctx, nil, task, &relaycommon.TaskInfo{
+					Status: string(model.TaskStatusFailure), Reason: reason,
+				}, 0)
+			}
 			if terminalDecision.UsesPlan && terminalDecision.ManualReason != "" {
 				won, err := persistTaskManualBillingDecision(task, task.Status, task.UpdatedAt, terminalDecision)
 				if err != nil {
@@ -200,9 +254,12 @@ func sweepTimedOutTasks(ctx context.Context) {
 			}
 
 			oldStatus := task.Status
+			observedUpdatedAt := task.UpdatedAt
 			task.Status = model.TaskStatusFailure
 			task.Progress = "100%"
 			task.FinishTime = now
+			unprojectedRetry := task.MayHaveUnprojectedSubmissionFunding()
+			task.SubmitTimeoutRetainedFunding = !isLegacy && isUnconfirmedSubmit && !hasUpstreamID && (task.Quota > 0 || unprojectedRetry)
 			if isLegacy {
 				task.FailReason = legacyReason
 			} else if isUnconfirmedSubmit {
@@ -221,10 +278,11 @@ func sweepTimedOutTasks(ctx context.Context) {
 			}
 			var won bool
 			var err error
+			task.PreservePrivateDataOnStatusUpdate()
 			if settlement != nil {
-				won, err = task.UpdateWithStatusAndSettlement(oldStatus, *settlement)
+				won, err = task.UpdateWithStatusAndSettlementSnapshot(oldStatus, observedUpdatedAt, *settlement)
 			} else {
-				won, err = task.UpdateWithStatus(oldStatus)
+				won, err = task.UpdateWithStatusSnapshot(oldStatus, observedUpdatedAt)
 			}
 			if err != nil {
 				logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks CAS update error for task %s: %v", task.TaskID, err))
@@ -364,22 +422,33 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 		)
 	}
 
+	stale := make(map[string]bool)
 	for _, responseItem := range responseItems.Data {
+		if stale[responseItem.TaskID] {
+			continue
+		}
 		task := taskM[responseItem.TaskID]
 		if task == nil {
 			logger.LogWarn(ctx, fmt.Sprintf("Suno task response ignored: unknown task_id=%s", responseItem.TaskID))
 			continue
 		}
-		processSunoTaskResponse(ctx, task, responseItem)
+		if !processSunoTaskResponse(ctx, task, responseItem) {
+			stale[responseItem.TaskID] = true
+		}
 	}
 	return nil
 }
 
-func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem dto.SunoDataResponse) {
+// A failed write makes this snapshot unsuitable for later items in the batch.
+func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem dto.SunoDataResponse) bool {
 	if !taskNeedsUpdate(task, responseItem) {
-		return
+		return true
 	}
 	mergedTask := *task
+	if err := mergedTask.CapturePrivateDataForStatusUpdate(); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("Suno task %s private history cannot be safely rewritten", task.TaskID))
+		return false
+	}
 	mergedTask.Status = lo.If(model.TaskStatus(responseItem.Status) != "", model.TaskStatus(responseItem.Status)).Else(mergedTask.Status)
 	mergedTask.FailReason = lo.If(responseItem.FailReason != "", common.SanitizePersistedLogContent(responseItem.FailReason)).Else(mergedTask.FailReason)
 	mergedTask.SubmitTime = lo.If(responseItem.SubmitTime != 0, responseItem.SubmitTime).Else(mergedTask.SubmitTime)
@@ -399,36 +468,43 @@ func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem
 	pending, settlementErr := taskTerminalSettlementPending(task, providerTerminal)
 	if settlementErr != nil {
 		logger.LogError(ctx, fmt.Sprintf("Suno task %s settlement lookup failed: %v", task.TaskID, settlementErr))
-		return
+		return false
 	}
 	if pending {
-		return
+		return true
 	}
 
 	previousStatus := task.Status
-	*task = mergedTask
 	if isFailure {
-		logger.LogInfo(ctx, task.TaskID+" 构建失败，"+task.FailReason)
+		logger.LogInfo(ctx, mergedTask.TaskID+" 构建失败，"+mergedTask.FailReason)
 	}
 
 	var settlement *model.BillingSettlementInput
 	if isFailure {
-		settlement = BuildTaskRefundSettlementInput(task, task.FailReason)
+		settlement = BuildTaskRefundSettlementInput(&mergedTask, mergedTask.FailReason)
 	}
 	var won bool
 	var err error
 	if settlement != nil {
-		won, err = task.UpdateWithStatusAndSettlement(previousStatus, *settlement)
+		won, err = mergedTask.UpdateWithStatusAndSettlementSnapshot(previousStatus, task.UpdatedAt, *settlement)
+	} else if !providerTerminal {
+		won, err = mergedTask.UpdatePollingProgress(previousStatus)
 	} else {
-		won, err = task.UpdateWithStatus(previousStatus)
+		won, err = mergedTask.UpdateWithStatusSnapshot(previousStatus, task.UpdatedAt)
 	}
 	if err != nil {
 		common.SysLog("UpdateSunoTask task error: " + err.Error())
-	} else if !won {
+		return false
+	}
+	if !won {
 		logger.LogWarn(ctx, fmt.Sprintf("Task %s CAS lost or no-op update, skip billing", task.TaskID))
-	} else if settlement != nil {
+		return false
+	}
+	*task = mergedTask
+	if settlement != nil {
 		applyTaskBillingSettlement(ctx, task, settlement)
 	}
+	return true
 }
 
 // taskNeedsUpdate 检查 Suno 任务是否需要更新
@@ -488,6 +564,24 @@ func UpdateVideoTasks(ctx context.Context, platform constant.TaskPlatform, taskC
 
 func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, channelId int, taskIds []string, taskM map[string]*model.Task) error {
 	logger.LogInfo(ctx, fmt.Sprintf("Channel #%d pending video tasks: %d", channelId, len(taskIds)))
+	// Applied funding and its stored evidence can finish without a working
+	// channel, provider adaptor, or timeout sweep.
+	pollIDs := make([]string, 0, len(taskIds))
+	for _, id := range taskIds {
+		task := taskM[id]
+		if hasPendingVideoTerminalEvidence(task) {
+			handled, err := recoverAppliedVideoTaskFromStore(task)
+			if err != nil {
+				logger.LogError(ctx, fmt.Sprintf("failed to recover applied video task %s: %v", task.TaskID, err))
+				continue
+			}
+			if handled {
+				continue
+			}
+		}
+		pollIDs = append(pollIDs, id)
+	}
+	taskIds = pollIDs
 	if len(taskIds) == 0 {
 		return nil
 	}
@@ -520,16 +614,23 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 }
 
 func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *model.Channel, taskId string, taskM map[string]*model.Task) error {
+	task := taskM[taskId]
+	if task == nil {
+		logger.LogError(ctx, fmt.Sprintf("Task %s not found in taskM", taskId))
+		return fmt.Errorf("task %s not found", taskId)
+	}
+	if hasPendingVideoTerminalEvidence(task) {
+		if handled, err := recoverAppliedVideoTaskFromStore(task); handled || err != nil {
+			return err
+		}
+	}
 	baseURL := constant.ChannelBaseURLs[ch.Type]
 	if ch.GetBaseURL() != "" {
 		baseURL = ch.GetBaseURL()
 	}
 	proxy := ch.GetSetting().Proxy
-
-	task := taskM[taskId]
-	if task == nil {
-		logger.LogError(ctx, fmt.Sprintf("Task %s not found in taskM", taskId))
-		return fmt.Errorf("task %s not found", taskId)
+	if err := task.CapturePrivateDataForStatusUpdate(); err != nil {
+		return fmt.Errorf("task %s private history cannot be safely rewritten", taskId)
 	}
 	key := ch.Key
 
@@ -561,9 +662,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	// gateways may return code=success while their nested data.data object is
 	// the actual provider result; consuming the outer wrapper first would keep
 	// the task in the gateway's local IN_PROGRESS state forever.
-	if configuredResult, ok, parseErr := taskcommon.ParseConfiguredTaskResult(responseBody, ch.GetOtherSettings()); parseErr != nil {
+	configuredResult, configured, parseErr := taskcommon.ParseConfiguredTaskResult(responseBody, ch.GetOtherSettings())
+	if parseErr != nil {
 		return fmt.Errorf("parse configured task result failed for task %s: %w", taskId, parseErr)
-	} else if ok {
+	} else if configured {
 		taskResult = configuredResult
 	} else {
 		// try parse as MAX API response format
@@ -587,9 +689,19 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		return fmt.Errorf("extract task usage failed for task %s: %w", taskId, err)
 	}
 
-	task.Data = redactVideoResponseBody(responseBody)
+	vertex := ch.Type == constant.ChannelTypeVertexAi
+	inlineResult := ""
+	if strings.HasPrefix(taskResult.Url, "data:") {
+		inlineResult = taskResult.Url
+		// Keep one bounded private copy. The content endpoint can re-fetch
+		// an oversized or Vertex result from its original provider.
+		if vertex || len(inlineResult) > maxRetainedInlineVideoURLBytes {
+			taskResult.Url = ""
+		}
+	}
+	task.Data = redactVideoResponseBody(responseBody, vertex || configured || inlineResult != "", inlineResult)
 
-	logger.LogDebug(ctx, "updateVideoSingleTask taskResult: %+v", taskResult)
+	logger.LogDebug(ctx, "updateVideoSingleTask status=%s progress=%s", taskResult.Status, taskResult.Progress)
 
 	now := time.Now().Unix()
 	if taskResult.Status == "" {
@@ -614,6 +726,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		}
 	}
 	providerTerminal := taskResult.Status == string(model.TaskStatusSuccess) || taskResult.Status == string(model.TaskStatusFailure)
+	keepTerminalPayload := !providerTerminal && hasPendingVideoTerminalEvidence(task)
+	if keepTerminalPayload {
+		task.Data = snap.Data
+	}
 	pending, taskFinalizeApplied, settlementErr := taskTerminalSettlementState(task, providerTerminal)
 	if settlementErr != nil {
 		return fmt.Errorf("load task submission settlement for task %s: %w", task.TaskID, settlementErr)
@@ -629,6 +745,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 				return fmt.Errorf("recover manual task settlement for task %s: %w", task.TaskID, recoveryErr)
 			}
 			if recovered {
+				expectedUpdatedAt = task.UpdatedAt
 				pending, taskFinalizeApplied, settlementErr = taskTerminalSettlementState(task, providerTerminal)
 				if settlementErr != nil {
 					return fmt.Errorf("reload recovered task settlement for task %s: %w", task.TaskID, settlementErr)
@@ -637,6 +754,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		}
 		if pending {
 			return nil
+		}
+	}
+	if taskFinalizeApplied {
+		// The finalize can become applied after the pre-fetch check. Its
+		// durable provider evidence wins over a later, different response.
+		if handled, err := recoverAppliedVideoTaskFromStore(task); handled || err != nil {
+			return err
 		}
 	}
 	terminalDecision := taskTerminalBillingDecision{}
@@ -668,6 +792,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			if !applyTaskBillingSettlement(ctx, task, terminalDecision.Settlement) {
 				return nil
 			}
+			expectedUpdatedAt = task.UpdatedAt
 			taskFinalizeApplied = true
 		}
 	}
@@ -692,16 +817,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		if task.FinishTime == 0 {
 			task.FinishTime = now
 		}
-		if strings.HasPrefix(taskResult.Url, "data:") {
-			// data: URI (e.g. Vertex base64 encoded video) — keep in Data, not in ResultURL
-			task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
-		} else if taskResult.Url != "" {
-			// Direct upstream URL (e.g. Kling, Ali, Doubao, etc.)
-			task.PrivateData.ResultURL = taskResult.Url
-		} else {
-			// No URL from adaptor — construct proxy URL using public task ID
-			task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
-		}
+		setVideoTaskResult(task, taskResult.Url)
 		shouldSettle = true
 	case model.TaskStatusFailure:
 		logger.LogJson(ctx, fmt.Sprintf("Task %s failed", taskId), task)
@@ -742,9 +858,9 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		var won bool
 		var err error
 		if settlement != nil {
-			won, err = task.UpdateWithStatusAndSettlement(snap.Status, *settlement)
+			won, err = task.UpdateWithStatusAndSettlementSnapshot(snap.Status, expectedUpdatedAt, *settlement)
 		} else {
-			won, err = task.UpdateWithStatus(snap.Status)
+			won, err = task.UpdateWithStatusSnapshot(snap.Status, expectedUpdatedAt)
 		}
 		if err != nil {
 			logger.LogError(ctx, fmt.Sprintf("UpdateWithStatus failed for task %s: %s", task.TaskID, err.Error()))
@@ -752,13 +868,24 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			shouldSettle = false
 		} else if !won {
 			logger.LogWarn(ctx, fmt.Sprintf("Task %s already transitioned by another process, skip billing", task.TaskID))
+			if taskFinalizeApplied {
+				if _, recoverErr := recoverAppliedVideoTaskFromStore(task); recoverErr != nil {
+					return fmt.Errorf("recover applied video task %s after stale terminal write: %w", task.TaskID, recoverErr)
+				}
+			}
 			shouldRefund = false
 			shouldSettle = false
 		} else {
 			transitionWon = true
 		}
 	} else if !snap.Equal(task.Snapshot()) {
-		if _, err := task.UpdateWithStatus(snap.Status); err != nil {
+		var err error
+		if keepTerminalPayload {
+			_, err = task.UpdatePollingProgressPreservingData(snap.Status)
+		} else {
+			_, err = task.UpdatePollingProgress(snap.Status)
+		}
+		if err != nil {
 			logger.LogError(ctx, fmt.Sprintf("Failed to update task %s: %s", task.TaskID, err.Error()))
 		}
 	} else {
@@ -771,6 +898,54 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	}
 
 	return nil
+}
+
+func hasPendingVideoTerminalEvidence(task *model.Task) bool {
+	return task != nil && (task.PrivateData.PendingTerminalStatus == model.TaskStatusSuccess || task.PrivateData.PendingTerminalStatus == model.TaskStatusFailure)
+}
+
+const maxRetainedInlineVideoURLBytes = 16 << 20
+
+func setVideoTaskResult(task *model.Task, providerURL string) {
+	task.PrivateData.InlineVideoDataURL = ""
+	task.PrivateData.LocalVideoContent = false
+	if strings.HasPrefix(providerURL, "data:") {
+		platform, _ := strconv.Atoi(string(task.Platform))
+		if platform != constant.ChannelTypeVertexAi && len(providerURL) <= maxRetainedInlineVideoURLBytes {
+			task.PrivateData.InlineVideoDataURL = providerURL
+		}
+		providerURL = ""
+	}
+	if providerURL == "" {
+		task.PrivateData.LocalVideoContent = true
+		providerURL = model.TaskVideoProxyPath(task.TaskID)
+	}
+	task.PrivateData.ResultURL = providerURL
+}
+
+func recoverAppliedVideoTaskFromStore(task *model.Task) (bool, error) {
+	latest, err := model.GetTaskPlaceholderByID(task.ID)
+	if err != nil {
+		return false, err
+	}
+	if latest.Status == model.TaskStatusSuccess || latest.Status == model.TaskStatusFailure {
+		*task = *latest
+		return true, nil
+	}
+	if !hasPendingVideoTerminalEvidence(latest) {
+		return false, nil
+	}
+	_, applied, err := taskTerminalSettlementState(latest, true)
+	if err != nil || !applied {
+		return false, err
+	}
+	outcome, err := recoverAppliedTaskTerminalEvidence(latest)
+	if outcome == appliedTaskRecoveryUpdated {
+		*task = *latest
+	}
+	// A lost recovery CAS leaves durable evidence to a fresh poll. This
+	// caller's provider snapshot cannot replace it.
+	return true, err
 }
 
 func persistPendingTaskTerminalEvidence(task *model.Task, result *relaycommon.TaskInfo, now int64) {
@@ -807,11 +982,11 @@ func recoverAppliedTaskTerminalEvidence(task *model.Task) (appliedTaskRecoveryOu
 		candidate.FinishTime = time.Now().Unix()
 	}
 	candidate.FailReason = candidate.PrivateData.PendingTerminalReason
-	if pending == model.TaskStatusSuccess && candidate.PrivateData.PendingTerminalResultURL != "" {
-		candidate.PrivateData.ResultURL = candidate.PrivateData.PendingTerminalResultURL
+	if pending == model.TaskStatusSuccess {
+		setVideoTaskResult(&candidate, candidate.PrivateData.PendingTerminalResultURL)
 	}
 	clearPendingTaskTerminalEvidence(&candidate)
-	won, err := candidate.UpdateWithStatus(oldStatus)
+	won, err := candidate.PublishRecoveredTaskTerminalStatus(oldStatus, task.UpdatedAt)
 	if err != nil {
 		return appliedTaskRecoveryNoEvidence, err
 	}
@@ -847,7 +1022,7 @@ func markAppliedTaskEvidenceMissing(task *model.Task, now int64) (appliedTaskRec
 	candidate.FinishTime = now
 	candidate.FailReason = "task settlement was already applied but terminal provider evidence is unavailable; manual reconciliation required"
 	clearPendingTaskTerminalEvidence(&candidate)
-	won, err := candidate.UpdateWithStatus(oldStatus)
+	won, err := candidate.PublishRecoveredTaskTerminalStatus(oldStatus, task.UpdatedAt)
 	if err != nil {
 		return appliedTaskRecoveryNoEvidence, err
 	}
@@ -969,9 +1144,8 @@ func recoverManualTaskBillingSettlement(
 	if err != nil || !found || (status != model.BillingSettlementStatusManual && status != model.BillingSettlementStatusPending) {
 		return false, err
 	}
-	// Persist the provider terminal facts before promoting the manual settlement
-	// to a funding operation. A crash after promotion must remain recoverable as
-	// the provider's terminal state, not be misclassified as missing evidence.
+	// Keep the replacement provider evidence and its promoted funding intent
+	// in the same transaction. An existing pending intent owns its evidence.
 	candidate := *task
 	if task.PrivateData.BillingContext != nil {
 		billingContext := *task.PrivateData.BillingContext
@@ -981,16 +1155,8 @@ func recoverManualTaskBillingSettlement(
 		candidate.PrivateData.BillingContext.PricingUsageEnvelope = types.CloneTaskPricingUsageEnvelope(decision.PricingUsageEnvelope)
 	}
 	persistPendingTaskTerminalEvidence(&candidate, providerResult, time.Now().Unix())
-	won, err := candidate.UpdateWithStatusAndPendingTerminalEvidence(fromStatus, expectedUpdatedAt)
-	if err != nil {
-		return false, fmt.Errorf("persist manual task terminal evidence: %w", err)
-	}
-	if !won {
-		return false, nil
-	}
-	*task = candidate
-	usageManualReasonPrefix, recoveryNote := taskUsageRecoveryReason(task)
-	ready, err := model.PromoteManualTaskBillingSettlement(*decision.Settlement, usageManualReasonPrefix, recoveryNote)
+	usageManualReasonPrefix, recoveryNote := taskUsageRecoveryReason(&candidate)
+	ready, err := model.PromoteManualTaskBillingSettlementWithEvidence(&candidate, fromStatus, expectedUpdatedAt, *decision.Settlement, usageManualReasonPrefix, recoveryNote)
 	if errors.Is(err, model.ErrBillingSettlementOperationConflict) {
 		// A different manual reason or a concurrent/permanent recovery failure
 		// must remain operator-gated; do not turn that durable state into a
@@ -1003,6 +1169,11 @@ func recoverManualTaskBillingSettlement(
 	if !applyTaskBillingSettlement(ctx, task, decision.Settlement) {
 		return false, nil
 	}
+	latest, err := model.GetTaskPlaceholderByID(task.ID)
+	if err != nil {
+		return false, err
+	}
+	*task = *latest
 	return true, nil
 }
 
@@ -1035,9 +1206,19 @@ func shouldApplyTaskResultProgress(taskResult *relaycommon.TaskInfo) bool {
 	}
 }
 
-func redactVideoResponseBody(body []byte) []byte {
-	var m map[string]any
-	if err := common.Unmarshal(body, &m); err != nil {
+func redactVideoResponseBody(body []byte, removeInlineVideo bool, selectedInlineURL string) []byte {
+	var payload any
+	if err := common.UnmarshalUseNumber(body, &payload); err != nil {
+		if removeInlineVideo {
+			return nil
+		}
+		return body
+	}
+	if removeInlineVideo {
+		payload, _ = removeVideoInlinePayload(payload, selectedInlineURL, 0)
+	}
+	m, object := payload.(map[string]any)
+	if !object && !removeInlineVideo {
 		return body
 	}
 	resp, _ := m["response"].(map[string]any)
@@ -1054,11 +1235,62 @@ func redactVideoResponseBody(body []byte) []byte {
 			}
 		}
 	}
-	b, err := common.Marshal(m)
+	b, err := common.Marshal(payload)
 	if err != nil {
+		if removeInlineVideo {
+			return nil
+		}
 		return body
 	}
 	return b
+}
+
+func removeVideoInlinePayload(value any, selectedInlineURL string, textDepth int) (any, bool) {
+	switch value := value.(type) {
+	case string:
+		trimmed := strings.TrimSpace(value)
+		if len(trimmed) >= len("data:") && strings.EqualFold(trimmed[:len("data:")], "data:") {
+			header, _, valid := strings.Cut(trimmed, ",")
+			const video = "data:video/"
+			if trimmed == selectedInlineURL || valid && (strings.EqualFold(header, "data:;base64") ||
+				len(header) >= len(video) && strings.EqualFold(header[:len(video)], video)) {
+				return "", true
+			}
+		}
+		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+			if textDepth < 8 {
+				var nested any
+				if common.UnmarshalUseNumber([]byte(trimmed), &nested) == nil {
+					if result, removed := removeVideoInlinePayload(nested, selectedInlineURL, textDepth+1); removed {
+						if encoded, err := common.Marshal(result); err == nil {
+							return string(encoded), true
+						}
+						return "", true
+					}
+				}
+			}
+			if selectedInlineURL != "" && strings.Contains(trimmed, selectedInlineURL) {
+				return strings.ReplaceAll(value, selectedInlineURL, ""), true
+			}
+		}
+	case map[string]any:
+		changed := false
+		for key, child := range value {
+			if next, removed := removeVideoInlinePayload(child, selectedInlineURL, textDepth); removed {
+				value[key], changed = next, true
+			}
+		}
+		return value, changed
+	case []any:
+		changed := false
+		for i, child := range value {
+			if next, removed := removeVideoInlinePayload(child, selectedInlineURL, textDepth); removed {
+				value[i], changed = next, true
+			}
+		}
+		return value, changed
+	}
+	return value, false
 }
 
 func truncateBase64(s string) string {

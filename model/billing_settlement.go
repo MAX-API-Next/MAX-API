@@ -23,10 +23,13 @@ const (
 	BillingSettlementStatusPending      = "pending"
 	BillingSettlementStatusApplied      = "applied"
 	BillingSettlementStatusManual       = "manual"
+	billingSettlementStatusCancelled    = "cancelled"
 	BillingSettlementEffectPending      = "pending"
 	BillingSettlementEffectApplying     = "applying"
 	BillingSettlementEffectApplied      = "applied"
 )
+
+var errBillingSettlementCancelled = errors.New("billing settlement cancelled")
 
 const billingRequestOperationPrefix = "request:"
 const billingRequestFinalizeSuffix = ":finalize"
@@ -40,6 +43,7 @@ var (
 	ErrBillingSettlementTaskConflict       = errors.New("billing settlement task quota conflict")
 	ErrBillingSettlementOperationConflict  = errors.New("billing settlement operation conflict")
 	ErrBillingSettlementRecordNotDurable   = errors.New("billing settlement record was not durably created")
+	ErrBoundTaskWalletDebitOutcomeUnknown  = errors.New("bound task wallet debit commit outcome is unknown")
 	ErrBillingSettlementReviewConflict     = errors.New("billing settlement is no longer reviewable")
 	ErrBillingSettlementCompletionRequired = errors.New("manual task settlement requires financial completion")
 	ErrSubscriptionRefundClamped           = errors.New("subscription refund was clamped")
@@ -52,8 +56,26 @@ var (
 	// pending record and then racing while upgrading their deferred transaction
 	// to a write transaction. The operation key remains the durable idempotency
 	// boundary for retries from other processes or after a restart.
-	billingSettlementSQLiteWriteMu sync.Mutex
+	billingSettlementSQLiteWriteMu = make(billingSQLiteWriteGate, 1)
 )
+
+type billingSQLiteWriteGate chan struct{}
+
+func (gate billingSQLiteWriteGate) Lock()   { gate <- struct{}{} }
+func (gate billingSQLiteWriteGate) Unlock() { <-gate }
+
+func (gate billingSQLiteWriteGate) lockContext(ctx context.Context) error {
+	select {
+	case gate <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			gate.Unlock()
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 type permanentBillingSettlementError struct {
 	err error
@@ -90,6 +112,7 @@ type BillingSettlement struct {
 	FundingDelta                    int64  `gorm:"not null;default:0;index:idx_billing_settlement_admission,priority:3;index:idx_billing_settlement_status_funding,priority:2;index:idx_billing_settlement_reconciliation,priority:2"`
 	AppliedFundingDelta             int64  `gorm:"not null;default:0"`
 	TokenDelta                      int64  `gorm:"not null;default:0"`
+	TokenMissingAtApply             bool   `gorm:"not null;default:false" json:"-"`
 	AppliedTokenDelta               int64  `gorm:"not null;default:0"`
 	TaskID                          int64  `gorm:"not null;default:0"`
 	TaskQuota                       int64  `gorm:"not null;default:0"`
@@ -241,14 +264,16 @@ type BillingSettlementReconciliationData struct {
 	OpenAlertCount int64 `json:"open_alert_count"`
 	// ReviewedCount is retained for API compatibility. Closed alerts are no
 	// longer part of this active projection, so the value is always zero.
-	ReviewedCount       int64                                 `json:"reviewed_count"`
-	BlockingRecordCount int64                                 `json:"blocking_record_count"`
-	BlockedUserCount    int64                                 `json:"blocked_user_count"`
-	BlockUserByDefault  bool                                  `json:"block_user_by_default"`
-	OldestCreatedAt     int64                                 `json:"oldest_created_at"`
-	Truncated           bool                                  `json:"truncated"`
-	GeneratedAt         int64                                 `json:"generated_at"`
-	Items               []BillingSettlementReconciliationItem `json:"items"`
+	ReviewedCount          int64                                 `json:"reviewed_count"`
+	BlockingRecordCount    int64                                 `json:"blocking_record_count"`
+	BlockedUserCount       int64                                 `json:"blocked_user_count"`
+	BlockUserByDefault     bool                                  `json:"block_user_by_default"`
+	OldestCreatedAt        int64                                 `json:"oldest_created_at"`
+	Truncated              bool                                  `json:"truncated"`
+	GeneratedAt            int64                                 `json:"generated_at"`
+	Items                  []BillingSettlementReconciliationItem `json:"items"`
+	TaskSubmitFailureCount int64                                 `json:"task_submit_failure_count,omitempty"`
+	TaskSubmitFailures     []taskSubmitFailureReviewItem         `json:"task_submit_failures,omitempty"`
 }
 
 func unresolvedPositiveFinalizeSettlementScope(db *gorm.DB) *gorm.DB {
@@ -526,6 +551,9 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 			_, items[index].BlocksUser = blockedUsers[items[index].UserID]
 		}
 		data.Items = items
+		if err := loadTaskSubmitFailureReview(tx, limit, &data); err != nil {
+			return err
+		}
 		return nil
 	}, transactionOptions...)
 	return data, err
@@ -1086,18 +1114,36 @@ func GetBillingSettlementStatus(operationKey string) (status string, found bool,
 	return record.Status, true, nil
 }
 
-func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDelta int64, alreadyApplied bool, err error) {
+func ApplyBillingSettlementOnce(input BillingSettlementInput) (int64, bool, error) {
+	return applyBillingSettlementOnce(input, 0)
+}
+
+// ApplyBoundTaskWalletPreConsumeOnce does not leave a new debit for the worker
+// to replay after a failed initial reservation on an existing task placeholder.
+func ApplyBoundTaskWalletPreConsumeOnce(input BillingSettlementInput, taskID int64) (int64, bool, error) {
+	if taskID <= 0 || input.Source != BillingSettlementSourceWallet || input.PreConsumeRequestID == "" ||
+		input.OperationKey != billingRequestOperationPrefix+input.PreConsumeRequestID+":pre-consume" || input.TaskID != 0 {
+		return 0, false, ErrBillingSettlementOperationConflict
+	}
+	return applyBillingSettlementOnce(input, taskID)
+}
+
+func applyBillingSettlementOnce(input BillingSettlementInput, boundTaskID int64) (appliedFundingDelta int64, alreadyApplied bool, err error) {
 	if input.OperationKey == "" {
 		return 0, false, errors.New("billing settlement operation key is required")
 	}
+	atomicPreConsume := boundTaskID > 0
 	if common.UsingSQLite {
 		billingSettlementSQLiteWriteMu.Lock()
 		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 
-	record, alreadyApplied, err := ensureBillingSettlementRecord(input)
-	if err != nil {
-		return 0, false, err
+	var record BillingSettlement
+	if !atomicPreConsume {
+		record, alreadyApplied, err = ensureBillingSettlementRecord(input)
+		if err != nil {
+			return 0, false, err
+		}
 	}
 	resolvedTokenKey := input.TokenKey
 	effectiveTokenID := input.TokenID
@@ -1119,7 +1165,34 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 		return record.AppliedFundingDelta, true, nil
 	}
 
-	err = DB.Transaction(func(tx *gorm.DB) error {
+	apply := func(tx *gorm.DB) error {
+		if atomicPreConsume {
+			// The existing task is the durable link to the request receipt.
+			// Lock it before a debit so rejection cannot classify an in-flight
+			// debit as absent or replace its owner while that debit commits.
+			if tx.Dialector.Name() == "sqlite" {
+				if err := tx.Model(&Task{}).Where("id = ?", boundTaskID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
+					return err
+				}
+			}
+			task, err := readTaskSnapshot(withRowLock(tx).Where("id = ?", boundTaskID))
+			if err != nil {
+				return err
+			}
+			if !task.MayHaveUnprojectedSubmissionFunding() || task.PrivateData.UpstreamTaskID != "" ||
+				task.Status == TaskStatusFailure && !task.SubmitTimeoutRetainedFunding || task.Status == TaskStatusSuccess ||
+				task.UserId != input.UserID || task.PrivateData.TokenId != input.TokenID || task.PrivateData.BillingRequestId != input.PreConsumeRequestID {
+				return ErrBillingSettlementTaskConflict
+			}
+			record, alreadyApplied, err = ensureBillingSettlementRecordDB(tx, input)
+			if err != nil {
+				return err
+			}
+			if alreadyApplied {
+				appliedFundingDelta = record.AppliedFundingDelta
+				return claimBillingPreConsumeSourceTx(tx, billingPreConsumeSelectionFromSettlement(input))
+			}
+		}
 		var current BillingSettlement
 		if err := withRowLock(tx).Where("id = ?", record.ID).First(&current).Error; err != nil {
 			return err
@@ -1134,6 +1207,9 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 		}
 		if current.Status == BillingSettlementStatusManual {
 			return permanentBillingSettlement(fmt.Errorf("%w: %s", ErrBillingSettlementManualReview, current.LastError))
+		}
+		if current.Status == billingSettlementStatusCancelled {
+			return errBillingSettlementCancelled
 		}
 		if current.Status != BillingSettlementStatusPending {
 			return permanentBillingSettlement(fmt.Errorf("unknown billing settlement status %q", current.Status))
@@ -1206,9 +1282,13 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 		if input.TaskID > 0 {
 			appliedTaskQuotaTarget := input.TaskQuota + appliedFundingDelta
 			if appliedTaskQuotaTarget != input.TaskQuota {
-				result := tx.Model(&Task{}).
-					Where("id = ? AND quota = ?", input.TaskID, input.TaskQuota).
-					Update("quota", appliedTaskQuotaTarget)
+				query := tx.Model(&Task{}).Where("id = ? AND quota = ?", input.TaskID, input.TaskQuota)
+				if input.OperationKey == BillingTaskFinalizeOperationKey(input.TaskID) {
+					// Provider terminal evidence already owns its version. Keep
+					// that version when the corresponding finalize projects quota.
+					query = query.Omit("updated_at")
+				}
+				result := query.Update("quota", appliedTaskQuotaTarget)
 				if result.Error != nil {
 					return result.Error
 				}
@@ -1221,14 +1301,15 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 		result := tx.Model(&BillingSettlement{}).
 			Where("id = ? AND status = ?", record.ID, BillingSettlementStatusPending).
 			Updates(map[string]interface{}{
-				"applied_funding_delta": appliedFundingDelta,
-				"applied_token_delta":   appliedTokenDelta,
-				"status":                BillingSettlementStatusApplied,
-				"effect_status":         effectStatusAfterSettlement(current.EffectPayload),
-				"last_error":            "",
-				"next_attempt":          0,
-				"updated_at":            time.Now().Unix(),
-				"revision":              gorm.Expr("revision + ?", 1),
+				"applied_funding_delta":  appliedFundingDelta,
+				"applied_token_delta":    appliedTokenDelta,
+				"token_missing_at_apply": input.AllowMissingToken && input.TokenID > 0 && input.TokenDelta != 0 && effectiveTokenID == 0,
+				"status":                 BillingSettlementStatusApplied,
+				"effect_status":          effectStatusAfterSettlement(current.EffectPayload),
+				"last_error":             "",
+				"next_attempt":           0,
+				"updated_at":             time.Now().Unix(),
+				"revision":               gorm.Expr("revision + ?", 1),
 			})
 		if result.Error != nil {
 			return result.Error
@@ -1251,12 +1332,33 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 			cacheTasks = append(cacheTasks, tokenTask)
 		}
 		return nil
-	})
+	}
+	if atomicPreConsume {
+		prepared := false
+		_, err = taskSubmitFailureTransaction(DB, func(tx *gorm.DB) error {
+			applyErr := apply(tx)
+			prepared = applyErr == nil
+			return applyErr
+		})
+		if prepared && err != nil && input.FundingDelta > 0 && DB.Dialector.Name() != "sqlite" {
+			err = errors.Join(ErrBoundTaskWalletDebitOutcomeUnknown, err)
+		}
+	} else {
+		err = DB.Transaction(apply)
+	}
 	if err != nil {
-		markBillingSettlementFailure(input.OperationKey, err)
+		if !atomicPreConsume && !errors.Is(err, errBillingSettlementCancelled) {
+			markBillingSettlementFailure(input.OperationKey, err)
+		}
 		return 0, false, err
 	}
 
+	if atomicPreConsume && alreadyApplied {
+		if resolvedTokenKey == "" {
+			resolvedTokenKey = lookupBillingTokenKey(record.TokenID)
+		}
+		invalidateBillingSettlementCaches(record, resolvedTokenKey)
+	}
 	dispatchStagedCacheInvalidations(cacheTasks)
 	return appliedFundingDelta, alreadyApplied, nil
 }
@@ -1271,6 +1373,23 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 // this keeps a retry after interruption from stranding an existing pending
 // record.
 func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPrefix, recoveryNote string) (bool, error) {
+	return promoteManualTaskBillingSettlement(input, reasonPrefix, recoveryNote, nil)
+}
+
+type taskTerminalEvidenceUpdate struct {
+	task              *Task
+	fromStatus        TaskStatus
+	expectedUpdatedAt int64
+}
+
+func PromoteManualTaskBillingSettlementWithEvidence(task *Task, fromStatus TaskStatus, expectedUpdatedAt int64, input BillingSettlementInput, reasonPrefix, recoveryNote string) (bool, error) {
+	if task == nil || task.ID <= 0 || task.ID != input.TaskID {
+		return false, ErrBillingSettlementOperationConflict
+	}
+	return promoteManualTaskBillingSettlement(input, reasonPrefix, recoveryNote, &taskTerminalEvidenceUpdate{task, fromStatus, expectedUpdatedAt})
+}
+
+func promoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPrefix, recoveryNote string, evidence *taskTerminalEvidenceUpdate) (bool, error) {
 	if DB == nil {
 		return false, errors.New("database is not initialized")
 	}
@@ -1304,7 +1423,15 @@ func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPref
 	recoveryNote = common.SanitizePersistedLogContent(common.MaskSensitiveInfo(recoveryNote))
 
 	ready := false
+	evidenceWritten := false
+	var candidate Task
 	err = DB.Transaction(func(tx *gorm.DB) error {
+		if evidence != nil {
+			candidate = *evidence.task
+			if err := guardTaskPluginPersistenceValue(tx, &candidate, candidate.PrivateData); err != nil {
+				return err
+			}
+		}
 		var record BillingSettlement
 		if err := withRowLock(tx).Where("operation_key = ?", input.OperationKey).First(&record).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1316,7 +1443,7 @@ func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPref
 			if err := validateBillingSettlement(record, input); err != nil {
 				return err
 			}
-			ready = true
+			ready = true // The existing operation already owns its evidence.
 			return nil
 		}
 		if record.Status != BillingSettlementStatusManual {
@@ -1337,6 +1464,13 @@ func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPref
 			record.ManualOnFailure != input.ManualOnFailure ||
 			record.EffectPayload != "" {
 			return permanentBillingSettlement(ErrBillingSettlementOperationConflict)
+		}
+		if evidence != nil {
+			won, err := candidate.updateWithStatusAndPendingTerminalEvidenceDB(tx, evidence.fromStatus, evidence.expectedUpdatedAt)
+			if err != nil || !won {
+				return err
+			}
+			evidenceWritten = true
 		}
 		now := time.Now().Unix()
 		originalReason := common.SanitizePersistedLogContent(common.MaskSensitiveInfo(record.LastError))
@@ -1364,6 +1498,7 @@ func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPref
 			"user_blocking_override":            nil,
 			"applied_funding_delta":             0,
 			"applied_token_delta":               0,
+			"token_missing_at_apply":            false,
 		}
 		result := tx.Model(&BillingSettlement{}).
 			Where("id = ? AND revision = ? AND status = ?", record.ID, record.Revision, BillingSettlementStatusManual).
@@ -1379,6 +1514,9 @@ func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPref
 	})
 	if err != nil {
 		return false, err
+	}
+	if evidenceWritten {
+		*evidence.task = candidate
 	}
 	return ready, nil
 }
@@ -1528,7 +1666,7 @@ func ensureBillingSettlementRecordDB(db *gorm.DB, input BillingSettlementInput) 
 	if result.Error != nil {
 		return BillingSettlement{}, false, fmt.Errorf("%w: %v", ErrBillingSettlementRecordNotDurable, result.Error)
 	}
-	if err := db.Where("operation_key = ?", input.OperationKey).First(&record).Error; err != nil {
+	if err := readEnsuredBillingSettlement(db, input.OperationKey, &record); err != nil {
 		return BillingSettlement{}, false, err
 	}
 	if err := validateBillingSettlement(record, input); err != nil {
@@ -1536,6 +1674,9 @@ func ensureBillingSettlementRecordDB(db *gorm.DB, input BillingSettlementInput) 
 	}
 	if record.Status == BillingSettlementStatusManual {
 		return BillingSettlement{}, false, fmt.Errorf("%w: %s", ErrBillingSettlementManualReview, record.LastError)
+	}
+	if record.Status == billingSettlementStatusCancelled {
+		return BillingSettlement{}, false, errBillingSettlementCancelled
 	}
 	return record, record.Status == "" || record.Status == BillingSettlementStatusApplied, nil
 }
@@ -1581,7 +1722,7 @@ func ensureManualBillingSettlementRecordDB(db *gorm.DB, input BillingSettlementI
 	if result.Error != nil {
 		return BillingSettlement{}, fmt.Errorf("%w: %v", ErrBillingSettlementRecordNotDurable, result.Error)
 	}
-	if err := db.Where("operation_key = ?", input.OperationKey).First(&record).Error; err != nil {
+	if err := readEnsuredBillingSettlement(db, input.OperationKey, &record); err != nil {
 		return BillingSettlement{}, err
 	}
 	if err := validateBillingSettlement(record, input); err != nil {
@@ -1591,6 +1732,15 @@ func ensureManualBillingSettlementRecordDB(db *gorm.DB, input BillingSettlementI
 		return BillingSettlement{}, permanentBillingSettlement(fmt.Errorf("%w: manual settlement identity conflict: %s", ErrBillingSettlementOperationConflict, input.OperationKey))
 	}
 	return record, nil
+}
+
+func readEnsuredBillingSettlement(db *gorm.DB, operationKey string, record *BillingSettlement) error {
+	if _, inTransaction := db.Statement.ConnPool.(gorm.TxCommitter); inTransaction {
+		// A conflicting insert checks the current row. Read that same row
+		// after catalog validation on MySQL, whose snapshot may be older.
+		db = withRowLock(db)
+	}
+	return db.Where("operation_key = ?", operationKey).First(record).Error
 }
 
 func billingSettlementEffectPayload(effect *BillingSettlementEffect) (string, error) {
@@ -1701,6 +1851,7 @@ func processPendingBillingSettlements() {
 	if DB == nil {
 		return
 	}
+	processPendingTaskSubmitFailures()
 	var records []BillingSettlement
 	if err := DB.Where("status = ? AND next_attempt <= ?", BillingSettlementStatusPending, time.Now().Unix()).Order("id").Limit(100).Find(&records).Error; err != nil {
 		common.SysLog("failed to load billing settlement retries: " + err.Error())
@@ -1728,7 +1879,9 @@ func processPendingBillingSettlements() {
 			Effect:                          effect,
 		})
 		if err != nil {
-			common.SysLog("billing settlement retry remains pending: " + err.Error())
+			if !errors.Is(err, errBillingSettlementCancelled) {
+				common.SysLog("billing settlement retry remains pending: " + err.Error())
+			}
 			continue
 		}
 		if effectErr := ProcessBillingSettlementEffect(record.OperationKey); effectErr != nil {

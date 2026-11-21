@@ -366,14 +366,18 @@ func (channel *Channel) GetAutoBan() bool {
 }
 
 func (channel *Channel) Save() error {
-	return DB.Save(channel).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return tx.Save(channel).Error
+	})
 }
 
 func (channel *Channel) SaveWithoutKey() error {
 	if channel.Id == 0 {
 		return errors.New("channel ID is 0")
 	}
-	return DB.Omit("key").Save(channel).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return tx.Omit("key").Save(channel).Error
+	})
 }
 
 func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
@@ -1189,14 +1193,34 @@ func (channel *Channel) ValidateSettings() error {
 	return nil
 }
 
+// Repairs compare stored bytes, independent of a database's text collation.
+func channelSettingRepairQuery(db *gorm.DB, id int, column, observed string) *gorm.DB {
+	comparison := "? = ?"
+	switch db.Dialector.Name() {
+	case "mysql":
+		comparison = "CAST(? AS BINARY) = CAST(? AS BINARY)"
+	case "sqlite":
+		comparison = "CAST(? AS BLOB) = CAST(? AS BLOB)"
+	case "postgres":
+		comparison = "convert_to(?, 'UTF8') = convert_to(?, 'UTF8')"
+	}
+	return db.Model(&Channel{}).Where("id = ?", id).
+		Where(clause.Expr{SQL: comparison, Vars: []any{clause.Column{Name: column}, observed}})
+}
+
 func (channel *Channel) GetSetting() dto.ChannelSettings {
 	setting := dto.ChannelSettings{}
-	if channel.Setting != nil && *channel.Setting != "" {
-		err := common.Unmarshal([]byte(*channel.Setting), &setting)
+	if raw := channel.Setting; raw != nil && *raw != "" {
+		observed := *raw
+		err := common.UnmarshalJsonStr(observed, &setting)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
-			channel.Setting = nil // 清空设置以避免后续错误
-			_ = channel.Save()    // 保存修改
+			if channel.Id > 0 {
+				result := channelSettingRepairQuery(DB, channel.Id, "setting", observed).Update("setting", nil)
+				if result.Error == nil && result.RowsAffected == 1 {
+					cacheUpdateChannel(channel, true)
+				}
+			}
 		}
 	}
 	return setting
@@ -1222,12 +1246,16 @@ func (channel *Channel) ParseOtherSettings() (dto.ChannelOtherSettings, error) {
 
 func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 	setting := dto.ChannelOtherSettings{}
-	if channel.OtherSettings != "" {
-		err := common.UnmarshalJsonStr(channel.OtherSettings, &setting)
+	if observed := channel.OtherSettings; observed != "" {
+		err := common.UnmarshalJsonStr(observed, &setting)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
-			channel.OtherSettings = "{}" // 清空设置以避免后续错误
-			_ = channel.Save()           // 保存修改
+			if channel.Id > 0 {
+				result := channelSettingRepairQuery(DB, channel.Id, "settings", observed).Update("settings", "{}")
+				if result.Error == nil && result.RowsAffected == 1 {
+					cacheUpdateChannel(channel, true)
+				}
+			}
 		}
 	}
 	return setting

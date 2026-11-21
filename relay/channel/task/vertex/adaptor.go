@@ -273,7 +273,7 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire access token: %w", err)
 	}
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(taskcommon.TaskQueryContext(body), http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}

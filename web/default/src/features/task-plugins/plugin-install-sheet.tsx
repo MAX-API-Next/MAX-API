@@ -1,6 +1,7 @@
 // Copyright (C) 2023-2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 // Extracted from MAX's catalog UI; QuantumNous/new-api 70e6af64 interaction reference retained.
-import type { ComponentProps } from 'react'
+import { useRef, type ComponentProps } from 'react'
+import { Package, UploadCloud, ShieldCheck, CheckCircle2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,6 +14,8 @@ import {
   SheetDescription,
 } from '@/components/ui/sheet'
 import type { PluginEntry, PluginMutation, PluginSnapshot } from './api'
+import { isJSONPluginUpload } from './file-reader'
+import { packageCompatibilityMessage } from './package-compatibility'
 import { TaskPluginFeedback } from './task-plugin-feedback'
 
 type Props = {
@@ -25,6 +28,7 @@ type Props = {
   loadFile: (file: File | undefined) => Promise<void>
   fileName: string
   expectedHash: string
+  expectedHashLocked: boolean
   setExpectedHash: (value: string) => void
   document: string
   validating: boolean
@@ -41,6 +45,14 @@ type Props = {
 }
 export function PluginInstallSheet(props: Props) {
   const { t } = useTranslation()
+  const fileInput = useRef<HTMLInputElement>(null)
+  const needsNodesReady =
+    !!props.validated &&
+    (props.validated.format_version >= 2 || !!props.validated.bom_prefixed)
+  const fileDigest =
+    props.validated?.format_version === 3 && !isJSONPluginUpload(props.document)
+      ? props.validated.source_sha256
+      : props.validated?.digest
   return (
     <Sheet
       open={props.installOpen}
@@ -52,7 +64,7 @@ export function PluginInstallSheet(props: Props) {
       }}
     >
       <SheetContent className='w-full overflow-y-auto sm:max-w-xl'>
-        <SheetHeader>
+        <SheetHeader className='border-b px-6 pt-6 pr-12 pb-5'>
           <SheetTitle>{t('Install plugin package')}</SheetTitle>
           <SheetDescription>
             {t(
@@ -60,11 +72,20 @@ export function PluginInstallSheet(props: Props) {
             )}
           </SheetDescription>
         </SheetHeader>
-        <div className='space-y-4 px-4 pb-6'>
+        <div className='space-y-5 px-6 pb-8 text-sm'>
           <TaskPluginFeedback {...props.feedbackProps} showRefresh />
           {props.bundles.length > 0 && (
-            <>
-              <Label htmlFor='official-plugin'>{t('Bundled plugins')}</Label>
+            <div className='space-y-3 rounded-xl border p-4'>
+              <Label
+                htmlFor='official-plugin'
+                className='flex items-center gap-2'
+              >
+                <Package
+                  className='text-muted-foreground size-4'
+                  aria-hidden='true'
+                />
+                {t('Bundled plugins')}
+              </Label>
               <select
                 id='official-plugin'
                 className='border-input h-9 w-full rounded-md border bg-transparent px-3 text-sm'
@@ -74,7 +95,10 @@ export function PluginInstallSheet(props: Props) {
                   const entry = props.bundles.find(
                     (p) => `${p.key}@${p.version}` === e.target.value
                   )
-                  if (entry) void props.loadBundled(entry.key, entry.version)
+                  if (entry) {
+                    if (fileInput.current) fileInput.current.value = ''
+                    void props.loadBundled(entry.key, entry.version)
+                  }
                 }}
               >
                 <option value=''>{t('Select a bundled plugin version')}</option>
@@ -87,49 +111,79 @@ export function PluginInstallSheet(props: Props) {
                   </option>
                 ))}
               </select>
-            </>
+            </div>
           )}
-          <Label htmlFor='plugin-file'>{t('Package file')}</Label>
-          <Input
-            id='plugin-file'
-            type='file'
-            accept='.js,.json,text/javascript,application/javascript,application/json'
-            disabled={props.busy}
-            onChange={(e) => void props.loadFile(e.target.files?.[0])}
-          />
-          <p className='text-muted-foreground text-xs break-all'>
-            {props.fileName}
-          </p>
-          <Label htmlFor='plugin-pin'>{t('Trusted package SHA-256')}</Label>
-          <Input
-            id='plugin-pin'
-            value={props.expectedHash}
-            disabled={props.busy}
-            onChange={(e) => {
-              props.setExpectedHash(e.target.value.trim().toLowerCase())
-              props.resetValidation()
-            }}
-          />
-          <p className='text-muted-foreground text-sm'>
-            {t(
-              'Use a digest from a trusted publisher. A digest calculated from the uploaded file alone does not prove authenticity. Maximum package size: 1 MiB.'
-            )}
-          </p>
-          <Button
-            variant='outline'
-            disabled={
-              props.busy ||
-              props.validating ||
-              !props.document ||
-              !/^[a-f0-9]{64}$/.test(props.expectedHash)
-            }
-            onClick={() => void props.validate()}
-          >
-            {t('Validate package')}
-          </Button>
+          <div className='bg-muted/20 space-y-3 rounded-xl border border-dashed p-5'>
+            <Label htmlFor='plugin-file' className='flex items-center gap-2'>
+              <UploadCloud
+                className='text-muted-foreground size-4'
+                aria-hidden='true'
+              />
+              {t('Package file')}
+            </Label>
+            <Input
+              id='plugin-file'
+              ref={fileInput}
+              type='file'
+              accept='.js,.json,text/javascript,application/javascript,application/json'
+              disabled={props.busy}
+              onChange={(e) => void props.loadFile(e.target.files?.[0])}
+            />
+            <p className='text-muted-foreground text-xs break-all'>
+              {props.fileName || t('JavaScript / JSON · 1 MiB')}
+            </p>
+          </div>
+          <div className='space-y-3 rounded-xl border p-4'>
+            <Label htmlFor='plugin-pin' className='flex items-center gap-2'>
+              <ShieldCheck
+                className='text-muted-foreground size-4'
+                aria-hidden='true'
+              />
+              {t('SHA-256 (optional)')}
+            </Label>
+            <Input
+              id='plugin-pin'
+              value={props.expectedHash}
+              readOnly={props.expectedHashLocked}
+              className='font-mono text-xs'
+              disabled={props.busy}
+              onChange={(e) => {
+                props.setExpectedHash(e.target.value.trim().toLowerCase())
+                props.resetValidation()
+              }}
+            />
+            <p className='text-muted-foreground text-sm'>
+              {t(
+                'Leave blank to import a custom plugin. If provided, SHA-256 must match the uploaded file. The system always records content digests. Maximum package size: 1 MiB.'
+              )}
+            </p>
+            <p className='text-muted-foreground text-xs leading-relaxed'>
+              {t(
+                "For official plugin.js files, use the exact version's sha256 from the publisher's index.json. Use original file bytes; changing line endings invalidates the hash."
+              )}
+            </p>
+            <Button
+              variant='outline'
+              disabled={
+                props.busy ||
+                props.validating ||
+                !props.document ||
+                (props.expectedHash !== '' &&
+                  !/^[a-f0-9]{64}$/.test(props.expectedHash))
+              }
+              onClick={() => void props.validate()}
+            >
+              <ShieldCheck className='size-4' aria-hidden='true' />
+              {t('Validate package')}
+            </Button>
+          </div>
           {props.validated && (
-            <div className='space-y-3 rounded-md border p-3'>
-              <p>
+            <div className='space-y-4 rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 dark:border-emerald-900 dark:bg-emerald-950/20'>
+              <p className='flex items-start gap-2 font-medium break-all'>
+                <CheckCircle2
+                  className='mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400'
+                  aria-hidden='true'
+                />
                 {props.validated.name} · {props.validated.key}@
                 {props.validated.version}
               </p>
@@ -137,16 +191,22 @@ export function PluginInstallSheet(props: Props) {
                 {t('Package format')} {props.validated.format_version} ·{' '}
                 {props.validated.models.length} {t('Models')}
               </p>
-              {props.validated.format_version >= 2 && (
+              <p className='font-mono text-xs break-all'>
+                {t('Submitted content SHA-256')}: {fileDigest ?? '—'}
+              </p>
+              <p className='text-muted-foreground text-xs leading-relaxed'>
+                {t(
+                  'Accepted UTF-8 files preserve their BOM and line endings. SHA-256 identifies the submitted bytes; an optional trusted publisher pin verifies those bytes.'
+                )}
+              </p>
+              {needsNodesReady && (
                 <label className='flex items-start gap-2'>
                   <input
                     type='checkbox'
                     checked={props.nodesReady}
                     onChange={(e) => props.setNodesReady(e.target.checked)}
                   />
-                  {t(
-                    'All catalog nodes support this package format. Older nodes may suspend their entire plugin host.'
-                  )}
+                  {t(packageCompatibilityMessage(props.validated))}
                 </label>
               )}
               {props.installRevision !== props.snapshot?.revision && (
@@ -160,16 +220,19 @@ export function PluginInstallSheet(props: Props) {
                 disabled={
                   props.disabled ||
                   props.installRevision !== props.snapshot?.revision ||
-                  (props.validated.format_version >= 2 && !props.nodesReady)
+                  (needsNodesReady && !props.nodesReady)
                 }
                 onClick={() =>
                   void props.mutate({
                     action: 'install',
                     document: props.document,
-                    expected_sha256: props.expectedHash,
+                    expected_sha256: props.expectedHash || undefined,
                     expected_revision: props.installRevision,
                     format2_nodes_ready: props.nodesReady,
                     format3_nodes_ready: props.nodesReady,
+                    bom_nodes_ready: props.validated?.bom_prefixed
+                      ? props.nodesReady
+                      : undefined,
                   })
                 }
               >

@@ -28,6 +28,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"math"
+	"sync"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
@@ -40,9 +42,10 @@ import (
 // One revision serializes catalog mutations across nodes, including bootstrap.
 // MutationID distinguishes a duplicate INSERT under MySQL CLIENT_FOUND_ROWS.
 type TaskPluginCatalogHead struct {
-	ID         uint   `gorm:"primaryKey;autoIncrement:false"`
-	Revision   int64  `gorm:"not null"`
-	MutationID string `gorm:"size:64;not null"`
+	ID                   uint   `gorm:"primaryKey;autoIncrement:false"`
+	Revision             int64  `gorm:"not null"`
+	MutationID           string `gorm:"size:64;not null"`
+	LastDeletionRevision int64  `gorm:"not null;default:0"`
 }
 
 type taskPluginDocument []byte
@@ -83,10 +86,63 @@ func (document *taskPluginDocument) Scan(value any) error {
 
 func (taskPluginDocument) GormDataType() string { return "string" }
 func (taskPluginDocument) GormDBDataType(db *gorm.DB, _ *schema.Field) string {
+	return taskPluginLargeTextType(db)
+}
+
+func taskPluginLargeTextType(db *gorm.DB) string {
 	if db.Dialector.Name() == "mysql" {
 		return "longtext"
 	}
 	return "text"
+}
+
+type taskPluginModelIndex string
+
+// A valid package is at most MaxPackageBytes. Re-encoding model names may
+// expand each source byte to a six-byte JSON escape (for example '<').
+const maxTaskPluginModelIndexBytes = 6 * taskplugin.MaxPackageBytes
+
+func (index taskPluginModelIndex) Value() (driver.Value, error) {
+	if len(index) > maxTaskPluginModelIndexBytes {
+		return nil, taskplugin.ErrCatalogInvalid
+	}
+	return taskPluginDocument(index).Value()
+}
+
+func (index *taskPluginModelIndex) Scan(value any) error {
+	if value == nil {
+		*index = ""
+		return nil
+	}
+	var document taskPluginDocument
+	switch raw := value.(type) {
+	case string:
+		document = taskPluginDocument(raw)
+	case []byte:
+		document = bytes.Clone(raw)
+	default:
+		return taskplugin.ErrCatalogInvalid
+	}
+	if encoded, ok := bytes.CutPrefix(document, []byte(taskPluginDocumentPrefix)); ok {
+		if len(encoded) > base64.StdEncoding.EncodedLen(maxTaskPluginModelIndexBytes) {
+			return taskplugin.ErrCatalogInvalid
+		}
+		decoded, err := base64.StdEncoding.Strict().DecodeString(string(encoded))
+		if err != nil {
+			return taskplugin.ErrCatalogInvalid
+		}
+		document = decoded
+	}
+	if len(document) > maxTaskPluginModelIndexBytes {
+		return taskplugin.ErrCatalogInvalid
+	}
+	*index = taskPluginModelIndex(document)
+	return nil
+}
+
+func (taskPluginModelIndex) GormDataType() string { return "string" }
+func (taskPluginModelIndex) GormDBDataType(db *gorm.DB, _ *schema.Field) string {
+	return taskPluginLargeTextType(db)
 }
 
 // Identity hashes key/version to keep the primary index within MySQL 5.7's
@@ -101,7 +157,22 @@ type TaskPluginVersion struct {
 	Revoked  bool               `gorm:"not null"`
 }
 
-type TaskPluginCatalogStore struct{ db *gorm.DB }
+// TaskPluginDeletion retains source-free audit identity and declared model names.
+type TaskPluginDeletion struct {
+	Identity  string               `gorm:"size:64;primaryKey" json:"-"`
+	PluginKey string               `gorm:"size:128;not null" json:"-"`
+	Version   string               `gorm:"not null" json:"-"`
+	Digest    string               `gorm:"size:64;not null" json:"-"`
+	Revoked   bool                 `gorm:"not null" json:"-"`
+	Models    taskPluginModelIndex `json:"-"`
+}
+
+type TaskPluginCatalogStore struct {
+	db *gorm.DB
+
+	identityMu    sync.RWMutex
+	identityCache map[string]string
+}
 
 func NewTaskPluginCatalogStore(db *gorm.DB) *TaskPluginCatalogStore {
 	if db == nil {
@@ -113,6 +184,49 @@ func NewTaskPluginCatalogStore(db *gorm.DB) *TaskPluginCatalogStore {
 
 var _ taskplugin.CatalogStore = (*TaskPluginCatalogStore)(nil)
 
+// A positive empty head is a valid generation before the first package.
+// Pricing and channel-reference writes share head-before-channel lock order.
+func lockTaskPluginCatalogHead(tx *gorm.DB) error {
+	if tx == nil {
+		return taskplugin.ErrCatalogUnavailable
+	}
+	if _, ok := tx.Statement.ConnPool.(gorm.TxCommitter); !ok {
+		return taskplugin.ErrCatalogUnavailable
+	}
+	head := TaskPluginCatalogHead{ID: 1, Revision: 1, MutationID: common.GetUUID()}
+	mutationID := head.MutationID
+	created := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&head)
+	if created.Error != nil {
+		return created.Error
+	}
+	var claimed TaskPluginCatalogHead
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&claimed, 1).Error; err != nil {
+		return err
+	}
+	if claimed.MutationID == mutationID {
+		// Bootstrap only a genuinely empty catalog. A restored orphan must
+		// remain invalid instead of receiving a new revision from an unrelated write.
+		for _, table := range []any{&TaskPluginVersion{}, &TaskPluginDeletion{}} {
+			present, err := taskPluginTableAvailable(tx, table)
+			if err != nil {
+				return err
+			}
+			if !present {
+				continue
+			}
+			var count int64
+			if err := tx.Model(table).Count(&count).Error; err != nil {
+				return err
+			}
+			if count != 0 {
+				return taskplugin.ErrCatalogInvalid
+			}
+		}
+	}
+	return tx.Model(&TaskPluginCatalogHead{}).Where("id = ?", 1).
+		UpdateColumn("mutation_id", gorm.Expr("mutation_id")).Error
+}
+
 // SchemaReady only observes the two catalog tables. Replica startup must not
 // perform DDL; the master remains responsible for migrations.
 func (store *TaskPluginCatalogStore) SchemaReady(ctx context.Context) bool {
@@ -123,33 +237,82 @@ func (store *TaskPluginCatalogStore) SchemaReady(ctx context.Context) bool {
 	return db.Migrator().HasTable(&TaskPluginCatalogHead{}) && db.Migrator().HasTable(&TaskPluginVersion{})
 }
 
-func loadTaskPluginVersions(tx *gorm.DB) ([]taskplugin.StoredPackage, []string, error) {
+func (store *TaskPluginCatalogStore) loadTaskPluginVersions(tx *gorm.DB) ([]taskplugin.StoredPackage, []string, error) {
 	var records []TaskPluginVersion
 	if err := tx.Order("identity").Find(&records).Error; err != nil {
 		return nil, nil, err
 	}
-	result := make([]taskplugin.StoredPackage, 0, len(records))
-	identities := make([]string, 0, len(records))
-	for _, record := range records {
-		entry := taskplugin.StoredPackage{Document: []byte(record.Document), Digest: record.Digest, Active: record.Active, Enabled: record.Enabled, Revoked: record.Revoked}
-		identity, err := taskPluginStorageIdentity(entry)
-		if err != nil || identity != record.Identity {
-			return nil, nil, taskplugin.ErrCatalogInvalid
+	result := make([]taskplugin.StoredPackage, len(records))
+	identities := make([]string, len(records))
+	for i, record := range records {
+		result[i] = taskplugin.StoredPackage{Document: []byte(record.Document), Digest: record.Digest, Active: record.Active, Enabled: record.Enabled, Revoked: record.Revoked}
+		identities[i] = record.Identity
+	}
+	for i, entry := range result {
+		identity, err := store.retainedIdentity(tx.Statement.Context, entry)
+		if tx.Statement.Context.Err() != nil {
+			return result, identities, errors.Join(taskplugin.ErrCatalogUnavailable, tx.Statement.Context.Err())
 		}
-		result = append(result, entry)
-		identities = append(identities, identity)
+		if err != nil || identity != records[i].Identity {
+			return result, identities, taskplugin.ErrCatalogInvalid
+		}
 	}
 	return result, identities, nil
 }
 
+// An identity is cached only after full validation. A read still verifies
+// the current bytes and persisted row identity, including after a restore.
+func (store *TaskPluginCatalogStore) retainedIdentity(ctx context.Context, entry taskplugin.StoredPackage) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	store.identityMu.RLock()
+	identity := store.identityCache[entry.Digest]
+	store.identityMu.RUnlock()
+	if identity != "" && len(entry.Document) <= taskplugin.MaxPackageBytes {
+		sum := sha256.Sum256(entry.Document)
+		if hex.EncodeToString(sum[:]) == entry.Digest {
+			return identity, nil
+		}
+	}
+	identity, err := taskPluginStorageIdentityContext(ctx, entry)
+	if err != nil {
+		return "", err
+	}
+	store.identityMu.Lock()
+	if store.identityCache == nil {
+		store.identityCache = make(map[string]string)
+	}
+	if len(store.identityCache) >= 2048 {
+		for digest := range store.identityCache {
+			delete(store.identityCache, digest)
+			break
+		}
+	}
+	store.identityCache[entry.Digest] = identity
+	store.identityMu.Unlock()
+	return identity, nil
+}
+
 func taskPluginStorageIdentity(entry taskplugin.StoredPackage) (string, error) {
-	p, err := taskplugin.LoadPackage(bytes.NewReader(entry.Document), entry.Digest)
+	return taskPluginStorageIdentityContext(context.Background(), entry)
+}
+
+func taskPluginStorageIdentityContext(ctx context.Context, entry taskplugin.StoredPackage) (string, error) {
+	p, err := entry.LoadRetainedPackage(ctx)
+	if ctx.Err() != nil {
+		return "", errors.Join(taskplugin.ErrCatalogUnavailable, ctx.Err())
+	}
 	if err != nil {
 		return "", taskplugin.ErrCatalogInvalid
 	}
 	manifest := p.Manifest()
-	digest := sha256.Sum256([]byte(manifest.Key + "@" + manifest.Version))
-	return hex.EncodeToString(digest[:]), nil
+	return taskplugin.StoragePackageIdentity(manifest.Key, manifest.Version), nil
+}
+
+func validTaskPluginCatalogHead(head TaskPluginCatalogHead) bool {
+	return head.Revision > 0 && head.MutationID != "" &&
+		head.LastDeletionRevision >= 0 && head.LastDeletionRevision <= head.Revision
 }
 
 func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.CatalogSnapshot, error) {
@@ -157,6 +320,10 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		return taskplugin.CatalogSnapshot{}, taskplugin.ErrCatalogUnavailable
 	}
 	var snapshot taskplugin.CatalogSnapshot
+	var observedRevision *int64
+	var completedPackages *[]taskplugin.StoredPackage
+	var completedIdentities []string
+	var completedData *taskplugin.CatalogSnapshot
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var head TaskPluginCatalogHead
 		err := tx.First(&head, 1).Error
@@ -164,35 +331,64 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		if err != nil && !missing {
 			return err
 		}
-		if !missing && (head.Revision <= 0 || head.MutationID == "") {
+		if !missing && !validTaskPluginCatalogHead(head) {
 			return taskplugin.ErrCatalogInvalid
 		}
-		rows, _, err := loadTaskPluginVersions(tx)
+		observed := head.Revision
+		observedRevision = &observed
+		rows, identities, err := store.loadTaskPluginVersions(tx)
+		if rows != nil {
+			completedPackages = &rows
+			completedIdentities = identities
+		}
 		if err != nil {
 			return err
 		}
+		deletions, err := loadTaskPluginDeletions(tx)
+		if err != nil {
+			return err
+		}
+		completedData = &taskplugin.CatalogSnapshot{Revision: head.Revision, Packages: rows, Deletions: deletions}
 		var after TaskPluginCatalogHead
 		err = tx.First(&after, 1).Error
+		if err == nil {
+			if !validTaskPluginCatalogHead(after) {
+				return taskplugin.ErrCatalogInvalid
+			}
+			*observedRevision = max(*observedRevision, after.Revision)
+		}
+		if err != nil && ctx.Err() != nil {
+			if validateTaskPluginDeletionHead(head, deletions) != nil {
+				return errors.Join(taskplugin.ErrCatalogConflict, ctx.Err())
+			}
+			return err // An interrupted reread did not establish a conflicting head.
+		}
 		// Under READ COMMITTED, reject a mixed snapshot. MySQL's consistent
 		// snapshot and SQLite's transaction also satisfy this invariant.
 		if missing {
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return taskplugin.ErrCatalogConflict
 			}
-			if len(rows) != 0 {
+			if len(rows) != 0 || len(deletions) != 0 {
 				return taskplugin.ErrCatalogInvalid
 			}
 		} else if err != nil || head != after {
 			return taskplugin.ErrCatalogConflict
 		}
-		snapshot = taskplugin.CatalogSnapshot{Revision: head.Revision, Packages: rows}
+		if err := validateTaskPluginDeletionHead(head, deletions); err != nil {
+			return err
+		}
+		snapshot = taskplugin.CatalogSnapshot{Revision: head.Revision, Packages: rows, Deletions: deletions}
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, taskplugin.ErrCatalogInvalid) || errors.Is(err, taskplugin.ErrCatalogConflict) {
-			return taskplugin.CatalogSnapshot{}, err
+		if !errors.Is(err, taskplugin.ErrCatalogInvalid) && !errors.Is(err, taskplugin.ErrCatalogConflict) {
+			err = errors.Join(taskplugin.ErrCatalogUnavailable, ctx.Err())
 		}
-		return taskplugin.CatalogSnapshot{}, taskplugin.ErrCatalogUnavailable
+		if observedRevision != nil {
+			err = &taskplugin.CatalogReadObservationError{Revision: *observedRevision, Packages: completedPackages, RowIdentities: completedIdentities, Snapshot: completedData, Err: err}
+		}
+		return taskplugin.CatalogSnapshot{}, err
 	}
 	return snapshot, nil
 }
@@ -204,29 +400,37 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 	if revision < 0 || revision == math.MaxInt64 {
 		return 0, taskplugin.ErrCatalogInvalid
 	}
+	db := store.db.WithContext(ctx)
+	_, inherited := db.Statement.ConnPool.(gorm.TxCommitter)
+	if inherited && db.DisableNestedTransaction {
+		return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, taskplugin.ErrCatalogUnavailable)
+	}
 	next := taskplugin.CatalogSnapshot{Revision: revision + 1, Packages: packages}
-	if err := taskplugin.ValidateCatalogTransition(taskplugin.CatalogSnapshot{}, next); err != nil {
-		return 0, err
+	if err := taskplugin.ValidateStoredCatalogSnapshotContext(ctx, next); err != nil {
+		return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, err)
 	}
 	// Input identities do not depend on database state. Compute them before
 	// taking the singleton head lock; keep transition validation in the transaction.
 	nextIdentities := make([]string, len(next.Packages))
+	retained := make(map[string]bool, len(next.Packages))
 	for i, entry := range next.Packages {
-		identity, err := taskPluginStorageIdentity(entry)
+		identity, err := taskPluginStorageIdentityContext(ctx, entry)
 		if err != nil {
-			return 0, err
+			return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, err)
 		}
 		nextIdentities[i] = identity
+		retained[identity] = true
 	}
 	mutationID := common.GetUUID()
-	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	readyToCommit := false
+	write := func(tx *gorm.DB) error {
 		if revision == 0 {
 			head := TaskPluginCatalogHead{ID: 1, Revision: 1, MutationID: mutationID}
 			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&head).Error; err != nil {
 				return err
 			}
 			var claimed TaskPluginCatalogHead
-			if err := tx.First(&claimed, 1).Error; err != nil {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&claimed, 1).Error; err != nil {
 				return err
 			}
 			if claimed.MutationID != mutationID || claimed.Revision != 1 {
@@ -234,15 +438,29 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 			}
 		} else {
 			result := tx.Model(&TaskPluginCatalogHead{}).Where("id = ? AND revision = ?", 1, revision).
+				Where("mutation_id <> ? AND last_deletion_revision BETWEEN 0 AND revision", "").
 				Updates(map[string]any{"revision": revision + 1, "mutation_id": mutationID})
 			if result.Error != nil {
 				return result.Error
 			}
 			if result.RowsAffected != 1 {
+				var current TaskPluginCatalogHead
+				err := withRowLock(tx).First(&current, 1).Error
+				if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+					return errors.Join(taskplugin.ErrCatalogConflict, err)
+				}
+				if err == nil && validTaskPluginCatalogHead(current) && current.Revision > revision {
+					return &taskplugin.CatalogReadObservationError{Revision: current.Revision, Err: taskplugin.ErrCatalogConflict}
+				}
+				if err == nil && current.Revision == revision && !validTaskPluginCatalogHead(current) {
+					return taskplugin.ErrCatalogInvalid
+				}
 				return taskplugin.ErrCatalogConflict
 			}
 		}
-		previousRows, previousIdentities, err := loadTaskPluginVersions(tx)
+		// The head write is a current read. MySQL can still retain a caller's
+		// earlier consistent-read snapshot for plain SELECTs in this transaction.
+		previousRows, previousIdentities, err := store.loadTaskPluginVersions(tx.Clauses(clause.Locking{Strength: "UPDATE"}))
 		if err != nil {
 			return err
 		}
@@ -250,7 +468,29 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 			return taskplugin.ErrCatalogInvalid
 		}
 		previous := taskplugin.CatalogSnapshot{Revision: revision, Packages: previousRows}
-		if err := taskplugin.ValidateCatalogTransition(previous, next); err != nil {
+		previous.Deletions, err = loadTaskPluginDeletions(tx.Clauses(clause.Locking{Strength: "UPDATE"}))
+		if err != nil {
+			return err
+		}
+		var committedHead TaskPluginCatalogHead
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&committedHead, 1).Error; err != nil {
+			return err
+		}
+		if revision > 0 {
+			committedHead.Revision = revision // Validate against the pre-CAS generation.
+		}
+		if err := validateTaskPluginDeletionHead(committedHead, previous.Deletions); err != nil {
+			return err
+		}
+		// Ordinary CAS only adds or updates versions. Physical removal and its
+		// reference checks belong to DeleteVersion, even after identical reinstall.
+		for _, identity := range previousIdentities {
+			if !retained[identity] {
+				return taskplugin.ErrCatalogInvalid
+			}
+		}
+		next.Deletions = previous.Deletions
+		if err := taskplugin.ValidateCatalogTransitionContext(ctx, previous, next); err != nil {
 			return err
 		}
 		known := make(map[string]bool, len(previousIdentities))
@@ -271,13 +511,60 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 				}
 			}
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		readyToCommit = true
 		return nil
-	})
+	}
+	var err error
+	if inherited {
+		err = withTaskPluginCatalogSavepoint(db, "task_plugin_"+mutationID, write)
+	} else {
+		err = db.Transaction(write)
+	}
 	if err != nil {
 		if errors.Is(err, taskplugin.ErrCatalogConflict) || errors.Is(err, taskplugin.ErrCatalogInvalid) {
 			return 0, err
 		}
+		if !inherited && !readyToCommit && ctx.Err() != nil {
+			return 0, errors.Join(taskplugin.ErrCatalogNotCommitted, ctx.Err())
+		}
 		return 0, taskplugin.ErrCatalogUnavailable
 	}
 	return revision + 1, nil
+}
+
+// The savepoint name comes from the internal mutation UUID. Run cleanup with
+// time for rollback even if the CAS request expires while its outer transaction is live.
+func withTaskPluginCatalogSavepoint(db *gorm.DB, name string, write func(*gorm.DB) error) (err error) {
+	conn := db.Statement.ConnPool
+	if prepared, ok := conn.(*gorm.PreparedStmtTX); ok {
+		conn = prepared.Tx
+	}
+	if _, err := conn.ExecContext(db.Statement.Context, "SAVEPOINT "+name); err != nil {
+		return err
+	}
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(db.Statement.Context), time.Second)
+		defer cancel()
+		if _, rollbackErr := conn.ExecContext(ctx, "ROLLBACK TO SAVEPOINT "+name); rollbackErr != nil {
+			// An unverified rollback cannot leave the outer transaction able to
+			// commit our provisional generation.
+			_ = db.Rollback().Error
+			err = taskplugin.ErrCatalogUnavailable
+		}
+	}()
+	if err = write(db); err != nil {
+		return err
+	}
+	if err = db.Statement.Context.Err(); err != nil {
+		return err
+	}
+	success = true
+	return nil
 }

@@ -98,6 +98,17 @@ func defaultPricingMaps() pricingMaps {
 	}
 	return result
 }
+
+type modelPricingDataError struct {
+	key string
+	err error
+}
+
+func (err *modelPricingDataError) Error() string {
+	return err.err.Error()
+}
+func (err *modelPricingDataError) Unwrap() error { return err.err }
+
 func readModelPricingMaps(tx *gorm.DB) (pricingMaps, error) {
 	var rows []Option
 	if err := tx.Where(map[string]any{"key": modelPricingOptionKeys}).Find(&rows).Error; err != nil {
@@ -107,24 +118,24 @@ func readModelPricingMaps(tx *gorm.DB) (pricingMaps, error) {
 	seen := map[string]bool{}
 	for _, row := range rows {
 		if seen[row.Key] {
-			return nil, errors.New("duplicate model pricing option rows")
+			return nil, &modelPricingDataError{row.Key, errors.New("duplicate model pricing option rows")}
 		}
 		seen[row.Key] = true
 		if len(row.Value) > 2*1024*1024 {
-			return nil, errors.New("model pricing option exceeds size limit")
+			return nil, &modelPricingDataError{row.Key, errors.New("model pricing option exceeds size limit")}
 		}
 		var entries map[string]any
 		if err := common.UnmarshalJsonStr(row.Value, &entries); err != nil {
-			return nil, fmt.Errorf("invalid model pricing object: %s: %w", row.Key, err)
+			return nil, &modelPricingDataError{row.Key, fmt.Errorf("invalid model pricing object: %s: %w", row.Key, err)}
 		}
 		if entries == nil {
-			return nil, fmt.Errorf("invalid model pricing object: %s: value is null", row.Key)
+			return nil, &modelPricingDataError{row.Key, fmt.Errorf("invalid model pricing object: %s: value is null", row.Key)}
 		}
 		// Legacy billing entry type errors belong to their model, so a valid
 		// replacement can repair them. Structural/DB errors still fail closed.
 		if !strings.HasPrefix(row.Key, "billing_setting.") {
 			if err := validateOptionUpdate(row.Key, row.Value); err != nil {
-				return nil, fmt.Errorf("invalid stored numeric pricing map: %s: %w", row.Key, err)
+				return nil, &modelPricingDataError{row.Key, fmt.Errorf("invalid stored numeric pricing map: %s: %w", row.Key, err)}
 			}
 		}
 		values[row.Key] = entries
@@ -340,7 +351,11 @@ func mutateModelPricingWithPublisher(db *gorm.DB, mutate func(pricingMaps, *pric
 			}
 		}
 		for _, name := range names {
-			result.Entries = append(result.Entries, buildModelPricingEntry(values, authority, name))
+			entry, err := buildModelPricingEntry(values, authority, name)
+			if err != nil {
+				return err
+			}
+			result.Entries = append(result.Entries, entry)
 		}
 		committed = values
 		return nil
@@ -385,7 +400,10 @@ func updateModelPricing(db *gorm.DB, changes []types.ModelPricingChange) (*Model
 		names := []string{}
 		// Validate every guard against the ORIGINAL snapshot, then apply drafts.
 		for _, change := range changes {
-			entry := buildModelPricingEntry(values, authority, change.ModelName)
+			entry, err := buildModelPricingEntry(values, authority, change.ModelName)
+			if err != nil {
+				return nil, err
+			}
 			if change.ExpectedVersion == "" || change.ExpectedVersion != entry.Version || change.ExpectedContractDigest != entry.ContractDigest || change.ExpectedBindingVersion != entry.BindingVersion {
 				return nil, ErrModelPricingConflict
 			}
@@ -396,7 +414,11 @@ func updateModelPricing(db *gorm.DB, changes []types.ModelPricingChange) (*Model
 			if change.Reset != nil && *change.Reset {
 				draft = modelPricingValues(defaultPricingMaps(), change.ModelName)
 			}
-			if err := validateModelPricing(change.ModelName, draft, previous, authority.contexts(change.ModelName)); err != nil {
+			contexts, err := authority.contexts(change.ModelName)
+			if err != nil {
+				return nil, err
+			}
+			if err := validateModelPricing(change.ModelName, draft, previous, contexts); err != nil {
 				return nil, modelPricingValidation(err)
 			}
 			replaceModelPricing(values, change.ModelName, draft)
@@ -448,10 +470,14 @@ func updateModelPricingOptions(updates map[string]string) (*ModelPricingCommit, 
 			if pricingDigest(prior) == pricingDigest(draft) {
 				continue
 			}
-			if protectedTaskPricing(prior, authority.contexts(name)) || protectedTaskPricing(draft, nil) {
+			contexts, err := authority.contexts(name)
+			if err != nil {
+				return nil, err
+			}
+			if protectedTaskPricing(prior, contexts) || protectedTaskPricing(draft, nil) {
 				return nil, ErrModelPricingLegacyWrite
 			}
-			if err := validateLegacyModelPricing(name, draft, prior, authority.contexts(name)); err != nil {
+			if err := validateLegacyModelPricing(name, draft, prior, contexts); err != nil {
 				return nil, err
 			}
 			changed = append(changed, name)

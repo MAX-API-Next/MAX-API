@@ -37,6 +37,7 @@ func TestMain(m *testing.M) {
 
 	if err := db.AutoMigrate(
 		&Task{},
+		&TaskSubmitFailureRecovery{},
 		&User{},
 		&Token{},
 		&Log{},
@@ -286,6 +287,205 @@ func TestMarkTaskSubmitFailedWithSettlementRejectsUnpersistedTask(t *testing.T) 
 	require.Zero(t, count)
 }
 
+func TestMarkTaskSubmitFailedWithSettlementReportsLostClaim(t *testing.T) {
+	truncateTables(t)
+	task := &Task{TaskID: "no-submit-claim", Status: TaskStatusSuccess, Quota: 10, UserId: 1,
+		PrivateData: TaskPrivateData{BillingRequestId: "no-submit-claim", BillingSource: BillingSettlementSourceWallet}}
+	insertTask(t, task)
+	input := BillingSettlementInput{
+		OperationKey: BillingRequestFinalizeOperationKey("no-submit-claim"),
+		Source:       BillingSettlementSourceWallet, UserID: 1, FundingDelta: -10,
+	}
+
+	require.EqualError(t, MarkTaskSubmitFailedWithSettlement(task.ID, "late rejection", &input), "task submission failure did not claim the refund")
+	require.NoError(t, MarkTaskSubmitFailedWithSettlement(task.ID, "late status-only cleanup", nil))
+	var count int64
+	require.NoError(t, DB.Model(&BillingSettlement{}).Where("operation_key = ?", input.OperationKey).Count(&count).Error)
+	require.Zero(t, count)
+}
+
+func TestSubmitFailureRefundRejectsTaskQuotaProjection(t *testing.T) {
+	truncateTables(t)
+	row := &Task{TaskID: "request-refund-projection", UserId: 7, Status: TaskStatusSubmitted, Quota: 20,
+		PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingSource: BillingSettlementSourceWallet, BillingRequestId: "request-refund-projection"}}
+	insertTask(t, row)
+	input := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey(row.TaskID), Source: BillingSettlementSourceWallet,
+		UserID: row.UserId, FundingDelta: -20, TaskID: row.ID, TaskQuota: 20}
+	won, err := ClaimTaskSubmitFailureWithSettlement(row.ID, "known rejection", &input)
+	require.False(t, won)
+	require.ErrorIs(t, err, ErrTaskSubmitRefundIdentityMismatch)
+	latest, err := GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, TaskStatusSubmitted, latest.Status)
+	require.Equal(t, 20, latest.Quota)
+	var intents int64
+	require.NoError(t, DB.Model(&BillingSettlement{}).Count(&intents).Error)
+	require.Zero(t, intents)
+}
+
+func TestSubmitFailureClaimAcceptsOnlyRefundDirection(t *testing.T) {
+	truncateTables(t)
+	row := &Task{TaskID: "request-refund-direction", UserId: 7, Status: TaskStatusSubmitted, Quota: 20,
+		PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingSource: BillingSettlementSourceWallet, BillingRequestId: "request-refund-direction", TokenId: 8}}
+	insertTask(t, row)
+	input := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey(row.TaskID), Source: BillingSettlementSourceWallet,
+		UserID: row.UserId, TokenID: 8}
+	for _, deltas := range [][2]int64{{20, 0}, {0, 0}, {-20, 1}} {
+		input.FundingDelta, input.TokenDelta = deltas[0], deltas[1]
+		won, err := ClaimTaskSubmitFailureWithSettlement(row.ID, "definite rejection", &input)
+		require.False(t, won)
+		require.ErrorIs(t, err, ErrBillingSettlementOperationConflict)
+	}
+	var intents int64
+	require.NoError(t, DB.Model(&BillingSettlement{}).Count(&intents).Error)
+	require.Zero(t, intents)
+	latest, err := GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, TaskStatusSubmitted, latest.Status)
+	require.Equal(t, 20, latest.Quota)
+	input.FundingDelta, input.TokenDelta = -20, -20
+	won, err := ClaimTaskSubmitFailureWithSettlement(row.ID, "definite rejection", &input)
+	require.NoError(t, err)
+	require.True(t, won)
+	var refund BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", input.OperationKey).Take(&refund).Error)
+	require.EqualValues(t, -20, refund.FundingDelta)
+	require.EqualValues(t, -20, refund.TokenDelta)
+}
+
+func TestSubmitFailureProjectedSubscriptionRefundUsesSameRequest(t *testing.T) {
+	truncateTables(t)
+	const request = "projected-subscription"
+	row := &Task{TaskID: request, UserId: 7, Status: TaskStatusSubmitted, Quota: 20,
+		PrivateData: TaskPrivateData{AwaitingUpstreamID: true, BillingSource: BillingSettlementSourceSubscription,
+			BillingRequestId: request, SubscriptionId: 9, TokenId: 8}}
+	insertTask(t, row)
+	input := BillingSettlementInput{OperationKey: BillingRequestFinalizeOperationKey(request), Source: BillingSettlementSourceSubscription,
+		UserID: 7, TokenID: 8, SubscriptionID: 9, FundingDelta: -20, TokenDelta: -20, FinalizeSubscriptionPreConsume: true,
+		SubscriptionPreConsumeRequestID: "different-projected-request"}
+	won, err := ClaimTaskSubmitFailureWithSettlement(row.ID, "definite rejection", &input)
+	require.False(t, won)
+	require.ErrorIs(t, err, ErrTaskSubmitRefundIdentityMismatch)
+	stored, err := GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, TaskStatusSubmitted, stored.Status)
+	require.Equal(t, 20, stored.Quota)
+	_, found, err := GetBillingSettlementStatus(input.OperationKey)
+	require.NoError(t, err)
+	require.False(t, found)
+	input.SubscriptionPreConsumeRequestID = request
+	require.NoError(t, DB.Create(&SubscriptionPreConsumeRecord{RequestId: request, UserId: 7, TokenId: 8,
+		UserSubscriptionId: 9, PreConsumed: 20, Status: "consumed"}).Error)
+	require.NoError(t, DB.Create(&BillingSettlement{OperationKey: "request:" + request + ":reserve:1", Source: input.Source,
+		UserID: 7, TokenID: 8, SubscriptionID: 9, SubscriptionPreConsumeRequestID: request,
+		Status: BillingSettlementStatusApplied, FundingDelta: 5, TokenDelta: 5, AppliedFundingDelta: 5, AppliedTokenDelta: 5}).Error)
+	input.FundingDelta, input.TokenDelta = -40, -40
+	won, err = ClaimTaskSubmitFailureWithSettlement(row.ID, "inflated rejection refund", &input)
+	require.False(t, won)
+	require.ErrorIs(t, err, ErrTaskSubmitRefundIdentityMismatch)
+	input.FundingDelta, input.TokenDelta = -25, -25
+	won, err = ClaimTaskSubmitFailureWithSettlement(row.ID, "definite rejection", &input)
+	require.NoError(t, err)
+	require.True(t, won)
+	var refund BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", input.OperationKey).Take(&refund).Error)
+	require.Equal(t, request, refund.SubscriptionPreConsumeRequestID)
+	require.EqualValues(t, -25, refund.FundingDelta)
+	require.EqualValues(t, -25, refund.TokenDelta)
+}
+
+func TestTaskTerminalSettlementIntentChecksObservedQuota(t *testing.T) {
+	for _, change := range []string{"unchanged", "same-version quota", "NULL quota becomes zero"} {
+		t.Run(change, func(t *testing.T) {
+			truncateTables(t)
+			row := &Task{TaskID: "settlement-quota-cas", Status: TaskStatusInProgress, UserId: 7, Quota: 20}
+			insertTask(t, row)
+			if change == "NULL quota becomes zero" {
+				require.NoError(t, DB.Model(row).UpdateColumn("quota", nil).Error)
+			}
+			observed, err := GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, err)
+			switch change {
+			case "same-version quota":
+				require.NoError(t, DB.Model(row).UpdateColumn("quota", 10).Error)
+			case "NULL quota becomes zero":
+				require.NoError(t, DB.Model(row).UpdateColumn("quota", 0).Error)
+			}
+			observed.PrivateData.PendingTerminalStatus = TaskStatusSuccess
+			key := BillingTaskFinalizeOperationKey(row.ID)
+			won, err := observed.UpdateWithStatusAndSettlementIntent(observed.Status, observed.UpdatedAt, BillingSettlementInput{
+				OperationKey: key, UserID: row.UserId, Source: BillingSettlementSourceWallet,
+				TaskID: row.ID, TaskQuota: int64(observed.Quota), TaskQuotaTarget: int64(observed.Quota),
+			})
+			require.NoError(t, err)
+			latest, err := GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, err)
+			_, found, err := GetBillingSettlementStatus(key)
+			require.NoError(t, err)
+			require.Equal(t, change == "unchanged", won)
+			require.Equal(t, won, found)
+			if won {
+				require.EqualValues(t, TaskStatusSuccess, latest.PrivateData.PendingTerminalStatus)
+			} else {
+				require.Empty(t, latest.PrivateData.PendingTerminalStatus)
+				require.Equal(t, observed.UpdatedAt, latest.UpdatedAt)
+			}
+		})
+	}
+}
+
+func TestStrictTaskLookupRetainsNullablePollingSnapshot(t *testing.T) {
+	truncateTables(t)
+	for _, changed := range []string{"", "quota", "updated_at"} {
+		row := &Task{TaskID: "nullable-realtime-" + changed, UserId: 7, Status: TaskStatusInProgress}
+		insertTask(t, row)
+		selection := DB.Model(&Task{}).Where("id = ?", row.ID)
+		require.NoError(t, selection.UpdateColumns(map[string]any{"quota": nil, "updated_at": nil}).Error)
+		task, exists, err := GetByTaskId(row.UserId, row.TaskID)
+		require.NoError(t, err)
+		require.True(t, exists)
+		require.True(t, task.quotaWasNull)
+		require.True(t, task.updatedAtWasNull)
+		if changed != "" {
+			require.NoError(t, selection.UpdateColumn(changed, 0).Error)
+		}
+		task.Progress = "50%"
+		won, err := task.UpdatePollingProgress(row.Status)
+		require.NoError(t, err)
+		require.Equal(t, changed == "", won, changed)
+	}
+}
+
+func TestManualTaskSettlementPreservesDataOnlyWhenRequested(t *testing.T) {
+	truncateTables(t)
+	for _, preserve := range []bool{true, false} {
+		task := &Task{TaskID: fmt.Sprintf("manual-data-%t", preserve), Status: TaskStatusInProgress,
+			UserId: 1, Quota: 10, Data: json.RawMessage(`{"provider":"stored"}`)}
+		insertTask(t, task)
+		snapshot, err := GetTaskPlaceholderByID(task.ID)
+		require.NoError(t, err)
+		snapshot.Data = json.RawMessage(`{"provider":"candidate"}`)
+		if preserve {
+			snapshot.PreserveDataOnStatusUpdate()
+		}
+		input := BillingSettlementInput{
+			OperationKey: BillingTaskFinalizeOperationKey(task.ID),
+			Source:       BillingSettlementSourceWallet, UserID: task.UserId, TaskID: task.ID,
+			TaskQuota: 10, TaskQuotaTarget: 10,
+		}
+		won, err := snapshot.UpdateWithStatusAndManualSettlement(task.Status, snapshot.UpdatedAt, input, "needs reconciliation")
+		require.NoError(t, err)
+		require.True(t, won)
+		loaded, err := GetTaskPlaceholderByID(task.ID)
+		require.NoError(t, err)
+		if preserve {
+			require.JSONEq(t, string(task.Data), string(loaded.Data))
+		} else {
+			require.JSONEq(t, string(snapshot.Data), string(loaded.Data))
+		}
+	}
+}
+
 func TestUpdateWithSettlementIntentCommitsTaskAndIntentTogether(t *testing.T) {
 	truncateTables(t)
 	task := &Task{
@@ -316,6 +516,63 @@ func TestUpdateWithSettlementIntentCommitsTaskAndIntentTogether(t *testing.T) {
 	var settlement BillingSettlement
 	require.NoError(t, DB.Where("operation_key = ?", operationKey).First(&settlement).Error)
 	require.Equal(t, int64(5), settlement.FundingDelta)
+}
+
+func TestSubmitConfirmationAdvancesDatabaseVersionAtomically(t *testing.T) {
+	for _, mode := range []string{"current-database-version", "overflow", "readback-failure"} {
+		t.Run(mode, func(t *testing.T) {
+			truncateTables(t)
+			task := &Task{TaskID: mode, Status: TaskStatusSubmitted, UpdatedAt: 100, Quota: 10, PrivateData: TaskPrivateData{AwaitingUpstreamID: true}}
+			insertTask(t, task)
+			originalCallerVersion := task.UpdatedAt
+			persistedVersion := time.Now().Unix() + 100000
+			if mode == "overflow" {
+				persistedVersion = 1<<63 - 1
+			}
+			require.NoError(t, DB.Model(&Task{}).Where("id = ?", task.ID).UpdateColumn("updated_at", persistedVersion).Error)
+			task.PrivateData.AwaitingUpstreamID = false
+			task.PrivateData.UpstreamTaskID = "confirmed-provider-id"
+			input := &BillingSettlementInput{OperationKey: "request:" + mode + ":finalize", Source: BillingSettlementSourceWallet, UserID: 1, TaskID: task.ID, TaskQuota: 10, TaskQuotaTarget: 10}
+			readbackReached := false
+			if mode == "readback-failure" {
+				require.NoError(t, DB.Callback().Query().Before("gorm:query").Register("fail-confirmation-version-read", func(tx *gorm.DB) {
+					if tx.Statement.Table == "tasks" && len(tx.Statement.Selects) == 1 && tx.Statement.Selects[0] == "updated_at" {
+						readbackReached = true
+						tx.AddError(fmt.Errorf("synthetic version read failure"))
+					}
+				}))
+				t.Cleanup(func() { _ = DB.Callback().Query().Remove("fail-confirmation-version-read") })
+			}
+			err := task.UpdateWithSettlementIntent(input)
+			var fresh Task
+			require.NoError(t, DB.First(&fresh, task.ID).Error)
+			var records int64
+			require.NoError(t, DB.Model(&BillingSettlement{}).Count(&records).Error)
+			if mode != "current-database-version" {
+				require.Error(t, err)
+				if mode == "readback-failure" {
+					require.True(t, readbackReached)
+				}
+				require.Equal(t, persistedVersion, fresh.UpdatedAt)
+				require.Equal(t, originalCallerVersion, task.UpdatedAt)
+				require.True(t, fresh.PrivateData.AwaitingUpstreamID)
+				require.Empty(t, fresh.PrivateData.UpstreamTaskID)
+				require.Zero(t, records, "task metadata and intent must roll back together")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, persistedVersion+1, fresh.UpdatedAt)
+			require.Equal(t, fresh.UpdatedAt, task.UpdatedAt)
+			require.Equal(t, 10, fresh.Quota)
+			require.Equal(t, "confirmed-provider-id", fresh.PrivateData.UpstreamTaskID)
+			require.EqualValues(t, 1, records)
+			require.NoError(t, task.UpdateWithSettlementIntent(input))
+			require.NoError(t, DB.First(&fresh, task.ID).Error)
+			require.Equal(t, persistedVersion+2, fresh.UpdatedAt)
+			require.NoError(t, DB.Model(&BillingSettlement{}).Count(&records).Error)
+			require.EqualValues(t, 1, records, "duplicate confirmation keeps the stable intent identity")
+		})
+	}
 }
 
 func TestUpdateWithSettlementIntentRollsBackIntentWhenTaskIsMissing(t *testing.T) {

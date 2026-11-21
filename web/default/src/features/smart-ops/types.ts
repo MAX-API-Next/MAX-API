@@ -114,6 +114,12 @@ export type BillingSettlementReconciliationData = {
   truncated: boolean
   generated_at: number
   items: BillingSettlementReconciliationItem[]
+  task_submit_failure_count?: number
+  task_submit_failures?: {
+    task_id: string
+    last_error: string
+    updated_at: number
+  }[]
 }
 
 export type BillingSettlementMutationResponse = {

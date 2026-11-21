@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -77,23 +78,50 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 		return nil, service.TaskErrorWrapperLocal(errors.New("pre-consumed quota cannot be negative"), "persist_task_failed", http.StatusInternalServerError)
 	}
 	if info.PersistedTaskID > 0 {
-		var task model.Task
-		if err := model.DB.First(&task, info.PersistedTaskID).Error; err != nil {
+		loaded, err := model.GetTaskPlaceholderByID(info.PersistedTaskID)
+		if err != nil {
 			return nil, TaskPersistenceError(err, "load_persisted_task_failed", "failed to load persisted task")
 		}
-		fresh := model.InitTask(platform, info)
-		task.Platform = platform
-		task.ChannelId = fresh.ChannelId
-		task.Group = fresh.Group
-		task.Properties = fresh.Properties
-		task.PrivateData.Key = fresh.PrivateData.Key
-		task.PrivateData.AwaitingUpstreamID = true
-		task.Quota = preConsumedQuota
-		populateTaskBillingMetadata(&task, info)
-		if err := task.Update(); err != nil {
-			return nil, TaskPersistenceError(err, "update_persisted_task_failed", "failed to update persisted task")
+		task := *loaded
+		for attempt := 0; attempt < 3; attempt++ {
+			observed := task
+			privateSnapshot, err := common.Marshal(task.PrivateData)
+			if err != nil {
+				return nil, TaskPersistenceError(err, "load_persisted_task_failed", "failed to observe persisted task")
+			}
+			if conflict := taskPlaceholderLifecycleConflict(&task); conflict != nil {
+				return nil, conflict
+			}
+			fresh := model.InitTask(platform, info)
+			task.Platform = platform
+			task.ChannelId = fresh.ChannelId
+			task.Group = fresh.Group
+			task.Properties = fresh.Properties
+			task.PrivateData.Key = fresh.PrivateData.Key
+			task.PrivateData.AwaitingUpstreamID = true
+			task.Quota = preConsumedQuota
+			populateTaskBillingMetadata(&task, info)
+			if err := task.RewritePlaceholder(observed); err != nil {
+				if errors.Is(err, model.ErrTaskPlaceholderConflict) {
+					if attempt == 2 {
+						break
+					}
+					reloaded, readErr := model.GetTaskPlaceholderByID(task.ID)
+					if readErr == nil {
+						if conflict := taskPlaceholderLifecycleConflict(reloaded); conflict != nil {
+							return nil, conflict
+						}
+						if taskPlaceholderClaimOnly(observed, privateSnapshot, reloaded) {
+							task = *reloaded
+							continue
+						}
+					}
+				}
+				return nil, TaskPersistenceError(err, "update_persisted_task_failed", "failed to update persisted task")
+			}
+			return &task, nil
 		}
-		return &task, nil
+		return nil, service.TaskErrorWrapperLocal(errors.New("task placeholder kept changing"), "task_rewrite_conflict", http.StatusConflict)
 	}
 
 	task := model.InitTask(platform, info)
@@ -105,6 +133,26 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 	}
 	info.PersistedTaskID = task.ID
 	return task, nil
+}
+
+func taskPlaceholderLifecycleConflict(task *model.Task) *dto.TaskError {
+	if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure || task.PrivateData.UpstreamTaskID != "" {
+		return service.TaskErrorWrapperLocal(errors.New("task lifecycle already advanced"), "task_lifecycle_advanced", http.StatusConflict)
+	}
+	return nil
+}
+
+func taskPlaceholderClaimOnly(before model.Task, privateSnapshot []byte, after *model.Task) bool {
+	if after == nil || after.UpdatedAt <= before.UpdatedAt || after.PrivateData.UpstreamTaskID != "" || !after.PrivateData.AwaitingUpstreamID {
+		return false
+	}
+	private, err := common.Marshal(after.PrivateData)
+	return err == nil && bytes.Equal(privateSnapshot, private) && before.ID == after.ID && before.TaskID == after.TaskID &&
+		before.Status == after.Status && before.HasSameQuotaSnapshot(after) && before.ChannelId == after.ChannelId && before.UserId == after.UserId &&
+		before.SubmitTimeoutRetainedFunding == after.SubmitTimeoutRetainedFunding &&
+		before.Group == after.Group && before.Platform == after.Platform && before.Action == after.Action && before.Properties == after.Properties &&
+		before.CreatedAt == after.CreatedAt && before.SubmitTime == after.SubmitTime && before.StartTime == after.StartTime && before.FinishTime == after.FinishTime &&
+		before.Progress == after.Progress && before.FailReason == after.FailReason && bytes.Equal(before.Data, after.Data)
 }
 
 func TaskPersistenceError(err error, code string, safeMessage string) *dto.TaskError {
@@ -709,7 +757,7 @@ func sunoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *dt
 	taskId := c.Param("id")
 	userId := c.GetInt("id")
 
-	originTask, exist, err := model.GetByTaskId(userId, taskId)
+	originTask, exist, err := model.GetUserTaskStatusByID(userId, taskId)
 	if err != nil {
 		taskResp = service.TaskErrorWrapper(err, "get_task_failed", http.StatusInternalServerError)
 		return
@@ -733,7 +781,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	}
 	userId := c.GetInt("id")
 
-	originTask, exist, err := model.GetByTaskId(userId, taskId)
+	originTask, exist, err := model.GetUserTaskStatusByID(userId, taskId)
 	if err != nil {
 		taskResp = service.TaskErrorWrapper(err, "get_task_failed", http.StatusInternalServerError)
 		return
@@ -747,7 +795,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	isKlingOfficialAPI := c.GetBool("kling_official_route") || strings.HasPrefix(c.Request.RequestURI, "/kling/v1/videos/")
 
 	// Gemini/Vertex 支持实时查询：用户 fetch 时直接从上游拉取最新状态
-	if realtimeResp := tryRealtimeFetch(originTask, isOpenAIVideoAPI); len(realtimeResp) > 0 {
+	if realtimeResp := tryRealtimeFetch(c.Request.Context(), originTask, isOpenAIVideoAPI); len(realtimeResp) > 0 {
 		respBody = realtimeResp
 		return
 	}
@@ -813,12 +861,32 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 // tryRealtimeFetch 尝试从上游实时拉取 Gemini/Vertex 任务状态。
 // 仅当渠道类型为 Gemini 或 Vertex 时触发；其他渠道或出错时返回 nil。
 // 当非 OpenAI Video API 时，还会构建自定义格式的响应体。
-func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
+func tryRealtimeFetch(ctx context.Context, task *model.Task, isOpenAIVideoAPI bool) []byte {
+	terminal := isTerminalTaskStatus(task.Status)
+	if task.PrivateDataUnreadable() || terminal && isOpenAIVideoAPI {
+		return nil
+	}
+	if terminal {
+		platform, _ := strconv.Atoi(string(task.Platform))
+		if platform == constant.ChannelTypeVertexAi || platform == constant.ChannelTypeGemini {
+			return renderRealtimeVideoStatus(task, task.Data)
+		}
+	}
 	channelModel, err := model.GetChannelById(task.ChannelId, true)
 	if err != nil {
 		return nil
 	}
 	if channelModel.Type != constant.ChannelTypeVertexAi && channelModel.Type != constant.ChannelTypeGemini {
+		return nil
+	}
+	if terminal {
+		return renderRealtimeVideoStatus(task, task.Data)
+	}
+	upstreamTaskID := task.GetUpstreamTaskID()
+	if upstreamTaskID == "" {
+		return nil
+	}
+	if task.CapturePrivateDataForStatusUpdate() != nil {
 		return nil
 	}
 
@@ -832,11 +900,11 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		return nil
 	}
 
-	resp, err := adaptor.FetchTask(baseURL, channelModel.Key, taskcommon.WithTaskProtocolConfig(map[string]any{
-		"task_id": task.GetUpstreamTaskID(),
+	resp, err := adaptor.FetchTask(baseURL, channelModel.Key, taskcommon.WithTaskProtocolConfig(taskcommon.WithTaskQueryContext(ctx, map[string]any{
+		"task_id": upstreamTaskID,
 		"action":  task.Action,
 		"model":   task.Properties.UpstreamModelName,
-	}, channelModel.GetOtherSettings()), proxy)
+	}), channelModel.GetOtherSettings()), proxy)
 	if err != nil || resp == nil {
 		return nil
 	}
@@ -857,6 +925,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		}
 	}
 
+	observed := *task
 	snap := task.Snapshot()
 
 	// 将上游最新状态更新到 task
@@ -869,24 +938,43 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	if strings.HasPrefix(ti.Url, "data:") {
 		// data: URI — kept in Data, not ResultURL
 	} else if ti.Url != "" {
+		task.PrivateData.LocalVideoContent = false
 		task.PrivateData.ResultURL = ti.Url
 	} else if task.Status == model.TaskStatusSuccess {
 		// No URL from adaptor — construct proxy URL using public task ID
-		task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
+		task.PrivateData.ResultURL = model.TaskVideoProxyPath(task.TaskID)
+		task.PrivateData.LocalVideoContent = true
 	}
 
 	// Terminal transitions must go through the polling settlement path. The
 	// realtime fetch may report terminal data to this caller, but must not make
 	// that state durable without the matching refund/final-settlement intent.
-	if !isTerminalTaskStatus(task.Status) && !snap.Equal(task.Snapshot()) {
-		_, _ = task.UpdateWithStatus(snap.Status)
+	if isTerminalTaskStatus(task.Status) || snap.Equal(task.Snapshot()) {
+		if latest, found, readErr := model.GetUserTaskStatusByID(observed.UserId, observed.TaskID); readErr == nil && found &&
+			latest.ID == observed.ID && isTerminalTaskStatus(latest.Status) {
+			*task = *latest
+			body = latest.Data
+		}
+	} else {
+		won, err := task.UpdatePollingProgress(snap.Status)
+		if !won || err != nil {
+			*task = observed
+			body = observed.Data
+			if latest, found, readErr := model.GetUserTaskStatusByID(observed.UserId, observed.TaskID); readErr == nil && found && latest.ID == observed.ID {
+				*task = *latest
+				body = latest.Data
+			}
+		}
 	}
 
 	// OpenAI Video API 由调用者的 ConvertToOpenAIVideo 分支处理
 	if isOpenAIVideoAPI {
 		return nil
 	}
+	return renderRealtimeVideoStatus(task, body)
+}
 
+func renderRealtimeVideoStatus(task *model.Task, body []byte) []byte {
 	// 非 OpenAI Video API: 构建自定义格式响应
 	format := detectVideoFormat(body)
 	out := map[string]any{

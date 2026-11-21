@@ -3,6 +3,7 @@ package taskplugin
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sort"
 )
@@ -13,24 +14,36 @@ type ManagementEntry struct {
 	Digest                   string
 	SourceDigest             string
 	FormatVersion            int
+	BOMPrefixed              bool
 	Active, Enabled, Revoked bool
 }
 
 func (catalog *Catalog) ManagementSnapshot(ctx context.Context) ([]ManagementEntry, int64, error) {
-	catalog.mu.Lock()
+	if err := catalog.acquire(ctx); err != nil {
+		return nil, 0, err
+	}
 	defer catalog.mu.Unlock()
+	if err := managementContextError(ctx); err != nil {
+		return nil, 0, err
+	}
 	if err := catalog.refreshLocked(ctx); err != nil {
 		return nil, 0, err
 	}
 	entries := make([]ManagementEntry, 0, len(catalog.snapshot.Packages))
 	byDigest := make(map[string]*Package, len(catalog.state.history))
 	for _, pkg := range catalog.state.history {
+		if err := managementContextError(ctx); err != nil {
+			return nil, 0, err
+		}
 		byDigest[pkg.digest] = pkg
 	}
 	for _, row := range catalog.snapshot.Packages {
+		if err := managementContextError(ctx); err != nil {
+			return nil, 0, err
+		}
 		// The published generation already validated these exact immutable bytes.
 		pkg := byDigest[row.Digest]
-		entries = append(entries, ManagementEntry{Manifest: pkg.Manifest(), Digest: row.Digest, SourceDigest: pkg.SourceDigest(), FormatVersion: pkg.FormatVersion(), Active: row.Active, Enabled: row.Enabled, Revoked: row.Revoked})
+		entries = append(entries, ManagementEntry{Manifest: pkg.Manifest(), Digest: row.Digest, SourceDigest: pkg.SourceDigest(), FormatVersion: pkg.FormatVersion(), BOMPrefixed: pkg.BOMPrefixed(), Active: row.Active, Enabled: row.Enabled, Revoked: row.Revoked})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].Manifest.Key != entries[j].Manifest.Key {
@@ -38,6 +51,9 @@ func (catalog *Catalog) ManagementSnapshot(ctx context.Context) ([]ManagementEnt
 		}
 		return entries[i].Manifest.Version < entries[j].Manifest.Version
 	})
+	if err := managementContextError(ctx); err != nil {
+		return nil, 0, err
+	}
 	return entries, catalog.snapshot.Revision, nil
 }
 
@@ -46,11 +62,55 @@ type ManagementMutation struct {
 	Package              *Package
 }
 
+// ValidateInstall checks the current catalog without committing an installation.
+// The eventual write still requires the caller's observed revision and CAS.
+func (catalog *Catalog) ValidateInstall(ctx context.Context, pkg *Package) error {
+	ctx = withRetainedPackageValidation(ctx, pkg)
+	if err := catalog.acquire(ctx); err != nil {
+		return err
+	}
+	defer catalog.mu.Unlock()
+	if err := managementContextError(ctx); err != nil {
+		return err
+	}
+	if err := catalog.refreshLockedForRead(ctx, true); err != nil {
+		return err
+	}
+	if catalog.snapshot.Revision == math.MaxInt64 {
+		return ErrCatalogInvalid
+	}
+	next := cloneCatalogSnapshot(catalog.snapshot)
+	if err := installCatalogPackagesContext(ctx, &next, pkg); err != nil {
+		return err
+	}
+	next.Revision++
+	_, err := buildCatalogStateContext(ctx, next, catalog.snapshot, true)
+	return err
+}
+
+func managementContextError(ctx context.Context) error {
+	if ctx == nil {
+		return ErrCatalogUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(ErrCatalogUnavailable, err)
+	}
+	return nil
+}
+
 // MutateExpected uses the existing transition helpers and durable store CAS.
 // A stale operator cannot act on a newly active version; writes are never retried.
 func (catalog *Catalog) MutateExpected(ctx context.Context, expected int64, mutation ManagementMutation) error {
 	if expected < 0 || expected == math.MaxInt64 {
 		return ErrCatalogInvalid
+	}
+	if mutation.Action == "delete" {
+		return catalog.deleteExpected(ctx, expected, mutation.Key, mutation.Version)
+	}
+	if mutation.Action == "install" {
+		ctx = withRetainedPackageValidation(ctx, mutation.Package)
+	} else if mutation.Action == "activate" {
+		ctx = withRetainedPackageValidation(ctx)
 	}
 	return catalog.updateExpected(ctx, &expected, func(next *CatalogSnapshot) error {
 		switch mutation.Action {
@@ -58,22 +118,74 @@ func (catalog *Catalog) MutateExpected(ctx context.Context, expected int64, muta
 			if mutation.Package == nil {
 				return ErrCatalogInvalid
 			}
-			return installCatalogPackages(next, mutation.Package)
+			return installCatalogPackagesContext(ctx, next, mutation.Package)
 		case "activate":
-			return activateCatalogVersion(next, mutation.Key, mutation.Version)
+			return activateCatalogVersion(ctx, next, mutation.Key, mutation.Version)
 		case "enable", "disable":
-			index, err := catalogVersion(next, mutation.Key, mutation.Version, false)
+			index, err := catalogVersion(ctx, next, mutation.Key, mutation.Version, false)
 			if err != nil {
 				return err
 			}
 			if !next.Packages[index].Active {
 				return ErrCatalogInvalid
 			}
-			return setCatalogEnabled(next, mutation.Key, mutation.Action == "enable")
-		case "revoke":
-			return revokeCatalogVersion(next, mutation.Key, mutation.Version)
+			return setCatalogEnabled(ctx, next, mutation.Key, mutation.Action == "enable")
 		default:
 			return ErrCatalogInvalid
 		}
 	})
+}
+
+func (catalog *Catalog) deleteExpected(ctx context.Context, expected int64, key, version string) error {
+	if err := catalog.acquire(ctx); err != nil {
+		return errors.Join(ErrCatalogNotCommitted, err)
+	}
+	defer catalog.mu.Unlock()
+	if err := managementContextError(ctx); err != nil {
+		return errors.Join(ErrCatalogNotCommitted, err)
+	}
+	if err := catalog.refreshLocked(ctx); err != nil {
+		if ctx.Err() != nil || errors.Is(err, ErrCatalogUnavailable) {
+			return errors.Join(ErrCatalogNotCommitted, err)
+		}
+		return err
+	}
+	if catalog.snapshot.Revision != expected {
+		return ErrCatalogConflict
+	}
+	store, ok := catalog.store.(CatalogVersionDeleter)
+	if !ok {
+		return ErrCatalogUnavailable
+	}
+	revision, err := store.DeleteVersion(ctx, expected, key, version)
+	if err != nil {
+		var observation *CatalogReadObservationError
+		if errors.As(err, &observation) {
+			catalog.observeRevision(observation.Revision)
+			catalog.host.state.Store(nil)
+			return err
+		}
+		if errors.Is(err, ErrCatalogConflict) {
+			catalog.host.state.Store(nil)
+			return ErrCatalogConflict
+		}
+		if errors.Is(err, ErrCatalogInUse) || errors.Is(err, ErrBindingRejected) || errors.Is(err, ErrCatalogInvalid) {
+			return err
+		}
+		if errors.Is(err, ErrCatalogNotCommitted) {
+			return err
+		}
+		catalog.host.state.Store(nil)
+		return ErrCatalogUnavailable
+	}
+	if revision != expected+1 {
+		catalog.host.state.Store(nil)
+		return ErrCatalogUnavailable
+	}
+	catalog.observeRevision(revision)
+	// The durable store has confirmed the exact commit. Publication failure
+	// suspends the local Host, but cannot turn that receipt into an unknown write.
+	catalog.host.state.Store(nil)
+	_ = catalog.refreshLocked(ctx)
+	return nil
 }

@@ -811,6 +811,11 @@ func TestSaveQuotaDataCacheRequeuesSnapshotWhenCallerStopsWaiting(t *testing.T) 
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(4)
 	t.Cleanup(func() { _ = sqlDB.Close() })
+	// Cancellation can discard the query connection. Keep the shared
+	// memory database alive independently of the pool's idle connections.
+	anchor, err := sqlDB.Conn(context.Background())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = anchor.Close() })
 
 	oldDB := DB
 	oldRetry := quotaDataOperationLockRetryInterval
@@ -865,6 +870,8 @@ func TestSaveQuotaDataCacheRequeuesSnapshotWhenCallerStopsWaiting(t *testing.T) 
 	CacheQuotaDataLock.Unlock()
 	assert.Equal(t, 1, cachedSnapshots, "the detached snapshot must be requeued when the flush caller stops waiting")
 
+	sqlDB.SetMaxIdleConns(0)
+	sqlDB.SetMaxIdleConns(4)
 	releaseHolder()
 	require.NoError(t, SaveQuotaDataCache(context.Background()))
 	var row QuotaData

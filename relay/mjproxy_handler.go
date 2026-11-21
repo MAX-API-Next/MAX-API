@@ -279,9 +279,7 @@ func prepareMidjourneyBillingTask(c *gin.Context, info *relaycommon.RelayInfo, a
 	}
 	task, taskErr := ensureTaskPlaceholder(constant.TaskPlatformMidjourney, info, preConsumedQuota)
 	if taskErr != nil {
-		if info.Billing != nil {
-			info.Billing.Refund(c)
-		}
+		service.CleanupDefiniteTaskSubmitFailure(c, info, taskErr.Message)
 		return nil, &dto.MidjourneyResponse{Code: constant.MjRequestError, Description: taskErr.Message}
 	}
 	return task, nil
@@ -310,25 +308,18 @@ func prepareMidjourneyRefundInput(info *relaycommon.RelayInfo) (*model.BillingSe
 }
 
 func failMidjourneySubmission(c *gin.Context, info *relaycommon.RelayInfo, task *model.Task, reason string) {
-	if task == nil {
+	if task == nil || info == nil {
 		return
 	}
-	refundInput, err := prepareMidjourneyRefundInput(info)
-	if err != nil {
-		common.SysError("prepare midjourney submission refund error: " + err.Error())
-		_ = model.MarkTaskSubmitAmbiguous(task.ID, reason+"（退款 intent 无法持久化，请人工核对）")
-		return
+	// Use the actual persisted task without changing the caller's relay metadata.
+	failureInfo := &relaycommon.RelayInfo{
+		Billing:       info.Billing,
+		RequestId:     info.RequestId,
+		UserId:        info.UserId,
+		TokenId:       info.TokenId,
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: task.ID},
 	}
-	if err := model.MarkTaskSubmitFailedWithSettlement(task.ID, reason, refundInput); err != nil {
-		common.SysError("persist midjourney submission failure error: " + err.Error())
-		if info != nil && info.Billing != nil {
-			info.Billing.Refund(c)
-		}
-		return
-	}
-	if info != nil && info.Billing != nil {
-		info.Billing.Refund(c)
-	}
+	service.CleanupDefiniteTaskSubmitFailure(c, failureInfo, reason)
 }
 
 func markMidjourneySubmissionAmbiguous(info *relaycommon.RelayInfo, task *model.Task, reason string) {

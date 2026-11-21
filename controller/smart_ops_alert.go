@@ -411,6 +411,20 @@ func CompleteManualTaskBillingSettlements(c *gin.Context) {
 // GetBillingSettlementReconciliation exposes bounded, read-only evidence for
 // open billing reconciliation records. It does not retry or mutate records.
 func GetBillingSettlementReconciliation(c *gin.Context) {
+	if value, lookup := c.GetQuery("task_submit_failure_id"); lookup {
+		taskID, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || taskID <= 0 || strconv.FormatInt(taskID, 10) != value {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false})
+			return
+		}
+		result, err := model.LookupTaskSubmitFailureReview(c.Request.Context(), taskID)
+		if err != nil {
+			respondPerformanceError(c, err, service.ErrInvalidBillingSettlementReconciliationQuery, "failed to query billing settlement reconciliation")
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": result})
+		return
+	}
 	limit, err := parseIntQuery(c, "limit")
 	if err != nil {
 		respondInvalidPerformanceQuery(

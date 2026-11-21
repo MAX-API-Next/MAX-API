@@ -78,7 +78,7 @@ func upsertCacheInvalidationTask(db *gorm.DB, kind, entityKey, versionKey string
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"version_key": versionKey,
 			"updated_at":  now,
-			"revision":    gorm.Expr("revision + ?", 1),
+			"revision":    gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "revision"}, 1),
 		}),
 	}).Create(&task).Error; err != nil {
 		return CacheInvalidationTask{}, err

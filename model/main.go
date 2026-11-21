@@ -307,6 +307,9 @@ func InitDB() (err error) {
 			db = db.Debug()
 		}
 		DB = db
+		if err := registerTaskPluginTypedCreateGuard(DB); err != nil {
+			return err
+		}
 		// MySQL charset/collation startup check: ensure Chinese-capable charset
 		if common.UsingMySQL {
 			if err := checkMySQLChineseSupport(DB); err != nil {
@@ -404,6 +407,9 @@ func migrateDB() error {
 	if err := migrateTokenQuotaColumnsToBigInt(); err != nil {
 		return err
 	}
+	if err := prepareBillingSettlementReserveLookup(DB); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -421,8 +427,10 @@ func migrateDB() error {
 		&QuotaDataSnapshot{},
 		&QuotaDataSnapshotRetry{},
 		&Task{},
+		&TaskSubmitFailureRecovery{},
 		&TaskPluginCatalogHead{},
 		&TaskPluginVersion{},
+		&TaskPluginDeletion{},
 		&Model{},
 		&Vendor{},
 		&PrefillGroup{},

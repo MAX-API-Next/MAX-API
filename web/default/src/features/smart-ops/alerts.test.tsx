@@ -25,7 +25,6 @@ import ru from '@/i18n/locales/ru.json'
 import vi from '@/i18n/locales/vi.json'
 import zh from '@/i18n/locales/zh.json'
 import { createReactTestEnvironment } from '@/test/react'
-import { fireEvent, waitFor, within } from '@testing-library/react'
 import i18next from 'i18next'
 import assert from 'node:assert/strict'
 import { after, describe, test } from 'node:test'
@@ -55,11 +54,22 @@ const testEnv = createReactTestEnvironment({
 })
 
 await testEnv.setup()
+const { fireEvent, waitFor, within } = await import('@testing-library/react')
 const { ActiveAlerts } = await import('./alerts')
 const { BillingSettlementEvidence } =
   await import('./components/billing-settlement-evidence')
 
 after(() => testEnv.teardown())
+
+const setInputValue = (input: HTMLInputElement, value: string): void => {
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    'value'
+  )?.set
+  assert.ok(setter)
+  setter.call(input, value)
+  fireEvent.input(input)
+}
 
 function createQueryClient(): QueryClient {
   return new QueryClient({
@@ -1535,15 +1545,6 @@ describe('SmartOps active alerts', () => {
         ),
         null
       )
-      const setInputValue = (input: HTMLInputElement, value: string): void => {
-        const setter = Object.getOwnPropertyDescriptor(
-          window.HTMLInputElement.prototype,
-          'value'
-        )?.set
-        assert.ok(setter)
-        setter.call(input, value)
-        fireEvent.input(input)
-      }
       await act(async () => {
         setInputValue(firstInput, '')
       })
@@ -1938,12 +1939,35 @@ describe('SmartOps active alerts', () => {
     const originalGet = api.get
     const originalPut = api.put
     let policyWrites = 0
-    api.get = (async (url: string): Promise<unknown> => ({
-      data:
-        url === '/api/smart-ops/billing-settlements'
-          ? { success: true, data: emptyReconciliationData() }
-          : { success: true, data: [] },
-    })) as typeof api.get
+    const exactIds: string[] = []
+    api.get = (async (
+      url: string,
+      config?: { params?: { task_submit_failure_id?: string } }
+    ): Promise<unknown> => {
+      const taskId = config?.params?.task_submit_failure_id
+      if (taskId) {
+        exactIds.push(taskId)
+        return {
+          data: {
+            success: true,
+            data: [
+              {
+                task_id: taskId,
+                request_id: 'admin-readable-request',
+                wallet_debit: '10',
+                last_error: 'manual review',
+              },
+            ],
+          },
+        }
+      }
+      return {
+        data:
+          url === '/api/smart-ops/billing-settlements'
+            ? { success: true, data: emptyReconciliationData() }
+            : { success: true, data: [] },
+      }
+    }) as typeof api.get
     api.put = (async (): Promise<unknown> => {
       policyWrites += 1
       return { data: { success: true } }
@@ -1970,6 +1994,28 @@ describe('SmartOps active alerts', () => {
       })
       assert.ok(policySwitch)
       assert.equal(policySwitch.hasAttribute('data-disabled'), true)
+      await view.click(
+        within(view.container).getByRole('button', { name: 'Task ID' })
+      )
+      const input = within(view.container).getByRole('textbox', {
+        name: 'Task ID',
+      })
+      const search = within(view.container).getByRole('button', {
+        name: 'Search',
+      })
+      await act(async () => {
+        setInputValue(input as HTMLInputElement, '9223372036854775808')
+      })
+      assert.ok(search.hasAttribute('disabled'))
+      await act(async () => {
+        setInputValue(input as HTMLInputElement, '9223372036854775807')
+      })
+      assert.equal(search.hasAttribute('disabled'), false)
+      await view.click(search)
+      await waitFor(() =>
+        assert.ok(within(view.container).getByText('admin-readable-request'))
+      )
+      assert.deepEqual(exactIds, ['9223372036854775807'])
       assert.equal(policyWrites, 0)
     } finally {
       api.get = originalGet

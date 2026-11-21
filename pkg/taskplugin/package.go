@@ -20,10 +20,16 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 package taskplugin
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
+	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -42,19 +48,97 @@ type PackageDocument struct {
 // Package has already passed an administrator-supplied digest check. The hash
 // covers the entire document, including routing and network permissions.
 type Package struct {
-	manifest      Manifest
-	source        string
-	digest        string
-	size          int
-	document      []byte
-	formatVersion int
-	program       *Program
+	manifest              Manifest
+	source                string
+	digest                string
+	size                  int
+	document              []byte
+	formatVersion         int
+	program               *Program
+	legacyRepeatedMembers bool
+}
+
+type retainedPackageValidationKey struct{}
+
+// Reuse immutable validation within one catalog operation. A cache hit still
+// verifies the exact current bytes, including when a locked store rereads them.
+type retainedPackageValidation struct {
+	mu       sync.Mutex
+	packages map[string]*Package
+	bytes    int
+}
+
+func withRetainedPackageValidation(ctx context.Context, packages ...*Package) context.Context {
+	if ctx == nil {
+		return nil
+	}
+	cache, _ := ctx.Value(retainedPackageValidationKey{}).(*retainedPackageValidation)
+	if cache == nil {
+		cache = &retainedPackageValidation{packages: make(map[string]*Package)}
+		ctx = context.WithValue(ctx, retainedPackageValidationKey{}, cache)
+	}
+	for _, pkg := range packages {
+		if pkg != nil {
+			cache.remember(pkg)
+		}
+	}
+	return ctx
+}
+
+func (cache *retainedPackageValidation) remember(pkg *Package) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.packages[pkg.digest] == nil && len(pkg.document) <= MaxRetainedPackageBytes-cache.bytes {
+		cache.packages[pkg.digest] = pkg
+		cache.bytes += len(pkg.document)
+	}
 }
 
 // LoadPackage accepts exactly one bounded document and requires a trusted hash
 // from outside the document. Computing a hash from an untrusted upload alone
 // does not establish publisher authenticity.
 func LoadPackage(reader io.Reader, expectedSHA256 string) (*Package, error) {
+	return LoadPackageContext(context.Background(), reader, expectedSHA256)
+}
+
+// LoadPackageContext also bounds executable metadata evaluation by the caller's
+// context. The byte, manifest and trusted-pin contract is identical to LoadPackage.
+func LoadPackageContext(ctx context.Context, reader io.Reader, expectedSHA256 string) (*Package, error) {
+	return loadPackageContext(ctx, reader, expectedSHA256, false)
+}
+
+// LoadRetainedPackage reads digest-pinned bytes already retained by a catalog.
+// Legacy packages retain their original JSON interpretation and bytes.
+func (entry StoredPackage) LoadRetainedPackage(ctx context.Context) (*Package, error) {
+	var cache *retainedPackageValidation
+	if ctx != nil && ctx.Err() == nil {
+		cache, _ = ctx.Value(retainedPackageValidationKey{}).(*retainedPackageValidation)
+		if cache != nil {
+			cache.mu.Lock()
+			cached := cache.packages[entry.Digest]
+			cache.mu.Unlock()
+			if cached != nil && bytes.Equal(cached.document, entry.Document) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				return cached, nil
+			}
+		}
+	}
+	pkg, err := loadPackageContext(ctx, bytes.NewReader(entry.Document), entry.Digest, true)
+	if err == nil && cache != nil {
+		cache.remember(pkg)
+	}
+	return pkg, err
+}
+
+func loadPackageContext(ctx context.Context, reader io.Reader, expectedSHA256 string, retained bool) (*Package, error) {
+	if ctx == nil {
+		return nil, ErrCatalogUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	expected, err := hex.DecodeString(expectedSHA256)
 	if reader == nil || err != nil || len(expected) != sha256.Size {
 		return nil, errors.New("task plugin package requires a SHA-256 pin")
@@ -67,17 +151,18 @@ func LoadPackage(reader io.Reader, expectedSHA256 string) (*Package, error) {
 	if hex.EncodeToString(expected) != hex.EncodeToString(actual[:]) {
 		return nil, errors.New("task plugin package digest mismatch")
 	}
-	var fields map[string]any
-	if common.Unmarshal(data, &fields) != nil || len(fields) != 3 {
-		return nil, errors.New("unsupported task plugin package fields")
-	}
-	for _, name := range []string{"format_version", "manifest", "source"} {
-		if _, ok := fields[name]; !ok {
-			return nil, errors.New("unsupported task plugin package fields")
+	// A UTF-8 BOM is permitted only at the start of the JSON document. Hash,
+	// size and persisted identity continue to cover the original upload bytes.
+	jsonData := bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
+	legacyRepeatedMembers := false
+	if !validPackageFields(jsonData) {
+		if !retained || !validLegacyPackageFields(jsonData) {
+			return nil, errors.New("unsupported task plugin package fields or repeated JSON member")
 		}
+		legacyRepeatedMembers = true
 	}
 	var document PackageDocument
-	if err := common.Unmarshal(data, &document); err != nil {
+	if err := common.Unmarshal(jsonData, &document); err != nil {
 		return nil, errors.New("invalid task plugin package document")
 	}
 	if (document.FormatVersion != 1 && document.FormatVersion != 2 && document.FormatVersion != 3) || document.Source == "" || !utf8.ValidString(document.Source) {
@@ -100,17 +185,118 @@ func LoadPackage(reader io.Reader, expectedSHA256 string) (*Package, error) {
 	}
 	var program *Program
 	if document.FormatVersion == 3 {
-		program, err = CompileJavaScript(document.Source, RuntimeOptions{})
-		if err != nil || !program.matchesManifest(document.Manifest) {
+		program, err = compileJavaScriptContext(ctx, document.Source, RuntimeOptions{})
+		if err != nil || !program.matchesManifestContext(ctx, document.Manifest) {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			return nil, ErrPluginCompile
 		}
 	}
-	return &Package{manifest: cloneManifest(document.Manifest), source: document.Source, digest: hex.EncodeToString(actual[:]), size: len(data), document: data, formatVersion: document.FormatVersion, program: program}, nil
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &Package{manifest: cloneManifest(document.Manifest), source: document.Source, digest: hex.EncodeToString(actual[:]), size: len(data), document: data, formatVersion: document.FormatVersion, program: program, legacyRepeatedMembers: legacyRepeatedMembers}, nil
+}
+
+func validLegacyPackageFields(data []byte) bool {
+	var fields map[string]any
+	if common.Unmarshal(data, &fields) != nil || len(fields) != 3 {
+		return false
+	}
+	for _, name := range []string{"format_version", "manifest", "source"} {
+		if _, exists := fields[name]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func validPackageFields(data []byte) bool {
+	decoder := common.NewJSONDecoder(bytes.NewReader(data))
+	// Use the same number range as pre-duplicate-check catalog readers.
+	// Token scanning never persists or round-trips the decoded number.
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return false
+	}
+	fields, err := readUniquePackageFields(decoder, opening, reflect.TypeFor[PackageDocument](), 1)
+	if err != nil || len(fields) != 3 || !fields["format_version"] || !fields["manifest"] || !fields["source"] {
+		return false
+	}
+	_, err = decoder.Token()
+	return err == io.EOF
+}
+
+func readUniquePackageFields(decoder *json.Decoder, opening json.Token, valueType reflect.Type, depth int) (map[string]bool, error) {
+	var fields map[string]bool
+	var childType reflect.Type
+	switch opening {
+	case json.Delim('{'):
+		fields = make(map[string]bool)
+	case json.Delim('['):
+		if valueType != nil && valueType.Kind() == reflect.Slice {
+			childType = valueType.Elem()
+		}
+	default:
+		return nil, nil
+	}
+	if depth > 10000 { // Match encoding/json's document nesting limit.
+		return nil, errors.New("package JSON is too deeply nested")
+	}
+	for decoder.More() {
+		if fields != nil {
+			token, err := decoder.Token()
+			key, ok := token.(string)
+			if err != nil || !ok {
+				return nil, errors.New("invalid or repeated package JSON member")
+			}
+			var name string
+			name, childType = packageJSONField(valueType, key)
+			if fields[name] || valueType == reflect.TypeFor[PackageDocument]() && name != key {
+				return nil, errors.New("invalid or repeated package JSON member")
+			}
+			fields[name] = true
+		}
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := readUniquePackageFields(decoder, token, childType, depth+1); err != nil {
+			return nil, err
+		}
+	}
+	_, err := decoder.Token()
+	return fields, err
+}
+
+func packageJSONField(valueType reflect.Type, key string) (string, reflect.Type) {
+	if valueType == nil {
+		return key, nil
+	}
+	if valueType.Kind() == reflect.Map {
+		return key, valueType.Elem()
+	}
+	if valueType.Kind() == reflect.Struct {
+		for field := range valueType.Fields() {
+			name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+			if name == "" {
+				name = field.Name
+			}
+			if name != "-" && strings.EqualFold(key, name) {
+				return name, field.Type
+			}
+		}
+	}
+	return key, nil
 }
 
 func (p *Package) Manifest() Manifest { return cloneManifest(p.manifest) }
 func (p *Package) Digest() string     { return p.digest }
 func (p *Package) FormatVersion() int { return p.formatVersion }
+func (p *Package) BOMPrefixed() bool {
+	return p != nil && bytes.HasPrefix(p.document, []byte{0xef, 0xbb, 0xbf})
+}
 
 // ModelUsageSchema returns detached metadata for the exact mapped model.
 // Profile packages never fall back for an unprofiled/unknown model.

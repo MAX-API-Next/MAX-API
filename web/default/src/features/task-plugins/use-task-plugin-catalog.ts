@@ -37,7 +37,7 @@ export function useTaskPluginCatalog(transport: TaskPluginAPI) {
   const [snapshot, setSnapshot] = useState<PluginSnapshot>()
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<string | PluginError>('')
   const [readError, setReadError] = useState('')
   const [notice, setNotice] = useState('')
   const [unknown, setUnknown] = useState(false)
@@ -115,6 +115,20 @@ export function useTaskPluginCatalog(transport: TaskPluginAPI) {
         'Plugin catalog updated. Execution and paid admission remain unavailable.'
       )
       onAccepted?.()
+      if (command.action === 'delete') {
+        const { key, version } = command
+        // A validated committed receipt certifies this removal. Keep the old
+        // revision until refresh; other mutations remain blocked while busy.
+        setSnapshot(
+          (current) =>
+            current && {
+              ...current,
+              entries: current.entries.filter(
+                (entry) => entry.key !== key || entry.version !== version
+              ),
+            }
+        )
+      }
     } catch (e) {
       if (!mounted.current) return
       if (!(e instanceof PluginError) || e.kind === 'unknown') {
@@ -122,9 +136,7 @@ export function useTaskPluginCatalog(transport: TaskPluginAPI) {
         setUnknown(true)
         setReadAfterUnknown(false)
       }
-      setError(
-        e instanceof PluginError ? e.message : 'Task plugin request failed'
-      )
+      setError(e instanceof PluginError ? e : 'Task plugin request failed')
     } finally {
       if (mounted.current) {
         invalidateModelPricing(queryClient)

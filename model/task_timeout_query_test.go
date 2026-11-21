@@ -2,9 +2,14 @@ package model
 
 import (
 	"database/sql"
+	"fmt"
+	"math"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/glebarez/sqlite"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -13,6 +18,334 @@ import (
 	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+func withDisposablePostgresTaskSchema(t *testing.T, run func(*gorm.DB)) {
+	t.Helper()
+	dsn := os.Getenv("TEST_TASK_RESERVE_PATTERN_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("requires a disposable PostgreSQL matrix database")
+	}
+	db, err := gorm.Open(gormpostgres.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	pool, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pool.Close() })
+	var database string
+	require.NoError(t, db.Raw("SELECT current_database()").Scan(&database).Error)
+	require.Regexp(t, "^maxapi_task_billing_test_round[0-9]+$", database)
+	schemaName := fmt.Sprintf("reserve_fixture_%d", time.Now().UnixNano())
+	require.NoError(t, db.Exec("CREATE SCHEMA "+schemaName).Error)
+	t.Cleanup(func() { require.NoError(t, db.Exec("DROP SCHEMA "+schemaName+" CASCADE").Error) })
+	require.NoError(t, db.Connection(func(db *gorm.DB) error {
+		require.NoError(t, db.Exec("SET search_path TO "+schemaName).Error)
+		defer db.Exec("RESET search_path")
+		run(db.Session(&gorm.Session{NewDB: true}))
+		return nil
+	}))
+}
+
+func TestPostgresReserveLookupUsesPatternIndex(t *testing.T) {
+	withDisposablePostgresTaskSchema(t, func(db *gorm.DB) {
+		var nonC int64
+		require.NoError(t, db.Raw("SELECT count(*) FROM pg_collation WHERE collname = 'en-US-x-icu'").Scan(&nonC).Error)
+		require.Positive(t, nonC, "the matrix must exercise a non-C collation")
+		const injection = "fixture:fail-reserve-index-creation"
+		require.NoError(t, db.Callback().Raw().Before("gorm:raw").Register(injection, func(tx *gorm.DB) {
+			if strings.HasPrefix(tx.Statement.SQL.String(), "CREATE INDEX IF NOT EXISTS idx_billing_settlements_operation_key_pattern ") {
+				_ = tx.AddError(fmt.Errorf("fixture index creation interrupted"))
+			}
+		}))
+		failed := prepareBillingSettlementReserveLookup(db)
+		require.NoError(t, db.Callback().Raw().Remove(injection))
+		require.ErrorContains(t, failed, "fixture index creation interrupted")
+		require.False(t, db.Migrator().HasTable(&BillingSettlement{}), "a failed fresh index build also rolls back the new ledger")
+		require.NoError(t, prepareBillingSettlementReserveLookup(db))
+		require.NoError(t, db.Exec("DROP INDEX idx_billing_settlements_operation_key_pattern").Error)
+		require.NoError(t, db.Exec(`ALTER TABLE billing_settlements ALTER COLUMN operation_key TYPE varchar(191) COLLATE pg_catalog."en-US-x-icu"`).Error)
+		require.ErrorContains(t, prepareBillingSettlementReserveLookup(db), "missing or invalid")
+		require.NoError(t, db.Exec("CREATE INDEX idx_billing_settlements_operation_key_pattern ON billing_settlements (operation_key)").Error)
+		require.ErrorContains(t, prepareBillingSettlementReserveLookup(db), "missing or invalid")
+		require.NoError(t, db.Exec("DROP INDEX idx_billing_settlements_operation_key_pattern").Error)
+		require.NoError(t, db.Exec(`INSERT INTO billing_settlements (operation_key, source, created_at, updated_at)
+			SELECT 'plan-fixture:' || i, 'wallet', 1, 1 FROM generate_series(1, 50000) AS i`).Error)
+		require.NoError(t, db.Exec(`INSERT INTO billing_settlements (operation_key, source, created_at, updated_at)
+			VALUES ('request:plan-_fixture:reserve:1', 'wallet', 1, 1), ('request:plan-Xfixture:reserve:1', 'wallet', 1, 1)`).Error)
+		require.NoError(t, db.Exec("ANALYZE billing_settlements").Error)
+		require.NoError(t, db.Exec("CREATE INDEX CONCURRENTLY idx_billing_settlements_operation_key_pattern ON billing_settlements (operation_key varchar_pattern_ops)").Error)
+		require.NoError(t, prepareBillingSettlementReserveLookup(db))
+		require.NoError(t, prepareBillingSettlementReserveLookup(db))
+		pattern := taskSubmitWalletReservePattern("request:plan-_fixture:reserve:")
+		var plan []string
+		require.NoError(t, db.Raw("EXPLAIN SELECT id FROM billing_settlements WHERE operation_key LIKE ? ESCAPE '!'", pattern).Scan(&plan).Error)
+		require.Contains(t, strings.Join(plan, "\n"), "idx_billing_settlements_operation_key_pattern")
+		var found []string
+		require.NoError(t, db.Raw("SELECT operation_key FROM billing_settlements WHERE operation_key LIKE ? ESCAPE '!'", pattern).Scan(&found).Error)
+		require.Equal(t, []string{"request:plan-_fixture:reserve:1"}, found)
+	})
+}
+
+func TestPostgresTaskHistoryPreservesDuplicateMetadataValidation(t *testing.T) {
+	withDisposablePostgresTaskSchema(t, func(db *gorm.DB) {
+		previous := DB
+		DB = db
+		defer func() { DB = previous }()
+		require.NoError(t, db.AutoMigrate(&Task{}))
+		row := &Task{TaskID: "postgres-history", UserId: 71, Status: TaskStatusSuccess}
+		require.NoError(t, db.Create(row).Error)
+		setPrivate := func(raw string) {
+			require.NoError(t, db.Exec("UPDATE tasks SET private_data = CAST(? AS json) WHERE id = ?", raw, row.ID).Error)
+		}
+		setPrivate(`{"result_url":"/first","result_url":"/second","Inline_Video_Data_URL":"data:video/mp4;base64,AA=="}`)
+		rows := TaskGetAllUserTask(row.UserId, 0, 10, SyncTaskQueryParams{TaskID: row.TaskID})
+		require.Len(t, rows, 1)
+		require.True(t, rows[0].PrivateDataUnreadable())
+		require.Empty(t, rows[0].GetResultURL())
+		setPrivate(`{"result_url":"/hidden","inline_video_data_url":42}`)
+		rows = TaskGetAllUserTask(row.UserId, 0, 10, SyncTaskQueryParams{TaskID: row.TaskID})
+		require.Len(t, rows, 1)
+		require.True(t, rows[0].PrivateDataUnreadable())
+		setPrivate(`{"legacy":"\u0000","result_url":"/old","inline_video_data_url":"media"}`)
+		rows = TaskGetAllTasks(0, 10, SyncTaskQueryParams{TaskID: row.TaskID})
+		require.Len(t, rows, 1)
+		require.Equal(t, "/old", rows[0].GetResultURL())
+		require.Empty(t, rows[0].PrivateData.InlineVideoDataURL)
+		setPrivate(`{"result_url":"/single","Inline_Video_Data_URL":"data:video/mp4;base64,AA=="}`)
+		rows = TaskGetAllUserTask(row.UserId, 0, 10, SyncTaskQueryParams{TaskID: row.TaskID})
+		require.Len(t, rows, 1)
+		require.Equal(t, "/single", rows[0].GetResultURL())
+		require.Empty(t, rows[0].PrivateData.InlineVideoDataURL)
+	})
+}
+
+func TestPollingBatchQuarantinesUnadvanceableVersions(t *testing.T) {
+	truncateTables(t)
+	quarantined := make(map[int64]int64)
+	var penultimateID int64
+	for _, version := range []int64{10, math.MaxInt64 - 2, math.MaxInt64 - 1, math.MaxInt64} {
+		row := &Task{TaskID: fmt.Sprint(version), Status: TaskStatusSubmitted, UpdatedAt: version}
+		require.NoError(t, DB.Create(row).Error)
+		if version == math.MaxInt64-2 {
+			penultimateID = row.ID
+		}
+		if version >= math.MaxInt64-1 {
+			quarantined[row.ID] = version
+		}
+	}
+	tasks := GetAllUnFinishSyncTasks(10)
+	require.Len(t, tasks, 2)
+	require.Equal(t, "10", tasks[0].TaskID)
+	require.EqualValues(t, 10, tasks[0].UpdatedAt)
+	require.Positive(t, tasks[0].LastPolledAt)
+	require.Equal(t, penultimateID, tasks[1].ID)
+	require.EqualValues(t, math.MaxInt64-2, tasks[1].UpdatedAt)
+	for _, task := range tasks {
+		stored, err := GetTaskPlaceholderByID(task.ID)
+		require.NoError(t, err)
+		require.Equal(t, task.UpdatedAt, stored.UpdatedAt)
+		require.Equal(t, task.LastPolledAt, stored.LastPolledAt)
+	}
+	for id, version := range quarantined {
+		stored, err := GetTaskPlaceholderByID(id)
+		require.NoError(t, err)
+		require.Equal(t, version, stored.UpdatedAt)
+	}
+}
+
+func TestOverlappingPollingSelectionsKeepTerminalSnapshotCurrent(t *testing.T) {
+	truncateTables(t)
+	row := &Task{TaskID: "overlapping-selections", Status: TaskStatusInProgress, UpdatedAt: 21}
+	require.NoError(t, DB.Create(row).Error)
+	first, second := GetAllUnFinishSyncTasks(1), GetAllUnFinishSyncTasks(1)
+	require.Len(t, first, 1)
+	require.Len(t, second, 1)
+	require.Equal(t, first[0].UpdatedAt, second[0].UpdatedAt)
+	first[0].Status, first[0].Progress = TaskStatusSuccess, "100%"
+	won, err := first[0].UpdateWithStatusSnapshot(TaskStatusInProgress, first[0].UpdatedAt)
+	require.NoError(t, err)
+	require.True(t, won)
+	second[0].Status = TaskStatusFailure
+	won, err = second[0].UpdateWithStatusSnapshot(TaskStatusInProgress, second[0].UpdatedAt)
+	require.NoError(t, err)
+	require.False(t, won, "a durable state change still wins over the stale poller")
+}
+
+func TestPollingBatchLeavesRoomForTasksWithoutPendingSubmitRecovery(t *testing.T) {
+	truncateTables(t)
+	pending := &Task{TaskID: "pending-refund-first", Status: TaskStatusSubmitted, UpdatedAt: 10}
+	ready := &Task{TaskID: "ready-to-poll", Status: TaskStatusSubmitted, UpdatedAt: 20}
+	require.NoError(t, DB.Create(pending).Error)
+	require.NoError(t, DB.Create(ready).Error)
+	require.NoError(t, DB.Create(&TaskSubmitFailureRecovery{
+		TaskID: pending.ID, OperationKey: "fixture", Status: TaskSubmitFailureRecoveryPending,
+	}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("task_id = ?", pending.ID).Delete(&TaskSubmitFailureRecovery{}).Error)
+	})
+	batch := GetAllUnFinishSyncTasks(1)
+	require.Len(t, batch, 1)
+	require.Equal(t, ready.TaskID, batch[0].TaskID)
+	stored, err := GetTaskPlaceholderByID(pending.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, 10, stored.UpdatedAt)
+}
+
+func TestClaimedNullTimestampSupportsFirstManualDecision(t *testing.T) {
+	truncateTables(t)
+	row := &Task{TaskID: "claim-null-timestamp", Status: TaskStatusSubmitted, Quota: 20}
+	insertTask(t, row)
+	require.NoError(t, DB.Model(row).UpdateColumn("updated_at", nil).Error)
+	claimed := GetAllUnFinishSyncTasks(100)
+	require.Len(t, claimed, 1)
+	input := BillingSettlementInput{OperationKey: BillingTaskFinalizeOperationKey(row.ID), Source: BillingSettlementSourceWallet, UserID: 1, TaskID: row.ID, TaskQuota: 20, TaskQuotaTarget: 20}
+	won, err := claimed[0].UpdateWithStatusAndManualSettlement(TaskStatusSubmitted, claimed[0].UpdatedAt, input, "manual evidence required")
+	require.NoError(t, err)
+	require.True(t, won)
+	var record BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", input.OperationKey).First(&record).Error)
+	require.Equal(t, BillingSettlementStatusManual, record.Status)
+	require.Zero(t, record.AppliedFundingDelta)
+	require.Zero(t, record.AppliedTokenDelta)
+}
+
+func TestTimeoutCASPreservesQuotaNullability(t *testing.T) {
+	previousSQLite := common.UsingSQLite
+	common.UsingSQLite = true
+	t.Cleanup(func() { common.UsingSQLite = previousSQLite })
+	for _, scenario := range []struct {
+		name                          string
+		initialNull, change, nextNull bool
+	}{
+		{name: "null-unchanged", initialNull: true},
+		{name: "zero-unchanged"},
+		{name: "null-to-zero", initialNull: true, change: true},
+		{name: "zero-to-null", change: true, nextNull: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			truncateTables(t)
+			row := &Task{TaskID: scenario.name, Status: TaskStatusSubmitted, SubmitTime: 1}
+			insertTask(t, row)
+			if scenario.initialNull {
+				require.NoError(t, DB.Model(row).UpdateColumn("quota", nil).Error)
+			}
+			rows, err := GetTimedOutUnfinishedTasksAfter(1000, 0, 0, 10)
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			observed := rows[0]
+			if scenario.change {
+				var next any = 0
+				if scenario.nextNull {
+					next = nil
+				}
+				require.NoError(t, DB.Model(row).UpdateColumn("quota", next).Error)
+			}
+			observed.Status = TaskStatusFailure
+			observed.PreservePrivateDataOnStatusUpdate()
+			won, err := observed.UpdateWithStatusSnapshot(TaskStatusSubmitted, observed.UpdatedAt)
+			require.NoError(t, err)
+			require.Equal(t, !scenario.change, won)
+			var stored sql.NullInt64
+			require.NoError(t, DB.Model(&Task{}).Select("quota").Where("id = ?", row.ID).Row().Scan(&stored))
+			expectedNull := scenario.initialNull
+			if scenario.change {
+				expectedNull = scenario.nextNull
+			}
+			require.Equal(t, expectedNull, !stored.Valid, "CAS must not normalize NULL into an explicit zero")
+			if stored.Valid {
+				require.Zero(t, stored.Int64)
+			}
+			assertStoredTimeoutStatus(t, row.ID, won)
+		})
+	}
+}
+
+func TestTimeoutCASPreservesTimestampNullability(t *testing.T) {
+	for _, withSettlement := range []bool{false, true} {
+		for _, change := range []bool{false, true} {
+			t.Run(fmt.Sprintf("settlement_%t/change_%t", withSettlement, change), func(t *testing.T) {
+				truncateTables(t)
+				row := &Task{TaskID: "nullable-version", Status: TaskStatusSubmitted, Quota: 10, SubmitTime: 1}
+				insertTask(t, row)
+				require.NoError(t, DB.Model(row).UpdateColumn("updated_at", nil).Error)
+				rows, err := GetTimedOutUnfinishedTasksAfter(1000, 0, 0, 10)
+				require.NoError(t, err)
+				require.Len(t, rows, 1)
+				observed := rows[0]
+				if change {
+					require.NoError(t, DB.Model(row).UpdateColumn("updated_at", 0).Error)
+				}
+				observed.Status = TaskStatusFailure
+				observed.PreservePrivateDataOnStatusUpdate()
+				var won bool
+				if withSettlement {
+					won, err = observed.UpdateWithStatusAndSettlementSnapshot(TaskStatusSubmitted, 0, BillingSettlementInput{OperationKey: "task-null:refund", Source: BillingSettlementSourceWallet, UserID: 1, FundingDelta: -10, TokenDelta: -10, TaskID: row.ID, TaskQuota: 10, TaskQuotaTarget: 0})
+				} else {
+					won, err = observed.UpdateWithStatusSnapshot(TaskStatusSubmitted, 0)
+				}
+				require.NoError(t, err)
+				require.Equal(t, !change, won)
+				assertStoredTimeoutStatus(t, row.ID, won)
+				var intents int64
+				require.NoError(t, DB.Model(&BillingSettlement{}).Count(&intents).Error)
+				if withSettlement && !change {
+					require.EqualValues(t, 1, intents)
+				} else {
+					require.Zero(t, intents)
+				}
+			})
+		}
+	}
+}
+
+func assertStoredTimeoutStatus(t *testing.T, id int64, won bool) {
+	t.Helper()
+	var stored Task
+	require.NoError(t, DB.First(&stored, id).Error)
+	if won {
+		require.EqualValues(t, TaskStatusFailure, stored.Status)
+	} else {
+		require.EqualValues(t, TaskStatusSubmitted, stored.Status)
+	}
+}
+
+func TestManualSettlementCASPreservesTimestampNullability(t *testing.T) {
+	for _, change := range []bool{false, true} {
+		t.Run(fmt.Sprint(change), func(t *testing.T) {
+			truncateTables(t)
+			row := &Task{TaskID: "nullable-manual", Status: TaskStatusSubmitted, Quota: 10, SubmitTime: 1}
+			insertTask(t, row)
+			require.NoError(t, DB.Model(row).UpdateColumn("updated_at", nil).Error)
+			rows, err := GetTimedOutUnfinishedTasksAfter(1000, 0, 0, 10)
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			observed := rows[0]
+			if change {
+				require.NoError(t, DB.Model(row).UpdateColumn("updated_at", 0).Error)
+			}
+			observed.PrivateData.PendingTerminalStatus = TaskStatusSuccess
+			observed.PrivateData.PendingTerminalResultURL = "https://example.invalid/new-evidence"
+			won, err := observed.UpdateWithStatusAndManualSettlement(TaskStatusSubmitted, 0, BillingSettlementInput{OperationKey: BillingTaskFinalizeOperationKey(row.ID), Source: BillingSettlementSourceWallet, UserID: 1, TaskID: row.ID, TaskQuota: 10, TaskQuotaTarget: 10}, "missing provider evidence")
+			require.NoError(t, err)
+			require.Equal(t, !change, won)
+			stored, err := GetTaskPlaceholderByID(row.ID)
+			require.NoError(t, err)
+			require.Equal(t, TaskStatus(TaskStatusSubmitted), stored.Status)
+			var records []BillingSettlement
+			require.NoError(t, DB.Find(&records).Error)
+			if change {
+				require.Empty(t, records)
+				require.Empty(t, stored.PrivateData.PendingTerminalStatus)
+				require.Empty(t, stored.PrivateData.PendingTerminalResultURL)
+			} else {
+				require.Len(t, records, 1)
+				require.Equal(t, BillingSettlementStatusManual, records[0].Status)
+				require.Zero(t, records[0].AppliedFundingDelta)
+				require.Equal(t, TaskStatus(TaskStatusSuccess), stored.PrivateData.PendingTerminalStatus)
+				require.Equal(t, "https://example.invalid/new-evidence", stored.PrivateData.PendingTerminalResultURL)
+				require.False(t, observed.updatedAtWasNull)
+			}
+		})
+	}
+}
 
 func TestTimedOutTaskQueryUsesPortableTaskFinalizeExclusion(t *testing.T) {
 	tests := []struct {

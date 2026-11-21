@@ -46,6 +46,13 @@ type Program struct {
 }
 
 func CompileJavaScript(source string, options RuntimeOptions) (*Program, error) {
+	return compileJavaScriptContext(context.Background(), source, options)
+}
+
+func compileJavaScriptContext(ctx context.Context, source string, options RuntimeOptions) (*Program, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return nil, ErrPluginLimit
+	}
 	if len(source) == 0 || len(source) > MaxPackageBytes || !utf8.ValidString(source) {
 		return nil, ErrPluginCompile
 	}
@@ -61,13 +68,16 @@ func CompileJavaScript(source string, options RuntimeOptions) (*Program, error) 
 	if options.Now == nil {
 		options.Now = time.Now
 	}
-	module, err := moejs.Compile("task-plugin.js", source)
+	module, err := moejs.CompileWith("task-plugin.js", source, moejs.CompileOptions{Context: ctx})
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, ErrPluginCompile
 	}
 	p := &Program{module: module, options: options, slots: make(chan struct{}, 4)}
 	// Includes top-level execution and metadata getters in the same limits.
-	if _, err = p.Export(context.Background(), "meta"); err != nil {
+	if _, err = p.Export(ctx, "meta"); err != nil {
 		return nil, err
 	}
 	return p, nil

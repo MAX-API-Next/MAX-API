@@ -2,10 +2,12 @@ package model
 
 import (
 	"bytes"
+	"context"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -13,8 +15,10 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	commonRelay "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type TaskStatus string
@@ -68,9 +72,145 @@ type Task struct {
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
+	// Set only by the guarded timeout sweep when upstream submission is still
+	// unconfirmed and the original reservation remains available.
+	SubmitTimeoutRetainedFunding bool  `json:"-" gorm:"not null;default:false"`
+	LastPolledAt                 int64 `json:"-" gorm:"not null;default:0"`
 
-	includeDataInUpdate        bool `gorm:"-"`
-	includePrivateDataInUpdate bool `gorm:"-"`
+	includeDataInUpdate               bool   `gorm:"-"`
+	includePrivateDataInUpdate        bool   `gorm:"-"`
+	preservePrivateDataOnStatusUpdate bool   `gorm:"-"`
+	preserveDataOnStatusUpdate        bool   `gorm:"-"`
+	privateDataUnreadable             bool   `gorm:"-"`
+	quotaWasNull                      bool   `gorm:"-"`
+	updatedAtWasNull                  bool   `gorm:"-"`
+	privateDataStatusSnapshot         string `gorm:"-"`
+}
+
+// PrivateDataUnreadable marks worker-only rows whose original metadata could
+// not be decoded. They may advance a scan cursor, but must never be settled.
+func (t *Task) PrivateDataUnreadable() bool { return t.privateDataUnreadable }
+
+// The direct field overrides the embedded scanner only for worker queries.
+// A malformed row cannot abort its healthy neighbors; ordinary reads stay strict.
+type taskWorkerRow struct {
+	Task
+	PrivateData []byte `gorm:"column:private_data;type:json"`
+	Quota       *int   `gorm:"column:quota"`
+	UpdatedAt   *int64 `gorm:"column:updated_at"`
+}
+
+func decodeTaskWorkerRows(rows []taskWorkerRow) []*Task {
+	tasks := make([]*Task, 0, len(rows))
+	for i := range rows {
+		task := &rows[i].Task
+		task.quotaWasNull = rows[i].Quota == nil
+		task.updatedAtWasNull = rows[i].UpdatedAt == nil
+		if rows[i].UpdatedAt != nil {
+			task.UpdatedAt = *rows[i].UpdatedAt
+		}
+		if rows[i].Quota != nil {
+			task.Quota = *rows[i].Quota
+		}
+		if err := task.PrivateData.Scan(rows[i].PrivateData); err != nil {
+			task.privateDataUnreadable = true
+			common.SysError(fmt.Sprintf("task worker skipped unreadable private data: id=%d", task.ID))
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks
+}
+
+// Lists retain public history fields without making invalid metadata available.
+// SQL still owns filtering/pagination; count endpoints retain their row totals.
+func decodeTaskListRows(rows []taskWorkerRow) []*Task {
+	decoded := decodeTaskWorkerRows(rows)
+	for _, task := range decoded {
+		if task.PrivateDataUnreadable() {
+			task.PrivateData = TaskPrivateData{}
+		}
+	}
+	return decoded
+}
+
+func decodeTaskHistoryRows(rows []taskWorkerRow) []*Task {
+	tasks := decodeTaskListRows(rows)
+	for _, task := range tasks {
+		task.PrivateData.InlineVideoDataURL = ""
+		task.PrivateData.PendingTerminalResultURL = ""
+	}
+	return tasks
+}
+
+func selectTaskHistory(query *gorm.DB, includeChannel bool) *gorm.DB {
+	statement := &gorm.Statement{DB: query}
+	if err := statement.Parse(&Task{}); err != nil {
+		query.AddError(err)
+		return query
+	}
+	var private string
+	switch query.Dialector.Name() {
+	case "postgres":
+		// The json type keeps duplicate members. The strict decoder must see
+		// all retained keys and values after the large media fields are removed.
+		private = `CASE WHEN private_data::text ~ '\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})' THEN private_data::text ELSE CASE json_typeof(private_data) WHEN 'object' THEN COALESCE((
+			SELECT json_object_agg(metadata.key, metadata.value)::text FROM json_each(private_data) AS metadata
+			WHERE translate(metadata.key, 'ABCDEFGHIJKLMNOPQRSTUVWXYZſ', 'abcdefghijklmnopqrstuvwxyzs')
+				NOT IN ('inline_video_data_url', 'pending_terminal_result_url') OR json_typeof(metadata.value) NOT IN ('string','null')
+		), '{}') WHEN 'null' THEN NULL ELSE CASE WHEN private_data IS NULL THEN NULL ELSE '[]' END END END`
+	case "mysql":
+		private = mysqlTaskHistoryPrivateData()
+	default:
+		// Remove matching keys from the original document so the JSON engine
+		// does not replace large numbers or collapse other repeated members.
+		private = `CASE WHEN private_data IS NULL THEN NULL WHEN NOT json_valid(private_data) THEN '[]'
+			WHEN EXISTS (SELECT 1 FROM json_each(private_data)
+				WHERE lower(replace(key, 'ſ', 's')) IN ('inline_video_data_url', 'pending_terminal_result_url')
+				AND type NOT IN ('text','null')) THEN '[]' ELSE (
+			WITH RECURSIVE
+			media_keys AS (
+				SELECT key, row_number() OVER (ORDER BY id) AS position
+				FROM json_each(private_data)
+				WHERE lower(replace(key, 'ſ', 's')) IN ('inline_video_data_url', 'pending_terminal_result_url')
+				LIMIT 17
+			),
+			scrubbed(body, position) AS (
+				SELECT private_data, 0
+				UNION ALL
+				SELECT json_remove(scrubbed.body, '$."' || media_keys.key || '"'), media_keys.position
+				FROM scrubbed JOIN media_keys ON media_keys.position = scrubbed.position + 1
+			)
+			SELECT CASE WHEN position > 16 THEN '[]' ELSE body END FROM scrubbed ORDER BY position DESC LIMIT 1
+		) END`
+	}
+	columns := make([]string, 0, len(statement.Schema.DBNames))
+	for _, name := range statement.Schema.DBNames {
+		switch {
+		case name == "private_data":
+			columns = append(columns, private+" AS private_data")
+		case name == "channel_id" && !includeChannel:
+		default:
+			columns = append(columns, statement.Quote(clause.Column{Name: name}))
+		}
+	}
+	return query.Select(strings.Join(columns, ", "))
+}
+
+func mysqlTaskHistoryPrivateData() string {
+	// JSON_SEARCH works on MySQL 5.7 and returns the array position of the
+	// matching key. Extract the original spelling before removing that key.
+	const keys = "JSON_KEYS(private_data)"
+	var ambiguous, paths []string
+	for _, name := range []string{"inline_video_data_url", "pending_terminal_result_url"} {
+		pattern := strings.ReplaceAll(name, "_", "!_")
+		match := "JSON_SEARCH(" + keys + ", 'all', _utf8mb4'" + pattern + "' COLLATE utf8mb4_unicode_ci, '!')"
+		ambiguous = append(ambiguous, "JSON_TYPE("+match+") = 'ARRAY'")
+		key := "JSON_UNQUOTE(JSON_EXTRACT(" + keys + ", JSON_UNQUOTE(" + match + ")))"
+		path := "COALESCE(CONCAT('$.', JSON_QUOTE(" + key + ")), '$." + name + "')"
+		paths = append(paths, path)
+		ambiguous = append(ambiguous, "JSON_TYPE(JSON_EXTRACT(private_data, "+path+")) NOT IN ('STRING','NULL')")
+	}
+	return "CASE WHEN " + strings.Join(ambiguous, " OR ") + " THEN '[]' ELSE JSON_REMOVE(private_data, " + strings.Join(paths, ", ") + ") END"
 }
 
 // IsMiniMaxH3Task reports whether the persisted task has an explicit,
@@ -86,9 +226,10 @@ func IsMiniMaxH3Task(task *Task) bool {
 	return false
 }
 
-func (t *Task) BeforeSave(*gorm.DB) error {
+func (t *Task) BeforeSave(tx *gorm.DB) error {
 	if t != nil {
 		t.FailReason = common.SanitizePersistedLogContent(t.FailReason)
+		return guardTaskPluginPersistence(tx, t)
 	}
 	return nil
 }
@@ -140,6 +281,8 @@ func (m Properties) Value() (driver.Value, error) {
 }
 
 type TaskPrivateData struct {
+	// Only unmodeled fields are retained; the pointer keeps the value comparable.
+	unmodeled      *taskPrivateUnmodeled
 	PluginBinding  *types.TaskPluginBinding `json:"plugin_binding,omitempty"` // host-issued immutable plugin identity; never client-visible
 	Key            string                   `json:"key,omitempty"`
 	UpstreamTaskID string                   `json:"upstream_task_id,omitempty"` // 上游真实 task ID
@@ -147,6 +290,8 @@ type TaskPrivateData struct {
 	// legacy rows where TaskID itself is the provider task identifier.
 	AwaitingUpstreamID bool   `json:"awaiting_upstream_id,omitempty"`
 	ResultURL          string `json:"result_url,omitempty"` // 任务成功后的结果 URL（视频地址等）
+	InlineVideoDataURL string `json:"inline_video_data_url,omitempty"`
+	LocalVideoContent  bool   `json:"local_video_content,omitempty"`
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
 	BillingSource    string              `json:"billing_source,omitempty"`     // "wallet" 或 "subscription"
 	BillingRequestId string              `json:"billing_request_id,omitempty"` // 原始预扣 request id，用于跨周期安全结算
@@ -211,10 +356,24 @@ func (t *Task) GetUpstreamTaskID() string {
 // GetResultURL 获取任务结果 URL（视频地址等）
 // 新数据存在 PrivateData.ResultURL 中；旧数据回退到 FailReason（历史兼容）
 func (t *Task) GetResultURL() string {
+	if t.PrivateDataUnreadable() {
+		return ""
+	}
 	if t.PrivateData.ResultURL != "" {
+		if t.PrivateData.LocalVideoContent && t.PrivateData.ResultURL == TaskVideoProxyPath(t.TaskID) {
+			return TaskVideoProxyURL(t.TaskID)
+		}
 		return t.PrivateData.ResultURL
 	}
 	return t.FailReason
+}
+
+func TaskVideoProxyPath(taskID string) string {
+	return "/v1/videos/" + taskID + "/content"
+}
+
+func TaskVideoProxyURL(taskID string) string {
+	return strings.TrimRight(system_setting.ServerAddress, "/") + TaskVideoProxyPath(taskID)
 }
 
 // GenerateTaskID 生成对外暴露的 task_xxxx 格式 ID
@@ -223,12 +382,29 @@ func GenerateTaskID() string {
 	return "task_" + key
 }
 
+var errTaskPrivateDataUnreadable = errors.New("unreadable task private data")
+
 func (p *TaskPrivateData) Scan(val interface{}) error {
-	bytesValue, _ := val.([]byte)
-	if len(bytesValue) == 0 {
+	var raw []byte
+	switch value := val.(type) {
+	case nil:
+	case []byte:
+		raw = value
+	case string:
+		raw = []byte(value)
+	default:
+		return fmt.Errorf("%w: unsupported storage type %T", errTaskPrivateDataUnreadable, val)
+	}
+	var next TaskPrivateData
+	if len(raw) == 0 {
+		*p = next
 		return nil
 	}
-	return common.Unmarshal(bytesValue, p)
+	if err := common.Unmarshal(raw, &next); err != nil {
+		return errors.Join(errTaskPrivateDataUnreadable, err)
+	}
+	*p = next
+	return nil
 }
 
 func (p TaskPrivateData) Value() (driver.Value, error) {
@@ -292,11 +468,11 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 }
 
 func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
-	var tasks []*Task
+	var rows []taskWorkerRow
 	var err error
 
 	// 初始化查询构建器
-	query := DB.Where("user_id = ?", userId)
+	query := DB.Model(&Task{}).Where("user_id = ?", userId)
 	query = applyQuotaFilter(query, "quota", queryParams.QuotaFilter)
 
 	if queryParams.TaskID != "" {
@@ -320,20 +496,20 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 	}
 
 	// 获取数据
-	err = query.Omit("channel_id").Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	err = selectTaskHistory(query, false).Order("id desc").Limit(num).Offset(startIdx).Find(&rows).Error
 	if err != nil {
 		return nil
 	}
 
-	return tasks
+	return decodeTaskHistoryRows(rows)
 }
 
 func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
-	var tasks []*Task
+	var rows []taskWorkerRow
 	var err error
 
 	// 初始化查询构建器
-	query := DB
+	query := DB.Model(&Task{})
 	query = applyQuotaFilter(query, "quota", queryParams.QuotaFilter)
 
 	// 添加过滤条件
@@ -366,12 +542,12 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 	}
 
 	// 获取数据
-	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	err = selectTaskHistory(query, true).Order("id desc").Limit(num).Offset(startIdx).Find(&rows).Error
 	if err != nil {
 		return nil
 	}
 
-	return tasks
+	return decodeTaskHistoryRows(rows)
 }
 
 func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
@@ -380,31 +556,63 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 }
 
 func GetAppliedTaskFinalizeRecoveryCandidates(cutoffUnix int64, limit int) ([]*Task, error) {
-	var tasks []*Task
-	if limit <= 0 {
-		limit = 100
-	}
+	return GetAppliedTaskFinalizeRecoveryCandidatesAfter(cutoffUnix, 0, 0, limit)
+}
+
+// Recovery has its own stable cursor so unreadable rows cannot pin a page.
+func GetAppliedTaskFinalizeRecoveryCandidatesAfter(cutoffUnix, afterSubmitTime, afterID int64, limit int) ([]*Task, error) {
+	return GetAppliedTaskFinalizeRecoveryCandidatesInRange(cutoffUnix, afterSubmitTime, afterID, 0, 0, limit)
+}
+
+func appliedTaskFinalizeRecoveryQuery(cutoffUnix int64) *gorm.DB {
 	finalize := DB.Model(&BillingSettlement{}).Select("1").
 		Where("operation_key = "+taskFinalizeOperationKeySQL(common.UsingSQLite)).
 		Where("status = ?", BillingSettlementStatusApplied)
-	err := DB.Model(&Task{}).
+	return DB.Model(&Task{}).
 		Where("status NOT IN ?", []TaskStatus{TaskStatusFailure, TaskStatusSuccess}).
 		Where("submit_time < ?", cutoffUnix).
-		Where("EXISTS (?)", finalize).
-		Order("submit_time ASC, id ASC").Limit(limit).Find(&tasks).Error
-	return tasks, err
+		Where("EXISTS (?)", finalize)
+}
+
+// Capture one pass's inclusive high cursor without decoding private metadata.
+func GetAppliedTaskFinalizeRecoveryUpperBound(cutoffUnix int64) (submitTime, id int64, err error) {
+	var row struct{ SubmitTime, ID int64 }
+	err = appliedTaskFinalizeRecoveryQuery(cutoffUnix).Select("submit_time", "id").
+		Order("submit_time DESC, id DESC").Limit(1).Find(&row).Error
+	return row.SubmitTime, row.ID, err
+}
+
+// A fixed inclusive upper bound lets the caller wrap despite later arrivals.
+// A zero upper ID retains the unbounded historical helper's contract.
+func GetAppliedTaskFinalizeRecoveryCandidatesInRange(cutoffUnix, afterSubmitTime, afterID, throughSubmitTime, throughID int64, limit int) ([]*Task, error) {
+	var rows []taskWorkerRow
+	if limit <= 0 {
+		limit = 100
+	}
+	query := appliedTaskFinalizeRecoveryQuery(cutoffUnix)
+	if afterID > 0 {
+		query = query.Where("(submit_time > ? OR (submit_time = ? AND id > ?))", afterSubmitTime, afterSubmitTime, afterID)
+	}
+	if throughID > 0 {
+		query = query.Where("(submit_time < ? OR (submit_time = ? AND id <= ?))", throughSubmitTime, throughSubmitTime, throughID)
+	}
+	err := query.Order("submit_time ASC, id ASC").Limit(limit).Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	return decodeTaskWorkerRows(rows), nil
 }
 
 // GetTimedOutUnfinishedTasksAfter returns timed-out non-terminal tasks after
 // the supplied (submit_time, id) cursor in stable ascending order.
 func GetTimedOutUnfinishedTasksAfter(cutoffUnix int64, afterSubmitTime int64, afterID int64, limit int) ([]*Task, error) {
-	var tasks []*Task
+	var rows []taskWorkerRow
 	err := timedOutUnfinishedTasksQuery(DB, common.UsingSQLite, cutoffUnix, afterSubmitTime, afterID, limit).
-		Find(&tasks).Error
+		Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	return tasks, nil
+	return decodeTaskWorkerRows(rows), nil
 }
 
 func timedOutUnfinishedTasksQuery(db *gorm.DB, usingSQLite bool, cutoffUnix int64, afterSubmitTime int64, afterID int64, limit int) *gorm.DB {
@@ -421,6 +629,7 @@ func timedOutUnfinishedTasksQuery(db *gorm.DB, usingSQLite bool, cutoffUnix int6
 		Where("status NOT IN ?", []TaskStatus{TaskStatusFailure, TaskStatusSuccess}).
 		Where("submit_time < ?", cutoffUnix).
 		Where("NOT EXISTS (?)", taskFinalizeOwned)
+	query = withoutPendingTaskSubmitFailure(query)
 	if afterID > 0 {
 		query = query.Where(
 			"(submit_time > ? OR (submit_time = ? AND id > ?))",
@@ -445,34 +654,51 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 	}
 	var tasks []*Task
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := withRowLock(tx).Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+		var rows []taskWorkerRow
+		unfinished := []string{TaskStatusFailure, TaskStatusSuccess}
+		if err := withoutPendingTaskSubmitFailure(withRowLock(tx).Model(&Task{}).Where("status NOT IN ?", unfinished)).
 			Limit(limit).
-			Order("updated_at ASC, id ASC").
-			Find(&tasks).Error; err != nil {
+			Order("CASE WHEN last_polled_at > COALESCE(updated_at, 0) THEN last_polled_at ELSE updated_at END ASC, last_polled_at ASC, id ASC").
+			Find(&rows).Error; err != nil {
 			return err
 		}
+		tasks = decodeTaskWorkerRows(rows)
 		if len(tasks) == 0 {
 			return nil
 		}
 		ids := make([]int64, 0, len(tasks))
-		claimedAt := time.Now().Unix()
+		now := time.Now().Unix()
+		advanceable := tasks[:0]
 		for _, task := range tasks {
-			ids = append(ids, task.ID)
-			if task.UpdatedAt >= claimedAt {
-				claimedAt = task.UpdatedAt + 1
+			if task.UpdatedAt >= math.MaxInt64-1 {
+				common.SysError(fmt.Sprintf("task worker skipped unadvanceable version: id=%d", task.ID))
+				continue
 			}
+			advanceable = append(advanceable, task)
+			ids = append(ids, task.ID)
+			task.LastPolledAt = max(now, task.LastPolledAt)
 		}
-		for _, task := range tasks {
-			task.UpdatedAt = claimedAt
+		tasks = advanceable
+		if len(ids) == 0 {
+			return nil
 		}
-		return tx.Model(&Task{}).
-			Where("id IN ? AND status NOT IN ?", ids, []string{TaskStatusFailure, TaskStatusSuccess}).
-			Update("updated_at", claimedAt).Error
+		// Scheduling rotates the scan without changing the actual task version.
+		// A second poller selecting the same row cannot invalidate settlement.
+		return withoutPendingTaskSubmitFailure(tx.Model(&Task{})).
+			Where("id IN ? AND status NOT IN ?", ids, unfinished).
+			Where("updated_at IS NULL OR updated_at < ?", int64(math.MaxInt64-1)).
+			UpdateColumn("last_polled_at", gorm.Expr("CASE WHEN last_polled_at < ? THEN ? ELSE last_polled_at END", now, now)).Error
 	})
 	if err != nil {
 		return nil
 	}
-	return tasks
+	healthy := tasks[:0]
+	for _, task := range tasks {
+		if !task.PrivateDataUnreadable() {
+			healthy = append(healthy, task)
+		}
+	}
+	return healthy
 }
 
 func GetByOnlyTaskId(taskId string) (*Task, bool, error) {
@@ -493,15 +719,27 @@ func GetByTaskId(userId int, taskId string) (*Task, bool, error) {
 	if taskId == "" {
 		return nil, false, nil
 	}
-	var task *Task
-	var err error
-	err = DB.Where("user_id = ? and task_id = ?", userId, taskId).
-		First(&task).Error
+	task, err := readTaskSnapshot(DB.Where("user_id = ? and task_id = ?", userId, taskId))
 	exist, err := RecordExist(err)
 	if err != nil {
 		return nil, false, err
 	}
-	return task, exist, err
+	return task, exist, nil
+}
+
+// GetUserTaskStatusByID keeps public status readable when private metadata
+// needs repair. Billing and realtime callers continue to use the strict read.
+func GetUserTaskStatusByID(userId int, taskId string) (*Task, bool, error) {
+	if taskId == "" {
+		return nil, false, nil
+	}
+	var row taskWorkerRow
+	err := DB.Model(&Task{}).Where("user_id = ? and task_id = ?", userId, taskId).First(&row).Error
+	exists, err := RecordExist(err)
+	if err != nil || !exists {
+		return nil, false, err
+	}
+	return decodeTaskListRows([]taskWorkerRow{row})[0], true, nil
 }
 
 func GetTaskByID(id int64) (*Task, error) {
@@ -518,18 +756,41 @@ func GetTaskByID(id int64) (*Task, error) {
 	return &task, nil
 }
 
+// GetTaskPlaceholderByID keeps strict private decoding and the nullable version
+// in one database read. The alias is a projection, not a persisted task column.
+func GetTaskPlaceholderByID(id int64) (*Task, error) {
+	if DB == nil {
+		return nil, errors.New("database is not initialized")
+	}
+	if id <= 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return readTaskSnapshot(DB.Where("id = ?", id))
+}
+
+func readTaskSnapshot(query *gorm.DB) (*Task, error) {
+	var row struct {
+		Task
+		NullableUpdatedAt *int64 `gorm:"column:nullable_updated_at"`
+		NullableQuota     *int   `gorm:"column:nullable_quota"`
+	}
+	err := query.Model(&Task{}).Select("*, updated_at AS nullable_updated_at, quota AS nullable_quota").First(&row).Error
+	row.Task.updatedAtWasNull = row.NullableUpdatedAt == nil
+	row.Task.quotaWasNull = row.NullableQuota == nil
+	return &row.Task, err
+}
+
 func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
 	if len(taskIds) == 0 {
 		return nil, nil
 	}
-	var task []*Task
-	var err error
-	err = DB.Where("user_id = ? and task_id in (?)", userId, taskIds).
-		Find(&task).Error
+	var rows []taskWorkerRow
+	err := DB.Model(&Task{}).Where("user_id = ? and task_id in (?)", userId, taskIds).
+		Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	return task, nil
+	return decodeTaskListRows(rows), nil
 }
 
 func (Task *Task) Insert() error {
@@ -583,13 +844,42 @@ func (t *Task) statusUpdateValues() map[string]interface{} {
 		"fail_reason": common.SanitizePersistedLogContent(t.FailReason),
 		"updated_at":  updatedAt,
 	}
-	if t.Data != nil || t.includeDataInUpdate {
+	if t.SubmitTimeoutRetainedFunding {
+		values["submit_timeout_retained_funding"] = true
+	}
+	if !t.preserveDataOnStatusUpdate && (t.Data != nil || t.includeDataInUpdate) {
 		values["data"] = t.Data
 	}
-	if t.PrivateData != (TaskPrivateData{}) || t.includePrivateDataInUpdate {
-		values["private_data"] = t.PrivateData
+	if !t.preservePrivateDataOnStatusUpdate && (t.PrivateData != (TaskPrivateData{}) || t.includePrivateDataInUpdate) {
+		if t.includePrivateDataInUpdate || t.privateDataStatusSnapshot == "" {
+			values["private_data"] = t.PrivateData
+		} else if current, err := common.Marshal(t.PrivateData); err != nil || string(current) != t.privateDataStatusSnapshot {
+			values["private_data"] = t.PrivateData
+		}
 	}
 	return values
+}
+
+// CapturePrivateDataForStatusUpdate lets polling omit an unchanged private
+// value while preserving explicit private edits and opaque historical fields.
+func (t *Task) CapturePrivateDataForStatusUpdate() error {
+	encoded, err := common.Marshal(t.PrivateData)
+	if err != nil {
+		return err
+	}
+	t.privateDataStatusSnapshot = string(encoded)
+	return nil
+}
+
+// PreservePrivateDataOnStatusUpdate is for status-only timeout transitions.
+// The persisted recovery metadata has not changed and must not be re-emitted.
+func (t *Task) PreservePrivateDataOnStatusUpdate() {
+	t.preservePrivateDataOnStatusUpdate = true
+}
+
+// A timeout decides status, not a replacement for the last provider payload.
+func (t *Task) PreserveDataOnStatusUpdate() {
+	t.preserveDataOnStatusUpdate = true
 }
 
 func (t *Task) submitResultUpdateValues() map[string]interface{} {
@@ -610,9 +900,80 @@ func (t *Task) submitResultUpdateValues() map[string]interface{} {
 	return values
 }
 
-func (Task *Task) Update() error {
-	var err error
-	err = DB.Save(Task).Error
+func (t *Task) Update() error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return tx.Save(t).Error
+	})
+}
+
+var ErrTaskPlaceholderConflict = errors.New("task placeholder changed before rewrite")
+var ErrTaskFinalizeOwned = errors.New("task finalize decision already owns this lifecycle")
+var ErrTaskSubmitRefundIdentityMismatch = errors.New("task submission refund identity does not match its placeholder")
+
+// RewritePlaceholder atomically claims the observed version and rewrites retry
+// metadata. A stale caller cannot overwrite a newer manual/worker decision.
+func (t *Task) RewritePlaceholder(observed Task) error {
+	if t == nil || t.ID <= 0 || t.ID != observed.ID {
+		return errors.New("persisted task is required")
+	}
+	var updatedAt int64
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		// Reference-bearing writes take the catalog head before acquiring the
+		// task row. Keep the regular write guard on the actual assignments.
+		if err := guardTaskPluginPersistenceValue(tx, t, t.PrivateData); err != nil {
+			return err
+		}
+		now := time.Now().Unix()
+		finalize := tx.Session(&gorm.Session{NewDB: true}).Model(&BillingSettlement{}).Select("1").
+			Where("operation_key = ?", BillingTaskFinalizeOperationKey(t.ID))
+		query := tx.Model(&Task{}).Where("id = ? AND status = ? AND status NOT IN ?", t.ID, observed.Status, []string{TaskStatusFailure, TaskStatusSuccess})
+		result := observed.whereQuotaSnapshot(observed.whereTimestampSnapshot(query, observed.UpdatedAt)).
+			Where("NOT EXISTS (?)", finalize).
+			Where("updated_at IS NULL OR updated_at < ?", int64(1<<63-1)).
+			UpdateColumn("updated_at", gorm.Expr("CASE WHEN updated_at IS NULL OR updated_at < ? THEN ? ELSE updated_at + 1 END", now, now))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			// MySQL repeatable-read can retain an earlier snapshot from
+			// catalog validation. Use a current read to identify the owner.
+			var owner BillingSettlement
+			err := withRowLock(tx).Select("id").Where("operation_key = ?", BillingTaskFinalizeOperationKey(t.ID)).Take(&owner).Error
+			if err == nil {
+				return ErrTaskFinalizeOwned
+			}
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			return ErrTaskPlaceholderConflict
+		}
+		// The version claim owns the row now, including on SQLite. Inspect the
+		// original provider state before replacing the private JSON document.
+		var stored Task
+		if err := withRowLock(tx).Select("private_data").Take(&stored, t.ID).Error; err != nil {
+			return err
+		}
+		if stored.PrivateData.UpstreamTaskID != observed.PrivateData.UpstreamTaskID ||
+			stored.PrivateData.AwaitingUpstreamID != observed.PrivateData.AwaitingUpstreamID {
+			return ErrTaskPlaceholderConflict
+		}
+		// Claim first, then retain that row lock until metadata and readback commit.
+		// This also makes unchanged retries independent of MySQL matched-row mode.
+		if err := tx.Model(t).Select("*").Omit("updated_at", "last_polled_at").Updates(t).Error; err != nil {
+			return err
+		}
+		var persisted struct{ UpdatedAt int64 }
+		if err := tx.Model(&Task{}).Select("updated_at").Where("id = ?", t.ID).Take(&persisted).Error; err != nil {
+			return err
+		}
+		updatedAt = persisted.UpdatedAt
+		return nil
+	})
+	if err == nil {
+		t.UpdatedAt = updatedAt
+		t.updatedAtWasNull = false
+		t.quotaWasNull = false
+	}
 	return err
 }
 
@@ -628,17 +989,107 @@ func (t *Task) UpdateQuota() error {
 // INSERT ON CONFLICT when the WHERE-guarded UPDATE matches zero rows, which
 // silently bypasses the CAS guard.
 func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
-	result := DB.Model(t).Where("status = ?", fromStatus).Updates(t.statusUpdateValues())
+	return t.updateWithStatusSnapshot(fromStatus, nil)
+}
+
+// UpdateWithStatusSnapshot refuses a decision based on older task metadata
+// or quota, even when another writer kept the same status. The quota guard
+// also covers a funding projection whose timestamp returns to wall time.
+func (t *Task) UpdateWithStatusSnapshot(fromStatus TaskStatus, expectedUpdatedAt int64) (bool, error) {
+	return t.updateWithStatusSnapshot(fromStatus, &expectedUpdatedAt)
+}
+
+// UpdatePollingProgress advances the version on every observed provider change,
+// including polls that keep the current status.
+func (t *Task) UpdatePollingProgress(fromStatus TaskStatus) (bool, error) {
+	return t.updatePollingProgress(fromStatus, false)
+}
+
+func (t *Task) UpdatePollingProgressPreservingData(fromStatus TaskStatus) (bool, error) {
+	return t.updatePollingProgress(fromStatus, true)
+}
+
+func (t *Task) updatePollingProgress(fromStatus TaskStatus, preserveData bool) (bool, error) {
+	if t == nil || t.ID <= 0 || t.UpdatedAt < 0 || t.UpdatedAt == 1<<63-1 {
+		return false, errors.New("persisted task and advanceable snapshot are required")
+	}
+	nextVersion := max(time.Now().Unix(), t.UpdatedAt+1)
+	values := t.statusUpdateValues()
+	if preserveData {
+		delete(values, "data")
+	}
+	values["updated_at"] = nextVersion
+	query := DB.Model(&Task{ID: t.ID}).Where("status = ?", fromStatus)
+	result := t.whereQuotaSnapshot(t.whereTimestampSnapshot(query, t.UpdatedAt)).Updates(values)
+	if result.Error != nil || result.RowsAffected == 0 {
+		return false, result.Error
+	}
+	t.UpdatedAt = nextVersion
+	t.updatedAtWasNull = false
+	return true, nil
+}
+
+// PublishRecoveredTaskTerminalStatus writes only the terminal evidence owned
+// by the already applied settlement. It must not restore an older payload.
+func (t *Task) PublishRecoveredTaskTerminalStatus(fromStatus TaskStatus, expectedUpdatedAt int64) (bool, error) {
+	if t == nil || t.ID <= 0 || expectedUpdatedAt < 0 || fromStatus == TaskStatusSuccess || fromStatus == TaskStatusFailure ||
+		(t.Status != TaskStatusSuccess && t.Status != TaskStatusFailure) {
+		return false, errors.New("persisted task and valid terminal evidence are required")
+	}
+	query := DB.Model(&Task{ID: t.ID}).Where("status = ?", fromStatus)
+	query = t.whereQuotaSnapshot(t.whereTimestampSnapshot(query, expectedUpdatedAt))
+	result := query.Omit("updated_at").Updates(map[string]interface{}{
+		"status":       t.Status,
+		"progress":     t.Progress,
+		"finish_time":  t.FinishTime,
+		"fail_reason":  common.SanitizePersistedLogContent(t.FailReason),
+		"private_data": t.PrivateData,
+	})
+	return result.RowsAffected == 1, result.Error
+}
+
+func (t *Task) updateWithStatusSnapshot(fromStatus TaskStatus, expectedUpdatedAt *int64) (bool, error) {
+	if t == nil || t.ID <= 0 || expectedUpdatedAt != nil && *expectedUpdatedAt < 0 {
+		return false, errors.New("persisted task and valid snapshot are required")
+	}
+	query := DB.Model(&Task{ID: t.ID}).Where("status = ?", fromStatus)
+	if expectedUpdatedAt != nil {
+		query = t.whereQuotaSnapshot(t.whereTimestampSnapshot(query, *expectedUpdatedAt))
+	}
+	result := query.Updates(t.statusUpdateValues())
 	if result.Error != nil {
 		return false, result.Error
 	}
 	return result.RowsAffected > 0, nil
 }
 
+func (t *Task) whereQuotaSnapshot(query *gorm.DB) *gorm.DB {
+	if t.quotaWasNull {
+		return query.Where("quota IS NULL")
+	}
+	return query.Where("quota = ?", t.Quota)
+}
+
+func (t *Task) HasSameQuotaSnapshot(other *Task) bool {
+	return t.Quota == other.Quota && t.quotaWasNull == other.quotaWasNull
+}
+
+func (t *Task) whereTimestampSnapshot(query *gorm.DB, observed int64) *gorm.DB {
+	query = withoutPendingTaskSubmitFailure(query)
+	if t.updatedAtWasNull {
+		return query.Where("updated_at IS NULL")
+	}
+	return query.Where("updated_at = ?", observed)
+}
+
 // UpdateWithStatusAndPendingTerminalEvidence durably records terminal provider
 // evidence while keeping the task in fromStatus. The status and updated_at
 // guards prevent a stale poller from publishing evidence for another lifecycle.
 func (t *Task) UpdateWithStatusAndPendingTerminalEvidence(fromStatus TaskStatus, expectedUpdatedAt int64) (bool, error) {
+	return t.updateWithStatusAndPendingTerminalEvidenceDB(DB, fromStatus, expectedUpdatedAt)
+}
+
+func (t *Task) updateWithStatusAndPendingTerminalEvidenceDB(db *gorm.DB, fromStatus TaskStatus, expectedUpdatedAt int64) (bool, error) {
 	if t == nil || t.ID <= 0 {
 		return false, errors.New("persisted task is required")
 	}
@@ -662,9 +1113,10 @@ func (t *Task) UpdateWithStatusAndPendingTerminalEvidence(fromStatus TaskStatus,
 	if t.Data != nil || t.includeDataInUpdate {
 		updates["data"] = t.Data
 	}
-	result := DB.Model(&Task{}).
-		Where("id = ? AND status = ? AND updated_at = ?", t.ID, fromStatus, expectedUpdatedAt).
-		Updates(updates)
+	// Preserve hook identity without copying attempted assignments into the
+	// caller before the guarded update succeeds.
+	query := db.Model(&Task{ID: t.ID}).Where("id = ? AND status = ?", t.ID, fromStatus)
+	result := t.whereQuotaSnapshot(t.whereTimestampSnapshot(query, expectedUpdatedAt)).Updates(updates)
 	if result.Error != nil {
 		return false, result.Error
 	}
@@ -672,6 +1124,7 @@ func (t *Task) UpdateWithStatusAndPendingTerminalEvidence(fromStatus TaskStatus,
 		return false, nil
 	}
 	t.UpdatedAt = updatedAt
+	t.updatedAtWasNull = false
 	return true, nil
 }
 
@@ -681,6 +1134,16 @@ var errTaskStatusCASLost = errors.New("task status compare-and-swap lost")
 // durable settlement intent atomically. Balance mutations are applied after
 // this transaction by ApplyBillingSettlementOnce or its retry runner.
 func (t *Task) UpdateWithStatusAndSettlement(fromStatus TaskStatus, input BillingSettlementInput) (bool, error) {
+	return t.updateWithStatusAndSettlementSnapshot(fromStatus, nil, input)
+}
+
+// The intent and guarded terminal update still share the original transaction.
+// A stale snapshot rolls back the intent before any funding application.
+func (t *Task) UpdateWithStatusAndSettlementSnapshot(fromStatus TaskStatus, expectedUpdatedAt int64, input BillingSettlementInput) (bool, error) {
+	return t.updateWithStatusAndSettlementSnapshot(fromStatus, &expectedUpdatedAt, input)
+}
+
+func (t *Task) updateWithStatusAndSettlementSnapshot(fromStatus TaskStatus, expectedUpdatedAt *int64, input BillingSettlementInput) (bool, error) {
 	if t == nil || t.ID <= 0 {
 		return false, errors.New("persisted task is required")
 	}
@@ -690,12 +1153,25 @@ func (t *Task) UpdateWithStatusAndSettlement(fromStatus TaskStatus, input Billin
 	if err := validateBillingSettlementInput(input); err != nil {
 		return false, err
 	}
+	if expectedUpdatedAt != nil && *expectedUpdatedAt < 0 {
+		return false, errors.New("task updated_at snapshot is invalid")
+	}
 
+	values := t.statusUpdateValues()
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if private, ok := values["private_data"]; ok {
+			if err := guardTaskPluginPersistenceValue(tx, t, private); err != nil {
+				return err
+			}
+		}
 		if _, _, err := ensureBillingSettlementRecordDB(tx, input); err != nil {
 			return err
 		}
-		result := tx.Model(t).Where("status = ?", fromStatus).Updates(t.statusUpdateValues())
+		query := tx.Model(&Task{ID: t.ID}).Where("status = ?", fromStatus)
+		if expectedUpdatedAt != nil {
+			query = t.whereQuotaSnapshot(t.whereTimestampSnapshot(query, *expectedUpdatedAt))
+		}
+		result := query.Updates(values)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -744,6 +1220,9 @@ func (t *Task) UpdateWithStatusAndSettlementIntent(fromStatus TaskStatus, expect
 		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := guardTaskPluginPersistenceValue(tx, t, t.PrivateData); err != nil {
+			return err
+		}
 		if _, _, err := ensureBillingSettlementRecordDB(tx, input); err != nil {
 			return err
 		}
@@ -751,12 +1230,11 @@ func (t *Task) UpdateWithStatusAndSettlementIntent(fromStatus TaskStatus, expect
 			"private_data": t.PrivateData,
 			"updated_at":   updatedAt,
 		}
-		if t.Data != nil || t.includeDataInUpdate {
+		if !t.preserveDataOnStatusUpdate && (t.Data != nil || t.includeDataInUpdate) {
 			updates["data"] = t.Data
 		}
-		result := tx.Model(&Task{}).
-			Where("id = ? AND status = ? AND updated_at = ?", t.ID, fromStatus, expectedUpdatedAt).
-			Updates(updates)
+		query := tx.Model(&Task{ID: t.ID}).Where("id = ? AND status = ?", t.ID, fromStatus)
+		result := t.whereQuotaSnapshot(t.whereTimestampSnapshot(query, expectedUpdatedAt)).Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -772,6 +1250,7 @@ func (t *Task) UpdateWithStatusAndSettlementIntent(fromStatus TaskStatus, expect
 		return false, err
 	}
 	t.UpdatedAt = updatedAt
+	t.updatedAtWasNull = false
 	return true, nil
 }
 
@@ -805,6 +1284,11 @@ func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expect
 		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		// Use the same acquisition order as a placeholder rewrite before
+		// writing either the manual intent or the task snapshot.
+		if err := guardTaskPluginPersistenceValue(tx, t, t.PrivateData); err != nil {
+			return err
+		}
 		if _, err := ensureManualBillingSettlementRecordDB(tx, input, reason); err != nil {
 			return err
 		}
@@ -812,11 +1296,11 @@ func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expect
 			"private_data": t.PrivateData,
 			"updated_at":   updatedAt,
 		}
-		if t.Data != nil || t.includeDataInUpdate {
+		if !t.preserveDataOnStatusUpdate && (t.Data != nil || t.includeDataInUpdate) {
 			updates["data"] = t.Data
 		}
-		result := tx.Model(&Task{}).
-			Where("id = ? AND status = ? AND updated_at = ?", t.ID, fromStatus, expectedUpdatedAt).
+		result := t.whereTimestampSnapshot(tx.Model(&Task{ID: t.ID}).Where("id = ? AND status = ?", t.ID, fromStatus), expectedUpdatedAt).
+			Scopes(t.whereQuotaSnapshot).
 			Updates(updates)
 		if result.Error != nil {
 			return result.Error
@@ -833,7 +1317,15 @@ func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expect
 		return false, err
 	}
 	t.UpdatedAt = updatedAt
+	t.updatedAtWasNull = false
 	return true, nil
+}
+
+// A request can reserve funds before a retry rewrites its zero-quota task.
+func (t *Task) MayHaveUnprojectedSubmissionFunding() bool {
+	private := t.PrivateData
+	return t.Quota == 0 && private.AwaitingUpstreamID && private.BillingRequestId != "" && private.SubscriptionId == 0 &&
+		(private.BillingSource == "" || private.BillingSource == BillingSettlementSourceWallet)
 }
 
 // UpdateWithSettlementIntent persists upstream task identity and the request's
@@ -842,26 +1334,49 @@ func (t *Task) UpdateWithSettlementIntent(input *BillingSettlementInput) error {
 	if t == nil || t.ID <= 0 {
 		return errors.New("persisted task is required")
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+	var updatedAt int64
+	values := t.submitResultUpdateValues()
+	err := DB.Transaction(func(tx *gorm.DB) error {
 		if input != nil {
 			if err := validateBillingSettlementInput(*input); err != nil {
 				return err
+			}
+			if private, ok := values["private_data"]; ok {
+				if err := guardTaskPluginPersistenceValue(tx, t, private); err != nil {
+					return err
+				}
 			}
 			if _, _, err := ensureBillingSettlementRecordDB(tx, *input); err != nil {
 				return err
 			}
 		}
-		result := tx.Model(&Task{}).
+		now := time.Now().Unix()
+		// The caller can be older than the stored task. Advance from the DB
+		// value atomically so a timeout based on any earlier version loses CAS.
+		values["updated_at"] = gorm.Expr("CASE WHEN updated_at IS NULL OR updated_at < ? THEN ? ELSE updated_at + 1 END", now, now)
+		result := tx.Model(&Task{ID: t.ID}).
 			Where("id = ? AND status NOT IN ?", t.ID, []string{TaskStatusFailure, TaskStatusSuccess}).
-			Updates(t.submitResultUpdateValues())
+			Where("updated_at IS NULL OR updated_at < ?", int64(1<<63-1)).
+			Updates(values)
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
 			return taskSubmitResultUpdateMissError(tx, t.ID)
 		}
+		var persisted struct{ UpdatedAt int64 }
+		if err := tx.Model(&Task{}).Select("updated_at").Where("id = ?", t.ID).Take(&persisted).Error; err != nil {
+			return err
+		}
+		updatedAt = persisted.UpdatedAt
 		return nil
 	})
+	if err == nil {
+		t.UpdatedAt = updatedAt
+		t.updatedAtWasNull = false
+		t.quotaWasNull = false
+	}
+	return err
 }
 
 func taskSubmitResultUpdateMissError(tx *gorm.DB, taskID int64) error {
@@ -879,20 +1394,284 @@ func taskSubmitResultUpdateMissError(tx *gorm.DB, taskID int64) error {
 }
 
 func MarkTaskSubmitFailed(taskID int64, reason string) error {
+	_, err := ClaimTaskSubmitFailure(taskID, reason)
+	return err
+}
+
+// ClaimTaskSubmitFailure authorizes definite request-refund cleanup only for
+// the terminal CAS winner. A task-finalize owner or confirmed provider identity
+// keeps its task/quota and cannot race an independent request refund.
+func ClaimTaskSubmitFailure(taskID int64, reason string) (bool, error) {
+	return ClaimTaskSubmitFailureWithSettlement(taskID, reason, nil)
+}
+
+// The request-refund intent and terminal claim commit together. The caller may
+// apply the existing operation after commit; a crash leaves durable recovery.
+func ClaimTaskSubmitFailureWithSettlement(taskID int64, reason string, input *BillingSettlementInput) (bool, error) {
+	return claimTaskSubmitFailureWithSettlementDB(DB, taskID, reason, input, nil, false)
+}
+
+func ClaimTaskSubmitFailureWithSettlementContext(ctx context.Context, taskID int64, reason string, input *BillingSettlementInput) (bool, error) {
+	if DB == nil {
+		return false, errors.New("database is not initialized")
+	}
+	return claimTaskSubmitFailureWithSettlementDB(DB.WithContext(ctx), taskID, reason, input, nil, false)
+}
+
+// ClaimTaskSubmitFailureAfterReserveError verifies the last reserve under
+// the refund transaction. On success, input contains the recorded refund amount.
+func ClaimTaskSubmitFailureAfterReserveError(ctx context.Context, taskID int64, reason string, input *BillingSettlementInput, failedReserve int64) (bool, error) {
+	if DB == nil || input == nil || failedReserve <= 0 {
+		return false, ErrTaskSubmitRefundIdentityMismatch
+	}
+	record, err := taskSubmitFailureRecoveryRecord(taskID, reason, *input, failedReserve)
+	if err != nil {
+		return false, err
+	}
+	return claimTaskSubmitFailureWithSettlementDB(DB.WithContext(ctx), taskID, record.Reason, input, &record, false)
+}
+
+func ClaimTaskSubmitFailureStatusContext(ctx context.Context, taskID int64, requestID, reason string, userID, tokenID int) (bool, error) {
+	if DB == nil {
+		return false, errors.New("database is not initialized")
+	}
+	record, err := taskSubmitFailureStatusRecoveryRecord(taskID, requestID, reason, userID, tokenID)
+	if err != nil {
+		return false, err
+	}
+	return claimTaskSubmitFailureWithSettlementDB(DB.WithContext(ctx), taskID, record.Reason, nil, &record, false)
+}
+
+func claimTaskSubmitFailureWithSettlementDB(db *gorm.DB, taskID int64, reason string, input *BillingSettlementInput, recovery *TaskSubmitFailureRecovery, journalReplay bool) (bool, error) {
 	if taskID <= 0 {
-		return nil
+		return false, nil
+	}
+	if db == nil {
+		return false, errors.New("database is not initialized")
+	}
+	var failedReserve int64
+	if recovery != nil {
+		failedReserve = recovery.FailedReserveRevision
+	}
+	if input != nil {
+		if err := validateTaskSubmitFailureRefundShape(*input, failedReserve); err != nil {
+			return false, err
+		}
 	}
 	reason = common.SanitizePersistedLogContent(reason)
-	return DB.Model(&Task{}).
-		Where("id = ? AND status NOT IN ?", taskID, []string{TaskStatusFailure, TaskStatusSuccess}).
-		Updates(map[string]interface{}{
-			"status":      TaskStatusFailure,
-			"progress":    "100%",
-			"finish_time": time.Now().Unix(),
-			"fail_reason": reason,
-			"quota":       0,
-			"updated_at":  time.Now().Unix(),
-		}).Error
+	if common.UsingSQLite {
+		if err := billingSettlementSQLiteWriteMu.lockContext(db.Statement.Context); err != nil {
+			return false, err
+		}
+		defer billingSettlementSQLiteWriteMu.Unlock()
+	}
+	won := false
+	var recordedInput BillingSettlementInput
+	claim := func(tx *gorm.DB) error {
+		input := input
+		statusOnly := recovery != nil && input == nil
+		if tx.Dialector.Name() == "sqlite" {
+			// Reserve the WAL writer before any read establishes a snapshot.
+			// This keeps unrelated commits from making the terminal claim lose
+			// its read-to-write upgrade; no metadata version is changed here.
+			if err := tx.Model(&Task{}).Where("id = ?", taskID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
+				return err
+			}
+		}
+		task, err := readTaskSnapshot(withRowLock(tx).Where("id = ?", taskID))
+		if err != nil {
+			return err
+		}
+		var pendingJournal *TaskSubmitFailureRecovery
+		if input != nil || statusOnly {
+			// Lock in task-before-journal order, as task writers also consult
+			// the journal while holding the task row. A worker's earlier scan
+			// does not authorize a refund after a manual disposition.
+			var journal TaskSubmitFailureRecovery
+			err := withRowLock(tx).Where("task_id = ?", taskID).Take(&journal).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				if journalReplay {
+					return nil
+				}
+			} else if err != nil {
+				return err
+			} else {
+				if journal.Status != TaskSubmitFailureRecoveryPending {
+					if !journalReplay && journal.Status == TaskSubmitFailureRecoveryManual {
+						return ErrTaskSubmitFailureRecoveryRequiresReview
+					}
+					return nil
+				}
+				var observed BillingSettlementInput
+				if recovery != nil {
+					observed = recovery.refundInput()
+				} else {
+					observed = *input
+					observed.TokenKey = ""
+				}
+				if journal.refundInput() != observed || journal.FailedReserveRevision != failedReserve || journal.BoundWalletOutcomeUnknown != (recovery != nil && recovery.BoundWalletOutcomeUnknown) {
+					return ErrBillingSettlementOperationConflict
+				}
+				pendingJournal = &journal
+			}
+		}
+		complete := func(status string) error {
+			if pendingJournal != nil {
+				result := writePendingTaskSubmitFailureDisposition(tx, *pendingJournal, status, nil)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 {
+					return ErrTaskSubmitFailureRecoveryRequiresReview
+				}
+			}
+			won = true
+			return nil
+		}
+		replayExistingIntent := func() error {
+			if !journalReplay || input == nil {
+				return nil
+			}
+			expected := *input
+			if failedReserve != 0 {
+				if task.Status != TaskStatusFailure || task.SubmitTimeoutRetainedFunding || task.PrivateData.UpstreamTaskID != "" ||
+					task.FailReason != reason || task.PrivateData.BillingRequestId == "" ||
+					expected.OperationKey != BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId) ||
+					expected.UserID != task.UserId || expected.TokenID != task.PrivateData.TokenId {
+					return ErrTaskSubmitRefundIdentityMismatch
+				}
+			}
+			var existing BillingSettlement
+			err := withRowLock(tx).Where("operation_key = ?", input.OperationKey).Take(&existing).Error
+			found := err == nil
+			if !found && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			if failedReserve != 0 {
+				if found && expected.Source == BillingSettlementSourceSubscription && existing.Status == BillingSettlementStatusApplied {
+					missingToken := existing.TokenMissingAtApply && existing.AllowMissingToken && expected.AllowMissingToken && existing.TokenID > 0 && existing.AppliedTokenDelta == 0
+					if existing.AppliedFundingDelta != existing.FundingDelta || existing.AppliedTokenDelta != existing.TokenDelta && !missingToken {
+						return ErrBillingSettlementOperationConflict
+					}
+					err = verifyTaskSubmitSubscriptionRefund(tx, task.PrivateData.BillingRequestId, &expected, failedReserve, "refunded")
+				} else {
+					err = verifyTaskSubmitRefund(tx, task, &expected, failedReserve)
+				}
+				if err != nil {
+					return err
+				}
+				if expected.FundingDelta == 0 && !found {
+					return complete(TaskSubmitFailureStatusRecorded)
+				}
+				if !found {
+					return ErrTaskFinalizeOwned
+				}
+			}
+			if !found {
+				return nil
+			}
+			if validateBillingSettlement(existing, expected) != nil {
+				return ErrBillingSettlementOperationConflict
+			}
+			return complete(TaskSubmitFailureRecoveryRecorded)
+		}
+		if input != nil && recovery != nil && recovery.BoundWalletOutcomeUnknown {
+			if input.Source != BillingSettlementSourceWallet || failedReserve != 0 {
+				return ErrTaskSubmitRefundIdentityMismatch
+			}
+			identity, err := taskSubmitFailureStatusRecoveryRecord(taskID, task.PrivateData.BillingRequestId, reason, input.UserID, input.TokenID)
+			if err != nil || identity.OperationKey != input.OperationKey {
+				return ErrTaskSubmitRefundIdentityMismatch
+			}
+			// The bound debit takes this same task lock before writing either receipt.
+			err = verifyTaskSubmitFailureStatusOnly(tx, task, identity, true)
+			if err == nil {
+				statusOnly, input = true, nil
+			} else if !errors.Is(err, ErrTaskSubmitRefundIdentityMismatch) {
+				return err
+			}
+		}
+		if statusOnly {
+			if recovery.FundingDelta == 0 {
+				if err := verifyTaskSubmitFailureStatusOnly(tx, task, *recovery, false); err != nil {
+					return err
+				}
+			}
+			if task.Status == TaskStatusFailure && !task.SubmitTimeoutRetainedFunding && task.FailReason == reason {
+				return complete(TaskSubmitFailureStatusRecorded)
+			}
+		}
+		unprojectedRetry := task.MayHaveUnprojectedSubmissionFunding()
+		lateRejection := task.Status == TaskStatusFailure && task.SubmitTimeoutRetainedFunding &&
+			task.PrivateData.AwaitingUpstreamID && (task.Quota > 0 || unprojectedRetry) && (input != nil || statusOnly)
+		if task.Status == TaskStatusSuccess || task.Status == TaskStatusFailure && !lateRejection || task.PrivateData.UpstreamTaskID != "" {
+			return replayExistingIntent()
+		}
+		if input != nil {
+			if input.UserID != task.UserId || input.TokenID != task.PrivateData.TokenId || task.PrivateData.BillingRequestId == "" ||
+				input.OperationKey != BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId) ||
+				input.TaskID != 0 || input.TaskQuota != 0 || input.TaskQuotaTarget != 0 {
+				return ErrTaskSubmitRefundIdentityMismatch
+			}
+			if !unprojectedRetry && (input.Source != task.PrivateData.BillingSource || input.SubscriptionID != task.PrivateData.SubscriptionId) {
+				return ErrTaskSubmitRefundIdentityMismatch
+			}
+			if input.Source == BillingSettlementSourceSubscription && input.SubscriptionPreConsumeRequestID != task.PrivateData.BillingRequestId {
+				return ErrTaskSubmitRefundIdentityMismatch
+			}
+			recordedInput = *input
+		}
+		if input != nil {
+			if _, err := taskSubmitFailureRecoveryRecord(taskID, reason, *input, failedReserve); err != nil {
+				return err
+			}
+			if err := verifyTaskSubmitRefund(tx, task, &recordedInput, failedReserve); err != nil {
+				return err
+			}
+		}
+		finalize := tx.Session(&gorm.Session{NewDB: true}).Model(&BillingSettlement{}).Select("1").Where("operation_key = ?", BillingTaskFinalizeOperationKey(taskID))
+		query := tx.Model(&Task{}).Where("id = ? AND NOT EXISTS (?)", taskID, finalize)
+		var result *gorm.DB
+		if lateRejection {
+			// Keep the original completion time and terminal state. Replace
+			// the unknown-outcome explanation with the confirmed rejection.
+			result = task.whereQuotaSnapshot(query.Where("status = ? AND submit_timeout_retained_funding = ?", TaskStatusFailure, true)).
+				Updates(map[string]interface{}{"quota": 0, "submit_timeout_retained_funding": false, "fail_reason": reason})
+		} else {
+			if statusOnly || unprojectedRetry && input != nil {
+				query = task.whereQuotaSnapshot(query)
+			}
+			result = query.Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).Updates(map[string]interface{}{
+				"status":      TaskStatusFailure,
+				"progress":    "100%",
+				"finish_time": time.Now().Unix(),
+				"fail_reason": reason,
+				"quota":       0,
+				"updated_at":  time.Now().Unix(),
+			})
+		}
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			if failedReserve != 0 {
+				return ErrTaskFinalizeOwned // Roll back any reserve cancellation with the lost task claim.
+			}
+			return replayExistingIntent()
+		}
+		if input != nil && recordedInput.FundingDelta != 0 {
+			if _, _, err := ensureBillingSettlementRecordDB(tx, recordedInput); err != nil {
+				return err
+			}
+			return complete(TaskSubmitFailureRecoveryRecorded)
+		}
+		return complete(TaskSubmitFailureStatusRecorded)
+	}
+	_, err := taskSubmitFailureTransaction(db, claim)
+	if err == nil && won && failedReserve != 0 && !journalReplay {
+		*input = recordedInput
+	}
+	return won && err == nil, err
 }
 
 // MarkTaskSubmitFailedWithSettlement commits a definite submit rejection and
@@ -906,36 +1685,11 @@ func MarkTaskSubmitFailedWithSettlement(taskID int64, reason string, input *Bill
 		}
 		return nil
 	}
-	reason = common.SanitizePersistedLogContent(reason)
-	if input != nil {
-		if err := validateBillingSettlementInput(*input); err != nil {
-			return err
-		}
+	won, err := ClaimTaskSubmitFailureWithSettlement(taskID, reason, input)
+	if err == nil && !won && input != nil {
+		return errors.New("task submission failure did not claim the refund")
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
-		if input != nil {
-			if _, _, err := ensureBillingSettlementRecordDB(tx, *input); err != nil {
-				return err
-			}
-		}
-		result := tx.Model(&Task{}).
-			Where("id = ? AND status NOT IN ?", taskID, []string{TaskStatusFailure, TaskStatusSuccess}).
-			Updates(map[string]interface{}{
-				"status":      TaskStatusFailure,
-				"progress":    "100%",
-				"finish_time": time.Now().Unix(),
-				"fail_reason": reason,
-				"quota":       0,
-				"updated_at":  time.Now().Unix(),
-			})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return taskSubmitResultUpdateMissError(tx, taskID)
-		}
-		return nil
-	})
+	return err
 }
 
 // MarkTaskSubmitNeedsReview preserves the pre-consumed quota and any upstream

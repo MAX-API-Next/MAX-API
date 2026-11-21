@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useMemo, useState, type ReactElement } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { TFunction } from 'i18next'
 import { CheckCircle2, Loader2, TriangleAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -33,11 +33,13 @@ import {
   FieldDescription,
   FieldTitle,
 } from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
   completeManualTaskBillingSettlement,
+  getTaskSubmitFailureReview,
   reviewBillingSettlements,
   updateBillingSettlementBlockingPolicy,
 } from '../api'
@@ -128,6 +130,55 @@ export function BillingSettlementEvidence(
   props: BillingSettlementEvidenceProps
 ): ReactElement {
   const { t, i18n } = useTranslation()
+  const queryClient = useQueryClient()
+  const [lookupOpen, setLookupOpen] = useState(false)
+  const [manualTaskId, setManualTaskId] = useState('')
+  const [requestedTaskId, setRequestedTaskId] = useState('')
+  const validTaskId =
+    /^[1-9][0-9]*$/.test(manualTaskId) &&
+    (manualTaskId.length < 19 ||
+      (manualTaskId.length === 19 && manualTaskId <= '9223372036854775807'))
+  const lookupEnabled =
+    lookupOpen && requestedTaskId !== '' && props.data !== undefined
+  const manualLookup = useQuery({
+    queryKey: [
+      ...SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
+      'task-submit-failure',
+      requestedTaskId,
+    ],
+    enabled: lookupEnabled,
+    retry: false,
+    queryFn: async ({ signal }) => {
+      const result = await getTaskSubmitFailureReview(requestedTaskId, signal)
+      if (!result.success || !Array.isArray(result.data)) {
+        throw new Error('Invalid task submission failure lookup response')
+      }
+      return (
+        result.data.find((item) => item.task_id === requestedTaskId) ?? null
+      )
+    },
+  })
+  const refreshManualLookup = manualLookup.refetch
+  useEffect(() => {
+    if (!lookupEnabled) return
+    return queryClient.getQueryCache().subscribe((event) => {
+      if (event.type !== 'updated' || event.action.type !== 'success') return
+      const prefix = SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY
+      const key = event.query.queryKey
+      if (
+        key.length === prefix.length + 1 &&
+        prefix.every((part, index) => key[index] === part)
+      ) {
+        const query = {
+          queryKey: [...prefix, 'task-submit-failure', requestedTaskId],
+          exact: true,
+        }
+        void queryClient
+          .cancelQueries(query)
+          .then(() => queryClient.refetchQueries({ ...query, type: 'active' }))
+      }
+    })
+  }, [lookupEnabled, queryClient, requestedTaskId])
   const [selectedTargets, setSelectedTargets] = useState<
     Map<number, BillingSettlementReviewTarget>
   >(() => new Map())
@@ -223,7 +274,6 @@ export function BillingSettlementEvidence(
     [activeSelectedTargetMap, reconciliationItems]
   )
   const [policyOverride, setPolicyOverride] = useState<boolean | null>(null)
-  const queryClient = useQueryClient()
   const policyValue =
     policyOverride ?? props.data?.block_user_by_default ?? false
 
@@ -541,6 +591,113 @@ export function BillingSettlementEvidence(
             aria-label={t('Block affected users by default')}
           />
         </Field>
+
+        {props.data.task_submit_failures &&
+          props.data.task_submit_failures.length > 0 && (
+            <Alert>
+              <TriangleAlert aria-hidden='true' />
+              <AlertTitle>
+                {t('Task submission failures requiring review ({{count}})', {
+                  count: formatCount(
+                    props.data.task_submit_failure_count ??
+                      props.data.task_submit_failures.length,
+                    i18n.language
+                  ),
+                })}
+              </AlertTitle>
+              <AlertDescription>
+                <ul className='flex flex-col gap-1 break-words'>
+                  {props.data.task_submit_failures.map((failure) => (
+                    <li key={failure.task_id}>
+                      <span className='font-medium'>
+                        {t('Task ID')} {failure.task_id}
+                      </span>{' '}
+                      {failure.last_error}
+                    </li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          )}
+        <div>
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            aria-expanded={lookupOpen}
+            onClick={() => setLookupOpen((open) => !open)}
+          >
+            {t('Task ID')}
+          </Button>
+          {lookupOpen && (
+            <>
+              <form
+                className='mt-2 flex flex-wrap gap-2'
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  if (validTaskId) {
+                    if (manualTaskId === requestedTaskId)
+                      void refreshManualLookup()
+                    else setRequestedTaskId(manualTaskId)
+                  }
+                }}
+              >
+                <Input
+                  className='h-8 w-full sm:max-w-56'
+                  aria-label={t('Task ID')}
+                  placeholder={t('Task ID')}
+                  inputMode='numeric'
+                  value={manualTaskId}
+                  onChange={(event) =>
+                    setManualTaskId(event.target.value.trim())
+                  }
+                />
+                <Button
+                  type='submit'
+                  size='sm'
+                  variant='outline'
+                  disabled={manualLookup.isFetching || !validTaskId}
+                >
+                  {t('Search')}
+                </Button>
+              </form>
+              <div role='status'>
+                {manualTaskId !== '' &&
+                  !validTaskId &&
+                  t('Count must be between {{min}} and {{max}}', {
+                    min: 1,
+                    max: '9223372036854775807',
+                  })}
+                {manualLookup.isError &&
+                  t('We could not load billing reconciliation details.')}
+                {!manualLookup.isFetching &&
+                  manualLookup.isSuccess &&
+                  (manualLookup.data ? (
+                    <div className='flex flex-wrap gap-x-3 text-sm break-words'>
+                      <span>
+                        {t('Task ID')} {manualLookup.data.task_id}{' '}
+                        {manualLookup.data.last_error}
+                      </span>
+                      {manualLookup.data.request_id && (
+                        <span>
+                          {t('Request ID')}{' '}
+                          <code>{manualLookup.data.request_id}</code>
+                        </span>
+                      )}
+                      {manualLookup.data.wallet_debit && (
+                        <span>
+                          {t('Quota')}{' '}
+                          <code>{manualLookup.data.wallet_debit}</code>
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    t('No results found.')
+                  ))}
+              </div>
+            </>
+          )}
+        </div>
 
         {props.data.items.length === 0 ? (
           <Alert>

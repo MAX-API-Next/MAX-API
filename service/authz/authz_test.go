@@ -44,6 +44,17 @@ func TestCatalogAndRoleBaselinesAreStable(t *testing.T) {
 	roles := Roles()
 	require.Len(t, roles, 3)
 	assert.True(t, roles[0].Superuser)
+	var extensions ResourceDefinition
+	for _, item := range catalog {
+		if item.Resource == ResourceTaskPlugin {
+			extensions = item
+		}
+	}
+	require.Equal(t, "Task Plugins", extensions.LabelKey)
+	require.Len(t, extensions.Actions, 1)
+	require.Equal(t, ActionBind, extensions.Actions[0].Action)
+	require.Equal(t, "Bind task plugins", extensions.Actions[0].LabelKey)
+	require.Equal(t, "Bind registered task plugins to channels.", extensions.Actions[0].DescriptionKey)
 }
 
 func TestEvaluateUsesUserOverrideAndRootGuard(t *testing.T) {

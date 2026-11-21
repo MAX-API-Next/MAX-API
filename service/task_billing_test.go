@@ -1,11 +1,15 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +18,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
@@ -42,23 +47,7 @@ func TestMain(m *testing.M) {
 	common.BatchUpdateEnabled = false
 	common.LogConsumeEnabled = true
 
-	if err := db.AutoMigrate(
-		&model.Task{},
-		&model.User{},
-		&model.Token{},
-		&model.Log{},
-		&model.BillingLogReceipt{},
-		&model.Channel{},
-		&model.TopUp{},
-		&model.SubscriptionPlan{},
-		&model.UserSubscription{},
-		&model.SubscriptionPreConsumeRecord{},
-		&model.BillingSettlement{},
-		&model.BillingPreConsumeSelection{},
-		&model.CacheInvalidationTask{},
-		&model.Midjourney{},
-		&model.MidjourneyBillingClaim{},
-	); err != nil {
+	if err := db.AutoMigrate(taskBillingTestModels()...); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
 
@@ -203,7 +192,7 @@ func TestBuildTaskExactFinalSettlementUsesAllowlistedUsageMetadata(t *testing.T)
 	require.NotContains(t, usageMetadata, "unit_price")
 }
 
-func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T) {
+func TestSweepTimedOutAwaitingSubmitHoldsQuotaWithOrWithoutProviderID(t *testing.T) {
 	truncate(t)
 	resetTimedOutTaskSweepCursorForTest(t)
 	originalTimeout := constant.TaskTimeoutMinutes
@@ -222,6 +211,12 @@ func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T)
 		},
 	}
 	require.NoError(t, model.DB.Create(task).Error)
+	withProviderID := *task
+	withProviderID.ID = 0
+	withProviderID.TaskID = "task_awaiting_with_provider_id"
+	withProviderID.PrivateData.BillingRequestId = "awaiting-with-provider-id-request"
+	withProviderID.PrivateData.UpstreamTaskID = "synthetic-provider-id"
+	require.NoError(t, model.DB.Create(&withProviderID).Error)
 
 	sweepTimedOutTasks(context.Background())
 
@@ -229,10 +224,265 @@ func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T)
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
 	require.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
 	require.Equal(t, 30, reloaded.Quota)
+	require.True(t, reloaded.SubmitTimeoutRetainedFunding)
 	require.Contains(t, reloaded.FailReason, "未自动退款")
+	var confirmed model.Task
+	require.NoError(t, model.DB.First(&confirmed, withProviderID.ID).Error)
+	require.EqualValues(t, model.TaskStatusFailure, confirmed.Status)
+	require.Equal(t, 30, confirmed.Quota)
+	require.False(t, confirmed.SubmitTimeoutRetainedFunding, "the contradictory provider ID requires manual reconciliation and cannot authorize late auto-refund")
+	require.True(t, confirmed.PrivateData.AwaitingUpstreamID)
+	require.Equal(t, "synthetic-provider-id", confirmed.PrivateData.UpstreamTaskID)
 	var settlementCount int64
 	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Count(&settlementCount).Error)
 	require.Zero(t, settlementCount)
+}
+
+func TestTimeoutUpdatesPreserveNewerProviderPayload(t *testing.T) {
+	for _, unconfirmed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unconfirmed-%t", unconfirmed), func(t *testing.T) {
+			truncate(t)
+			resetTimedOutTaskSweepCursorForTest(t)
+			previous := constant.TaskTimeoutMinutes
+			constant.TaskTimeoutMinutes = 1
+			t.Cleanup(func() { constant.TaskTimeoutMinutes = previous })
+			seedUser(t, 741, 80)
+			seedToken(t, 742, 741, "synthetic-payload-token", 80)
+			seedChannel(t, 743)
+			task := makeTask(741, 743, 20, 742, BillingSourceWallet, 0)
+			task.Status = model.TaskStatusSubmitted
+			task.SubmitTime = time.Now().Add(-2 * time.Minute).Unix()
+			task.PrivateData.AwaitingUpstreamID = unconfirmed
+			task.Data = json.RawMessage(`{"provider_progress":"old"}`)
+			persistTask(t, task)
+			const newer = `{"provider_progress":"new"}`
+			injected := false
+			require.NoError(t, model.DB.Callback().Query().After("gorm:query").Register("publish-after-timeout-snapshot", func(tx *gorm.DB) {
+				if !injected && tx.Statement.Table == "tasks" && tx.RowsAffected > 0 {
+					injected = true
+					require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).UpdateColumn("data", []byte(newer)).Error)
+				}
+			}))
+			t.Cleanup(func() { _ = model.DB.Callback().Query().Remove("publish-after-timeout-snapshot") })
+			sweepTimedOutTasks(t.Context())
+			require.True(t, injected)
+			var stored model.Task
+			require.NoError(t, model.DB.First(&stored, task.ID).Error)
+			require.Equal(t, newer, string(stored.Data), "timeout state changes must not overwrite a newer same-version provider payload")
+			require.EqualValues(t, model.TaskStatusFailure, stored.Status)
+			if unconfirmed {
+				require.Equal(t, 20, stored.Quota)
+				require.EqualValues(t, 80, getUserQuota(t, 741))
+				require.Zero(t, countLogs(t))
+			} else {
+				require.Zero(t, stored.Quota)
+				require.EqualValues(t, 100, getUserQuota(t, 741))
+				require.EqualValues(t, 1, countLogs(t))
+			}
+		})
+	}
+}
+
+func TestSweepTimeoutSnapshotLosesToConfirmedSubmission(t *testing.T) {
+	for _, source := range []string{BillingSourceWallet, BillingSourceSubscription} {
+		for _, awaiting := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/awaiting_%t", source, awaiting), func(t *testing.T) {
+				truncate(t)
+				resetTimedOutTaskSweepCursorForTest(t)
+				previous := constant.TaskTimeoutMinutes
+				constant.TaskTimeoutMinutes = 1
+				t.Cleanup(func() { constant.TaskTimeoutMinutes = previous })
+				const userID, tokenID, channelID, subID = 731, 732, 733, 734
+				seedUser(t, userID, 80)
+				seedToken(t, tokenID, userID, "synthetic-snapshot-token", 80)
+				seedChannel(t, channelID)
+				if source == BillingSourceSubscription {
+					seedSubscription(t, subID, userID, 1000, 100)
+				}
+				task := makeTask(userID, channelID, 20, tokenID, source, subID)
+				task.Status = model.TaskStatusSubmitted
+				task.SubmitTime = time.Now().Add(-2 * time.Minute).Unix()
+				task.PrivateData.AwaitingUpstreamID = awaiting
+				persistTask(t, task)
+				confirmed := task.PrivateData
+				confirmed.AwaitingUpstreamID = false
+				confirmed.UpstreamTaskID = "confirmed-upstream-id"
+				injected := false
+				// The worker has loaded its old page; publish a newer same-status
+				// submission before its decision/transaction, using the real DB.
+				require.NoError(t, model.DB.Callback().Query().After("gorm:query").Register("confirm-after-timeout-page", func(tx *gorm.DB) {
+					if !injected && tx.Statement.Table == "tasks" && tx.RowsAffected > 0 {
+						injected = true
+						confirmation := *task
+						confirmation.PrivateData = confirmed
+						require.NoError(t, confirmation.UpdateWithSettlementIntent(nil), "use the actual Relay confirmation writer")
+					}
+				}))
+				t.Cleanup(func() { _ = model.DB.Callback().Query().Remove("confirm-after-timeout-page") })
+				sweepTimedOutTasks(t.Context())
+				require.True(t, injected)
+				var fresh model.Task
+				require.NoError(t, model.DB.First(&fresh, task.ID).Error)
+				require.Equal(t, model.TaskStatus(model.TaskStatusSubmitted), fresh.Status)
+				require.Equal(t, confirmed, fresh.PrivateData)
+				require.Equal(t, 20, fresh.Quota)
+				var intents int64
+				require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Count(&intents).Error)
+				require.Zero(t, intents, "a stale timeout must not leave an intent")
+				require.EqualValues(t, 80, getUserQuota(t, userID))
+				require.Equal(t, 80, getTokenRemainQuota(t, tokenID))
+				require.Equal(t, 80, getTokenUsedQuota(t, tokenID))
+				require.Zero(t, countLogs(t))
+				if source == BillingSourceSubscription {
+					require.EqualValues(t, 100, getSubscriptionUsed(t, subID))
+				}
+				// A later fresh sweep reevaluates confirmed-but-overdue work and
+				// applies the original refund exactly once, also after reload.
+				resetTimedOutTaskSweepCursorForTest(t)
+				sweepTimedOutTasks(t.Context())
+				sweepTimedOutTasks(t.Context())
+				require.NoError(t, model.DB.First(&fresh, task.ID).Error)
+				require.Equal(t, model.TaskStatus(model.TaskStatusFailure), fresh.Status)
+				require.NotContains(t, fresh.FailReason, "未自动退款")
+				require.Zero(t, fresh.Quota)
+				require.Equal(t, confirmed, fresh.PrivateData)
+				require.Equal(t, 100, getTokenRemainQuota(t, tokenID))
+				require.Equal(t, 60, getTokenUsedQuota(t, tokenID))
+				if source == BillingSourceWallet {
+					require.EqualValues(t, 100, getUserQuota(t, userID))
+				} else {
+					require.EqualValues(t, 80, getUserQuota(t, userID))
+					require.EqualValues(t, 80, getSubscriptionUsed(t, subID))
+				}
+				require.EqualValues(t, 1, countLogs(t))
+				require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Count(&intents).Error)
+				require.EqualValues(t, 1, intents)
+			})
+		}
+	}
+}
+
+func TestSweepTimeoutCannotReopenAfterConfirmedFunding(t *testing.T) {
+	for _, source := range []string{BillingSourceWallet, BillingSourceSubscription} {
+		for _, delta := range []int{-5, 5} {
+			t.Run(fmt.Sprintf("%s/delta_%d", source, delta), func(t *testing.T) {
+				truncate(t)
+				resetTimedOutTaskSweepCursorForTest(t)
+				priorDB, priorTimeout := model.DB, constant.TaskTimeoutMinutes
+				fixed := time.Now()
+				model.DB = model.DB.Session(&gorm.Session{NowFunc: func() time.Time { return fixed }})
+				constant.TaskTimeoutMinutes = 1
+				t.Cleanup(func() { model.DB, constant.TaskTimeoutMinutes = priorDB, priorTimeout })
+				const userID, tokenID, channelID, subID = 741, 742, 743, 744
+				seedUser(t, userID, 80)
+				seedToken(t, tokenID, userID, "synthetic-funded-confirm-token", 80)
+				seedChannel(t, channelID)
+				if source == BillingSourceSubscription {
+					seedSubscription(t, subID, userID, 1000, 100)
+				}
+				task := makeTask(userID, channelID, 20, tokenID, source, subID)
+				task.UpdatedAt = fixed.Unix()
+				task.Status = model.TaskStatusSubmitted
+				task.SubmitTime = fixed.Add(-2 * time.Minute).Unix()
+				task.PrivateData.AwaitingUpstreamID = true
+				if source == BillingSourceWallet {
+					task.PrivateData.BillingRequestId = fmt.Sprintf("funded-confirm-%s-%d", source, delta)
+				}
+				persistTask(t, task)
+				var funding FundingSource = &WalletFunding{userId: userID, consumed: 20}
+				if source == BillingSourceSubscription {
+					funding = &SubscriptionFunding{requestId: task.PrivateData.BillingRequestId, userId: userID, subscriptionId: subID, preConsumed: 20}
+				}
+				session := &BillingSession{relayInfo: &relaycommon.RelayInfo{RequestId: task.PrivateData.BillingRequestId, UserId: userID, TokenId: tokenID, TokenKey: "synthetic-funded-confirm-token", TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: task.ID}}, funding: funding, preConsumedQuota: 20, tokenConsumed: 20}
+				injected := false
+				require.NoError(t, model.DB.Callback().Query().After("gorm:query").Register("fund-after-timeout-page", func(tx *gorm.DB) {
+					if !injected && tx.Statement.Table == "tasks" && tx.RowsAffected > 0 {
+						injected = true
+						confirmed := *task
+						confirmed.PrivateData.AwaitingUpstreamID = false
+						confirmed.PrivateData.UpstreamTaskID = "confirmed-funded-id"
+						input, err := session.PrepareSettlement(20 + delta)
+						require.NoError(t, err)
+						require.NoError(t, confirmed.UpdateWithSettlementIntent(input))
+						require.NoError(t, session.Settle(20+delta))
+						var projected model.Task
+						require.NoError(t, model.DB.First(&projected, task.ID).Error)
+						require.Equal(t, fixed.Unix(), projected.UpdatedAt, "quota guard must be tested while the timestamp still matches the old snapshot")
+						require.Equal(t, 20+delta, projected.Quota)
+					}
+				}))
+				t.Cleanup(func() { _ = model.DB.Callback().Query().Remove("fund-after-timeout-page") })
+				sweepTimedOutTasks(t.Context())
+				require.True(t, injected)
+				var fresh model.Task
+				require.NoError(t, model.DB.First(&fresh, task.ID).Error)
+				require.Equal(t, model.TaskStatus(model.TaskStatusSubmitted), fresh.Status)
+				require.Equal(t, "confirmed-funded-id", fresh.PrivateData.UpstreamTaskID)
+				require.False(t, fresh.PrivateData.AwaitingUpstreamID)
+				require.Equal(t, 20+delta, fresh.Quota)
+				require.Equal(t, 80-delta, getTokenRemainQuota(t, tokenID))
+				require.Equal(t, 80+delta, getTokenUsedQuota(t, tokenID))
+				if source == BillingSourceWallet {
+					require.EqualValues(t, 80-delta, getUserQuota(t, userID))
+				} else {
+					require.EqualValues(t, 100+delta, getSubscriptionUsed(t, subID))
+				}
+				var records []model.BillingSettlement
+				require.NoError(t, model.DB.Find(&records).Error)
+				require.Len(t, records, 1, "stale timeout cannot append another funding operation")
+				require.Equal(t, model.BillingSettlementStatusApplied, records[0].Status)
+				require.NoError(t, session.Settle(20+delta))
+				resetTimedOutTaskSweepCursorForTest(t)
+				sweepTimedOutTasks(t.Context())
+				sweepTimedOutTasks(t.Context())
+				require.NoError(t, model.DB.First(&fresh, task.ID).Error)
+				require.Equal(t, model.TaskStatus(model.TaskStatusFailure), fresh.Status)
+				require.NotContains(t, fresh.FailReason, "未自动退款")
+				if source == BillingSourceSubscription && delta < 0 {
+					// Existing full-refund coverage uses the original pre-consume20,
+					// so refund15 after a -5 request adjustment requires reconciliation.
+					// This metadata/CAS fix must not invent a second funding policy.
+					require.Equal(t, 15, fresh.Quota)
+					require.EqualValues(t, 95, getSubscriptionUsed(t, subID))
+					require.Equal(t, 85, getTokenRemainQuota(t, tokenID))
+					require.Equal(t, 75, getTokenUsedQuota(t, tokenID))
+					require.NoError(t, model.DB.Find(&records).Error)
+					require.Len(t, records, 2)
+					var manual *model.BillingSettlement
+					for i := range records {
+						if records[i].Status == model.BillingSettlementStatusManual {
+							manual = &records[i]
+						}
+					}
+					require.NotNil(t, manual)
+					require.EqualValues(t, -15, manual.FundingDelta)
+					require.Zero(t, manual.AppliedFundingDelta)
+					require.Zero(t, manual.AppliedTokenDelta)
+					require.Contains(t, manual.LastError, "does not cover pre-consumed amount")
+					require.Zero(t, countLogs(t))
+					return
+				}
+				require.Zero(t, fresh.Quota)
+				require.Equal(t, 100, getTokenRemainQuota(t, tokenID))
+				require.Equal(t, 60, getTokenUsedQuota(t, tokenID))
+				if source == BillingSourceWallet {
+					require.EqualValues(t, 100, getUserQuota(t, userID))
+				} else {
+					require.EqualValues(t, 80, getSubscriptionUsed(t, subID))
+				}
+				require.NoError(t, model.DB.Find(&records).Error)
+				require.Len(t, records, 2)
+				var fundingSum, tokenSum int64
+				for _, record := range records {
+					require.Equal(t, model.BillingSettlementStatusApplied, record.Status)
+					fundingSum += record.AppliedFundingDelta
+					tokenSum += record.AppliedTokenDelta
+				}
+				require.EqualValues(t, -20, fundingSum)
+				require.EqualValues(t, -20, tokenSum)
+			})
+		}
+	}
 }
 
 func TestSweepTimedOutTaskWaitsForSubmissionSettlement(t *testing.T) {
@@ -299,6 +549,272 @@ func TestSweepTimedOutTaskWaitsForSubmissionSettlement(t *testing.T) {
 	require.NoError(t, model.DB.Where("operation_key = ?", fmt.Sprintf("task:%d:refund", task.ID)).First(&refund).Error)
 	assert.Equal(t, model.BillingSettlementStatusApplied, refund.Status)
 	assert.EqualValues(t, -30, refund.AppliedFundingDelta)
+}
+
+func taskBillingTestModels() []any {
+	return []any{
+		&model.Task{},
+		&model.TaskSubmitFailureRecovery{},
+		&model.User{},
+		&model.Token{},
+		&model.Log{},
+		&model.BillingLogReceipt{},
+		&model.Channel{},
+		&model.TopUp{},
+		&model.SubscriptionPlan{},
+		&model.UserSubscription{},
+		&model.SubscriptionPreConsumeRecord{},
+		&model.BillingSettlement{},
+		&model.BillingPreConsumeSelection{},
+		&model.CacheInvalidationTask{},
+		&model.Midjourney{},
+		&model.MidjourneyBillingClaim{},
+	}
+}
+
+func isolateTaskPluginBillingDatabase(t *testing.T) {
+	t.Helper()
+	isolated, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := isolated.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, isolated.AutoMigrate(append(taskBillingTestModels(), &model.Option{}, &model.TaskPluginCatalogHead{}, &model.TaskPluginVersion{}, &model.TaskPluginDeletion{})...))
+	previousDB, previousLog := model.DB, model.LOG_DB
+	model.DB, model.LOG_DB = isolated, isolated
+	t.Cleanup(func() { model.DB, model.LOG_DB = previousDB, previousLog; _ = sqlDB.Close() })
+}
+
+func TestSweepTimedOutHistoricalPluginBindingPreservesRefund(t *testing.T) {
+	for _, asText := range []bool{false, true} {
+		t.Run(fmt.Sprintf("text_%t", asText), func(t *testing.T) { testSweepTimedOutHistoricalPluginBindingPreservesRefund(t, asText) })
+	}
+}
+
+func testSweepTimedOutHistoricalPluginBindingPreservesRefund(t *testing.T, asText bool) {
+	t.Helper()
+	isolateTaskPluginBillingDatabase(t)
+	truncate(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	const userID, tokenID = 717, 718
+	seedUser(t, userID, 80)
+	seedToken(t, tokenID, userID, "synthetic-timeout-token", 80)
+	originalTimeout := constant.TaskTimeoutMinutes
+	constant.TaskTimeoutMinutes = 1
+	t.Cleanup(func() { constant.TaskTimeoutMinutes = originalTimeout })
+	document, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "historical-source", Manifest: taskplugin.Manifest{APIVersion: 1, Key: "stored", Name: "Stored", Version: "1.0.0", Models: []string{"historical-model"}}})
+	require.NoError(t, err)
+	pkg, err := taskplugin.LoadPackage(bytes.NewReader(document), fmt.Sprintf("%x", sha256.Sum256(document)))
+	require.NoError(t, err)
+	catalog, err := taskplugin.OpenCatalog(t.Context(), model.NewTaskPluginCatalogStore(model.DB))
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	bad := &model.Task{TaskID: "unreadable-timeout-neighbor", Status: model.TaskStatusSubmitted, UserId: userID, Quota: 20, SubmitTime: time.Now().Add(-3 * time.Minute).Unix()}
+	require.NoError(t, model.DB.Create(bad).Error)
+	const malformed = `{"upstream_task_id":42}`
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", bad.ID).UpdateColumn("private_data", malformed).Error)
+	task := &model.Task{TaskID: "historical-timeout-refund", Status: model.TaskStatusSubmitted, UserId: userID, Quota: 20, SubmitTime: time.Now().Add(-2 * time.Minute).Unix(), PrivateData: model.TaskPrivateData{UpstreamTaskID: "old-provider-id", BillingSource: model.BillingSettlementSourceWallet, BillingRequestId: "historical-timeout", TokenId: tokenID}}
+	require.NoError(t, model.DB.Create(task).Error)
+	task.PrivateData.PluginBinding = &types.TaskPluginBinding{PluginKey: "stored"}
+	raw, err := common.Marshal(task.PrivateData)
+	require.NoError(t, err)
+	var storedPrivate any = raw
+	if asText {
+		storedPrivate = string(raw)
+	}
+	require.NoError(t, model.DB.Model(task).UpdateColumn("private_data", storedPrivate).Error, "seed an existing legacy row, not a new binding admission")
+	var historical model.Task
+	require.NoError(t, model.DB.First(&historical, task.ID).Error)
+	require.NotNil(t, historical.PrivateData.PluginBinding)
+	require.Equal(t, "stored", historical.PrivateData.PluginBinding.PluginKey)
+	sweepTimedOutTasks(context.Background())
+	var result model.Task
+	require.NoError(t, model.DB.First(&result, task.ID).Error)
+	require.Equal(t, model.TaskStatus(model.TaskStatusFailure), result.Status)
+	require.Zero(t, result.Quota)
+	require.EqualValues(t, 100, getUserQuota(t, userID))
+	require.EqualValues(t, 100, getTokenRemainQuota(t, tokenID))
+	var badRow struct {
+		Status      model.TaskStatus
+		Quota       int
+		PrivateData string
+	}
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", bad.ID).Take(&badRow).Error)
+	require.EqualValues(t, model.TaskStatusSubmitted, badRow.Status)
+	require.Equal(t, 20, badRow.Quota)
+	require.Equal(t, malformed, badRow.PrivateData, "bad metadata is retained for repair, never replaced with zero values")
+	var badIntents int64
+	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Where("task_id = ?", bad.ID).Count(&badIntents).Error)
+	require.Zero(t, badIntents, "an unreadable neighbor must not create a refund or finalization intent")
+	var actual string
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Select("private_data").Scan(&actual).Error)
+	require.Equal(t, string(raw), actual, "timeout must leave historical metadata bytes intact")
+	sweepTimedOutTasks(context.Background())
+	require.EqualValues(t, 100, getUserQuota(t, userID))
+	require.EqualValues(t, 100, getTokenRemainQuota(t, tokenID))
+	var refund model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", fmt.Sprintf("task:%d:refund", task.ID)).First(&refund).Error)
+	require.Equal(t, model.BillingSettlementStatusApplied, refund.Status)
+	require.EqualValues(t, -20, refund.AppliedFundingDelta)
+	replay := BuildTaskRefundSettlementInput(task, fmt.Sprintf("任务超时（%d分钟）", constant.TaskTimeoutMinutes))
+	require.NotNil(t, replay)
+	_, already, err := model.ApplyBillingSettlementOnce(*replay)
+	require.NoError(t, err)
+	require.True(t, already)
+	require.EqualValues(t, 100, getUserQuota(t, userID))
+}
+
+type historicalCompletionAdaptor struct{ mockAdaptor }
+
+type historicalProgressAdaptor struct{ historicalCompletionAdaptor }
+
+func (*historicalProgressAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return &relaycommon.TaskInfo{Status: model.TaskStatusInProgress, Progress: "50%"}, nil
+}
+
+func TestProgressPollingCannotRestoreAnOlderTaskVersion(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
+	row := makeTask(727, 729, 20, 728, model.BillingSettlementSourceWallet, 0)
+	row.TaskID, row.Status = "progress-version", model.TaskStatusInProgress
+	row.UpdatedAt = 10
+	require.NoError(t, model.DB.Create(row).Error)
+	stale, err := model.GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	fresh, err := model.GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	channel := &model.Channel{Id: 729, Type: constant.ChannelTypeKling}
+	poll := func(snapshot *model.Task) {
+		t.Helper()
+		require.NoError(t, updateVideoSingleTask(t.Context(), &historicalProgressAdaptor{}, channel, snapshot.TaskID, map[string]*model.Task{snapshot.TaskID: snapshot}))
+	}
+	poll(fresh)
+	newer, err := model.GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.Equal(t, "50%", newer.Progress)
+	assert.Greater(t, newer.UpdatedAt, stale.UpdatedAt)
+	require.NoError(t, model.DB.Model(row).UpdateColumn("data", json.RawMessage(`{"synthetic":"newer"}`)).Error)
+	poll(stale)
+	stored, err := model.GetTaskPlaceholderByID(row.ID)
+	require.NoError(t, err)
+	require.Equal(t, newer.UpdatedAt, stored.UpdatedAt)
+	require.JSONEq(t, `{"synthetic":"newer"}`, string(stored.Data))
+}
+
+func TestPollingProgressPreservesUnknownTextReference(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
+	seedUser(t, 727, 80)
+	seedToken(t, 728, 727, "synthetic-history-progress", 80)
+	seedChannel(t, 729)
+	document, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "history", Manifest: taskplugin.Manifest{APIVersion: 1, Key: "stored", Name: "Stored", Version: "1.0.0", Models: []string{"historical-model"}}})
+	require.NoError(t, err)
+	pkg, err := taskplugin.LoadPackage(bytes.NewReader(document), fmt.Sprintf("%x", sha256.Sum256(document)))
+	require.NoError(t, err)
+	catalog, err := taskplugin.OpenCatalog(t.Context(), model.NewTaskPluginCatalogStore(model.DB))
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	row := makeTask(727, 729, 20, 728, model.BillingSettlementSourceWallet, 0)
+	row.TaskID, row.Status = "history-progress", model.TaskStatusInProgress
+	require.NoError(t, model.DB.Create(row).Error)
+	raw, err := common.Marshal(row.PrivateData)
+	require.NoError(t, err)
+	var object map[string]any
+	require.NoError(t, common.UnmarshalUseNumber(raw, &object))
+	object["extension_history"] = map[string]any{"plugin_key": "stored", "version": "1.0.0"}
+	raw, err = common.Marshal(object)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(row).UpdateColumn("private_data", string(raw)).Error)
+	var loaded model.Task
+	require.NoError(t, model.DB.First(&loaded, row.ID).Error)
+	taskWrites, privateWrites := 0, 0
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register("observe-progress-private-column", func(tx *gorm.DB) {
+		if tx.Statement.Table == "tasks" {
+			if values, ok := tx.Statement.Dest.(map[string]any); ok {
+				taskWrites++
+				if _, present := values["private_data"]; present {
+					privateWrites++
+				}
+			}
+		}
+	}))
+	t.Cleanup(func() { _ = model.DB.Callback().Update().Remove("observe-progress-private-column") })
+	for attempt := 0; attempt < 2; attempt++ {
+		require.NoError(t, updateVideoSingleTask(t.Context(), &historicalProgressAdaptor{}, &model.Channel{Id: 729, Type: constant.ChannelTypeKling}, loaded.TaskID, map[string]*model.Task{loaded.TaskID: &loaded}))
+		require.NoError(t, model.DB.First(&loaded, row.ID).Error)
+	}
+	var stored []byte
+	require.NoError(t, model.DB.Model(row).Select("private_data").Row().Scan(&stored))
+	require.Equal(t, raw, stored)
+	require.Equal(t, "50%", loaded.Progress)
+	require.Positive(t, taskWrites)
+	require.Zero(t, privateWrites, "progress-only polling omits the unchanged private column")
+	require.Equal(t, 20, loaded.Quota)
+	require.ErrorIs(t, catalog.MutateExpected(t.Context(), 1, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"}), taskplugin.ErrCatalogInUse)
+	require.EqualValues(t, 80, getUserQuota(t, 727))
+	require.Equal(t, 80, getTokenRemainQuota(t, 728))
+	require.Zero(t, countLogs(t))
+}
+
+func (*historicalCompletionAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+}
+
+func (*historicalCompletionAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return &relaycommon.TaskInfo{Status: model.TaskStatusSuccess, Url: "https://example.invalid/completed"}, nil
+}
+
+func TestPollingHistoricalPluginBindingCompletesAndSettlesOnce(t *testing.T) {
+	for _, asText := range []bool{false, true} {
+		t.Run(fmt.Sprintf("text_%t", asText), func(t *testing.T) { testPollingHistoricalPluginBindingCompletesAndSettlesOnce(t, asText) })
+	}
+}
+
+func testPollingHistoricalPluginBindingCompletesAndSettlesOnce(t *testing.T, asText bool) {
+	t.Helper()
+	isolateTaskPluginBillingDatabase(t)
+	const userID, tokenID, channelID = 727, 728, 729
+	seedUser(t, userID, 80)
+	seedToken(t, tokenID, userID, "synthetic-completion-token", 80)
+	seedChannel(t, channelID)
+	document, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "historical-source", Manifest: taskplugin.Manifest{APIVersion: 1, Key: "stored", Name: "Stored", Version: "1.0.0", Models: []string{"historical-model"}}})
+	require.NoError(t, err)
+	pkg, err := taskplugin.LoadPackage(bytes.NewReader(document), fmt.Sprintf("%x", sha256.Sum256(document)))
+	require.NoError(t, err)
+	catalog, err := taskplugin.OpenCatalog(t.Context(), model.NewTaskPluginCatalogStore(model.DB))
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	task := makeTask(userID, channelID, 20, tokenID, model.BillingSettlementSourceWallet, 0)
+	task.TaskID = "historical-completion"
+	require.NoError(t, model.DB.Create(task).Error)
+	task.PrivateData.PluginBinding = &types.TaskPluginBinding{PluginKey: "stored", UserID: userID}
+	raw, err := common.Marshal(task.PrivateData)
+	require.NoError(t, err)
+	var storedPrivate any = raw
+	if asText {
+		storedPrivate = string(raw)
+	}
+	require.NoError(t, model.DB.Model(task).UpdateColumn("private_data", storedPrivate).Error)
+	var loaded model.Task
+	require.NoError(t, model.DB.First(&loaded, task.ID).Error)
+	require.NotNil(t, loaded.PrivateData.PluginBinding)
+	adaptor := &historicalCompletionAdaptor{mockAdaptor{adjustReturn: 30}}
+	channel := &model.Channel{Id: channelID, Type: constant.ChannelTypeKling}
+	for attempt := 0; attempt < 2; attempt++ {
+		require.NoError(t, updateVideoSingleTask(t.Context(), adaptor, channel, loaded.TaskID, map[string]*model.Task{loaded.TaskID: &loaded}))
+		var restarted model.Task
+		require.NoError(t, model.DB.First(&restarted, task.ID).Error, "reload into a fresh value as a restarted poller would")
+		loaded = restarted
+		require.EqualValues(t, model.TaskStatusSuccess, loaded.Status)
+		require.Equal(t, "https://example.invalid/completed", loaded.PrivateData.ResultURL)
+		require.Equal(t, task.PrivateData.PluginBinding, loaded.PrivateData.PluginBinding)
+		require.Equal(t, 30, loaded.Quota)
+		require.EqualValues(t, 70, getUserQuota(t, userID), "final30 minus reserved20 consumes10 exactly once")
+		require.Equal(t, 70, getTokenRemainQuota(t, tokenID))
+	}
+	var settlements []model.BillingSettlement
+	require.NoError(t, model.DB.Where("task_id = ?", task.ID).Find(&settlements).Error)
+	require.Len(t, settlements, 1)
+	require.Equal(t, model.BillingSettlementStatusApplied, settlements[0].Status)
+	require.EqualValues(t, 10, settlements[0].AppliedFundingDelta)
 }
 
 func TestSweepTimedOutTasksScansPastPendingSettlementPage(t *testing.T) {
@@ -511,12 +1027,261 @@ func TestSweepTimedOutTasksRecoversAppliedFinalizeTerminalEvidence(t *testing.T)
 	assert.EqualValues(t, 1, settlementCount)
 }
 
+func TestAppliedFinalizeRecoveryPreservesNewerProviderData(t *testing.T) {
+	for _, hasEvidence := range []bool{false, true} {
+		for _, changedVersion := range []bool{false, true} {
+			t.Run(fmt.Sprintf("evidence-%t/version-changed-%t", hasEvidence, changedVersion), func(t *testing.T) {
+				truncate(t)
+				task := &model.Task{TaskID: "applied-recovery-payload", Status: model.TaskStatusInProgress, Quota: 40,
+					Data: json.RawMessage(`{"provider_progress":"old"}`)}
+				if hasEvidence {
+					task.PrivateData.PendingTerminalStatus = model.TaskStatusSuccess
+				}
+				require.NoError(t, model.DB.Create(task).Error)
+				observed, err := model.GetTaskByID(task.ID)
+				require.NoError(t, err)
+				const newPayload = `{"provider_progress":"new"}`
+				values := map[string]any{"data": []byte(newPayload)}
+				if changedVersion {
+					values["updated_at"] = observed.UpdatedAt + 1
+				}
+				require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).UpdateColumns(values).Error)
+				var outcome appliedTaskRecoveryOutcome
+				if hasEvidence {
+					outcome, err = recoverAppliedTaskTerminalEvidence(observed)
+				} else {
+					outcome, err = markAppliedTaskEvidenceMissing(observed, time.Now().Unix())
+				}
+				require.NoError(t, err)
+				fresh, err := model.GetTaskByID(task.ID)
+				require.NoError(t, err)
+				require.Equal(t, newPayload, string(fresh.Data))
+				require.Equal(t, 40, fresh.Quota)
+				if changedVersion {
+					require.Equal(t, appliedTaskRecoveryCASLost, outcome)
+					require.EqualValues(t, model.TaskStatusInProgress, fresh.Status)
+					require.Equal(t, observed.UpdatedAt+1, fresh.UpdatedAt)
+				} else {
+					require.Equal(t, appliedTaskRecoveryUpdated, outcome)
+					if hasEvidence {
+						require.EqualValues(t, model.TaskStatusSuccess, fresh.Status)
+					} else {
+						require.EqualValues(t, model.TaskStatusFailure, fresh.Status)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestAppliedFinalizeRecoveryCursorSkipsBadPageAndRevisitsRepairs(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	oldTimeout, oldBudget := constant.TaskTimeoutMinutes, timedOutTaskScanBudget
+	constant.TaskTimeoutMinutes, timedOutTaskScanBudget = 1, 100
+	t.Cleanup(func() { constant.TaskTimeoutMinutes, timedOutTaskScanBudget = oldTimeout, oldBudget })
+	seedUser(t, 717, 70)
+	seedToken(t, 718, 717, "synthetic-recovery-token", 70)
+	const malformed = `{"upstream_task_id":42}`
+	now := time.Now().Unix()
+	private := model.TaskPrivateData{TokenId: 718, BillingSource: model.BillingSettlementSourceWallet, PendingTerminalStatus: model.TaskStatusSuccess, PendingTerminalProgress: "100%", PendingTerminalFinishTime: now, PendingTerminalResultURL: "https://example.invalid/recovered"}
+	var firstBadID int64
+	var healthy *model.Task
+	for i := 0; i < 101; i++ {
+		row := &model.Task{TaskID: fmt.Sprintf("recovery-cursor-%d", i), UserId: 717, Quota: 40, SubmitTime: now - 120, Status: model.TaskStatusInProgress, PrivateData: private}
+		require.NoError(t, model.DB.Create(row).Error)
+		if i < 100 {
+			require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", row.ID).UpdateColumn("private_data", malformed).Error)
+			if i == 0 {
+				firstBadID = row.ID
+			}
+		} else {
+			healthy = row
+		}
+		require.NoError(t, model.DB.Create(&model.BillingSettlement{
+			OperationKey: model.BillingTaskFinalizeOperationKey(row.ID), TaskID: row.ID, UserID: 717, TokenID: 718,
+			Source: model.BillingSettlementSourceWallet, TaskQuota: 30, TaskQuotaTarget: 40,
+			FundingDelta: 10, TokenDelta: 10, AppliedFundingDelta: 10, AppliedTokenDelta: 10,
+			Status: model.BillingSettlementStatusApplied, EffectStatus: model.BillingSettlementEffectApplied, CreatedAt: now, UpdatedAt: now, Revision: 1,
+		}).Error)
+	}
+	var before []model.BillingSettlement
+	require.NoError(t, model.DB.Order("id").Find(&before).Error)
+	sweepTimedOutTasks(t.Context())
+	var tail model.Task
+	require.NoError(t, model.DB.First(&tail, healthy.ID).Error)
+	require.EqualValues(t, model.TaskStatusInProgress, tail.Status, "only the first100 candidates may be scanned in this cycle")
+	sweepTimedOutTasks(t.Context())
+	require.NoError(t, model.DB.First(&tail, healthy.ID).Error)
+	require.EqualValues(t, model.TaskStatusSuccess, tail.Status, "the next cycle must advance beyond the unreadable first page")
+	require.Equal(t, 40, tail.Quota)
+	repaired, err := common.Marshal(private)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", firstBadID).UpdateColumn("private_data", string(repaired)).Error)
+	sweepTimedOutTasks(t.Context())
+	var repairedRow model.Task
+	require.NoError(t, model.DB.First(&repairedRow, firstBadID).Error)
+	require.EqualValues(t, model.TaskStatusSuccess, repairedRow.Status, "wrapping the cursor must revisit a repaired old row")
+	var remaining int64
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("status = ?", model.TaskStatusInProgress).Count(&remaining).Error)
+	require.EqualValues(t, 99, remaining)
+	var after []model.BillingSettlement
+	require.NoError(t, model.DB.Order("id").Find(&after).Error)
+	require.Equal(t, before, after, "terminal recovery never reapplies or rewrites funding")
+	require.EqualValues(t, 70, getUserQuota(t, 717))
+	require.Equal(t, 70, getTokenRemainQuota(t, 718))
+	require.Zero(t, countLogs(t))
+}
+
+func TestSweepRecoveryBudgetReservesOrdinaryTimeouts(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	previous := constant.TaskTimeoutMinutes
+	constant.TaskTimeoutMinutes = 1
+	t.Cleanup(func() { constant.TaskTimeoutMinutes = previous })
+	seedUser(t, 717, 1000)
+	seedToken(t, 718, 717, "synthetic-share-token", 1000)
+	now := time.Now().Unix()
+	private := model.TaskPrivateData{TokenId: 718, BillingSource: model.BillingSettlementSourceWallet, PendingTerminalStatus: model.TaskStatusSuccess, PendingTerminalProgress: "100%", PendingTerminalFinishTime: now}
+	for i := 0; i < 110; i++ {
+		row := &model.Task{TaskID: fmt.Sprintf("applied-share-%d", i), UserId: 717, Quota: 1, SubmitTime: now - 120, Status: model.TaskStatusInProgress, PrivateData: private}
+		require.NoError(t, model.DB.Create(row).Error)
+		if i < 10 {
+			require.NoError(t, model.DB.Model(row).UpdateColumn("private_data", `{"upstream_task_id":42}`).Error)
+		}
+		require.NoError(t, model.DB.Create(&model.BillingSettlement{OperationKey: model.BillingTaskFinalizeOperationKey(row.ID), TaskID: row.ID, UserID: 717, TokenID: 718, Source: model.BillingSettlementSourceWallet, TaskQuota: 1, TaskQuotaTarget: 1, Status: model.BillingSettlementStatusApplied, EffectStatus: model.BillingSettlementEffectApplied, CreatedAt: now, UpdatedAt: now, Revision: 1}).Error)
+	}
+	for i := 0; i < 50; i++ {
+		row := &model.Task{TaskID: fmt.Sprintf("ordinary-share-%d", i), UserId: 717, Quota: 1, SubmitTime: now - 120, Status: model.TaskStatusSubmitted, PrivateData: model.TaskPrivateData{TokenId: 718, BillingSource: model.BillingSettlementSourceWallet, UpstreamTaskID: fmt.Sprintf("provider-%d", i)}}
+		require.NoError(t, model.DB.Create(row).Error)
+	}
+	var before []model.BillingSettlement
+	require.NoError(t, model.DB.Order("id").Find(&before).Error)
+	sweepTimedOutTasks(t.Context())
+	var recovered, timedOut int64
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("task_id LIKE ? AND status = ?", "applied-share-%", model.TaskStatusSuccess).Count(&recovered).Error)
+	require.EqualValues(t, 50, recovered)
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("task_id LIKE ? AND status = ?", "ordinary-share-%", model.TaskStatusFailure).Count(&timedOut).Error)
+	require.EqualValues(t, 50, timedOut)
+	require.EqualValues(t, 1050, getUserQuota(t, 717))
+	require.Equal(t, 1050, getTokenRemainQuota(t, 718))
+	require.Equal(t, 950, getTokenUsedQuota(t, 718))
+	require.EqualValues(t, 50, countLogs(t))
+	sweepTimedOutTasks(t.Context())
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("task_id LIKE ? AND status = ?", "applied-share-%", model.TaskStatusSuccess).Count(&recovered).Error)
+	require.EqualValues(t, 100, recovered)
+	var after []model.BillingSettlement
+	require.NoError(t, model.DB.Where("id <= ?", before[len(before)-1].ID).Order("id").Find(&after).Error)
+	require.Equal(t, before, after, "applied recovery must not replay or rewrite funding")
+	require.EqualValues(t, 1050, getUserQuota(t, 717))
+	require.Equal(t, 1050, getTokenRemainQuota(t, 718))
+	require.EqualValues(t, 50, countLogs(t))
+}
+
+func TestAppliedRecoveryPassWrapsDespiteContinuousArrivals(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	previous := constant.TaskTimeoutMinutes
+	constant.TaskTimeoutMinutes = 1
+	t.Cleanup(func() { constant.TaskTimeoutMinutes = previous })
+	seedUser(t, 717, 70)
+	seedToken(t, 718, 717, "synthetic-bounded-pass", 70)
+	now := time.Now().Unix()
+	private := model.TaskPrivateData{TokenId: 718, BillingSource: model.BillingSettlementSourceWallet, PendingTerminalStatus: model.TaskStatusSuccess, PendingTerminalProgress: "100%", PendingTerminalFinishTime: now}
+	add := func(name string) *model.Task {
+		row := &model.Task{TaskID: name, UserId: 717, Quota: 1, SubmitTime: now - 120, Status: model.TaskStatusInProgress, PrivateData: private}
+		require.NoError(t, model.DB.Create(row).Error)
+		require.NoError(t, model.DB.Create(&model.BillingSettlement{OperationKey: model.BillingTaskFinalizeOperationKey(row.ID), TaskID: row.ID, UserID: 717, TokenID: 718, Source: model.BillingSettlementSourceWallet, TaskQuota: 1, TaskQuotaTarget: 1, Status: model.BillingSettlementStatusApplied, EffectStatus: model.BillingSettlementEffectApplied, Revision: 1}).Error)
+		return row
+	}
+	bad := add("old-repaired")
+	require.NoError(t, model.DB.Model(bad).UpdateColumn("private_data", `{"upstream_task_id":42}`).Error)
+	for i := 0; i < 50; i++ {
+		add(fmt.Sprintf("initial-%d", i))
+	}
+	sweepTimedOutTasks(t.Context())
+	raw, err := common.Marshal(private)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(bad).UpdateColumn("private_data", string(raw)).Error)
+	for i := 0; i < 50; i++ {
+		add(fmt.Sprintf("newer-%d", i))
+	}
+	var before []model.BillingSettlement
+	require.NoError(t, model.DB.Order("id").Find(&before).Error)
+	sweepTimedOutTasks(t.Context())
+	var fresh model.Task
+	require.NoError(t, model.DB.First(&fresh, bad.ID).Error)
+	require.EqualValues(t, model.TaskStatusSuccess, fresh.Status, "fixed pass bound must revisit the repaired old row despite newer arrivals")
+	var newerRecovered int64
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("task_id LIKE ? AND status = ?", "newer-%", model.TaskStatusSuccess).Count(&newerRecovered).Error)
+	require.EqualValues(t, 49, newerRecovered, "the repaired row shares the same 50-transition recovery allowance")
+	var after []model.BillingSettlement
+	require.NoError(t, model.DB.Order("id").Find(&after).Error)
+	require.Equal(t, before, after)
+	require.EqualValues(t, 70, getUserQuota(t, 717))
+	require.Equal(t, 70, getTokenRemainQuota(t, 718))
+	require.Zero(t, countLogs(t))
+}
+
+func TestLateAppliedRecoveryCannotSpendOrdinaryAllowance(t *testing.T) {
+	isolateTaskPluginBillingDatabase(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	previous := constant.TaskTimeoutMinutes
+	constant.TaskTimeoutMinutes = 1
+	t.Cleanup(func() { constant.TaskTimeoutMinutes = previous })
+	seedUser(t, 717, 1000)
+	seedToken(t, 718, 717, "synthetic-late-share", 1000)
+	now := time.Now().Unix()
+	private := model.TaskPrivateData{TokenId: 718, BillingSource: model.BillingSettlementSourceWallet, PendingTerminalStatus: model.TaskStatusSuccess, PendingTerminalProgress: "100%", PendingTerminalFinishTime: now}
+	addApplied := func(row *model.Task) {
+		require.NoError(t, model.DB.Create(&model.BillingSettlement{OperationKey: model.BillingTaskFinalizeOperationKey(row.ID), TaskID: row.ID, UserID: 717, TokenID: 718, Source: model.BillingSettlementSourceWallet, TaskQuota: 1, TaskQuotaTarget: 1, Status: model.BillingSettlementStatusApplied, EffectStatus: model.BillingSettlementEffectApplied, CreatedAt: now, UpdatedAt: now, Revision: 1}).Error)
+	}
+	for i := 0; i < 50; i++ {
+		row := &model.Task{TaskID: fmt.Sprintf("early-recovery-%d", i), UserId: 717, Quota: 1, SubmitTime: now - 120, Status: model.TaskStatusInProgress, PrivateData: private}
+		require.NoError(t, model.DB.Create(row).Error)
+		addApplied(row)
+	}
+	late := &model.Task{TaskID: "late-applied", UserId: 717, Quota: 1, SubmitTime: now - 120, Status: model.TaskStatusInProgress, PrivateData: private}
+	require.NoError(t, model.DB.Create(late).Error)
+	for i := 0; i < 50; i++ {
+		require.NoError(t, model.DB.Create(&model.Task{TaskID: fmt.Sprintf("late-ordinary-%d", i), UserId: 717, Quota: 1, SubmitTime: now - 120, Status: model.TaskStatusSubmitted, PrivateData: model.TaskPrivateData{TokenId: 718, BillingSource: model.BillingSettlementSourceWallet, UpstreamTaskID: "provider"}}).Error)
+	}
+	injected := false
+	require.NoError(t, model.DB.Callback().Query().After("gorm:query").Register("apply-after-ordinary-page", func(tx *gorm.DB) {
+		if !injected && tx.Statement.Table == "tasks" && strings.Contains(tx.Statement.SQL.String(), "NOT EXISTS") {
+			injected = true
+			addApplied(late)
+		}
+	}))
+	t.Cleanup(func() { _ = model.DB.Callback().Query().Remove("apply-after-ordinary-page") })
+	sweepTimedOutTasks(t.Context())
+	require.True(t, injected)
+	var fresh model.Task
+	require.NoError(t, model.DB.First(&fresh, late.ID).Error)
+	require.Equal(t, model.TaskStatus(model.TaskStatusInProgress), fresh.Status)
+	var ordinary int64
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("task_id LIKE ? AND status = ?", "late-ordinary-%", model.TaskStatusFailure).Count(&ordinary).Error)
+	require.EqualValues(t, 50, ordinary)
+	require.EqualValues(t, 1050, getUserQuota(t, 717))
+	require.Equal(t, 1050, getTokenRemainQuota(t, 718))
+	require.EqualValues(t, 50, countLogs(t))
+	sweepTimedOutTasks(t.Context())
+	require.NoError(t, model.DB.First(&fresh, late.ID).Error)
+	require.Equal(t, model.TaskStatus(model.TaskStatusSuccess), fresh.Status)
+	require.EqualValues(t, 1050, getUserQuota(t, 717))
+	require.EqualValues(t, 50, countLogs(t))
+}
+
 func resetTimedOutTaskSweepCursorForTest(t *testing.T) {
 	t.Helper()
 	reset := func() {
 		timedOutTaskSweepCursor.Lock()
 		timedOutTaskSweepCursor.afterSubmitTime = 0
 		timedOutTaskSweepCursor.afterID = 0
+		timedOutTaskSweepCursor.appliedAfterSubmitTime = 0
+		timedOutTaskSweepCursor.appliedAfterID = 0
+		timedOutTaskSweepCursor.appliedThroughTime = 0
+		timedOutTaskSweepCursor.appliedThroughID = 0
 		timedOutTaskSweepCursor.Unlock()
 	}
 	reset()
@@ -530,6 +1295,7 @@ func resetTimedOutTaskSweepCursorForTest(t *testing.T) {
 func truncate(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
+		model.DB.Exec("DELETE FROM task_submit_failure_recoveries")
 		model.DB.Exec("DELETE FROM tasks")
 		model.DB.Exec("DELETE FROM users")
 		model.DB.Exec("DELETE FROM tokens")

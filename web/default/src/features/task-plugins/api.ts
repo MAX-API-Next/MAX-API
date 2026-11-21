@@ -26,6 +26,7 @@ export const pluginSchema = z.object({
   version: z.string(),
   digest,
   source_sha256: digest.optional(),
+  bom_prefixed: z.boolean().optional(),
   format_version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   active: z.boolean(),
   enabled: z.boolean(),
@@ -63,12 +64,14 @@ const receiptSchema = z.object({
 })
 export type PluginEntry = z.infer<typeof pluginSchema>
 export type PluginSnapshot = z.infer<typeof snapshotSchema>
-export type PluginAction = 'activate' | 'enable' | 'disable' | 'revoke'
-export type PluginUpload = { document: string; expected_sha256: string }
+export type PluginAction = 'activate' | 'enable' | 'disable' | 'delete'
+export type PluginUpload = { document: string; expected_sha256?: string }
 export type PluginMutation = {
   expected_revision: string
   format2_nodes_ready?: boolean
   format3_nodes_ready?: boolean
+  bom_nodes_ready?: boolean
+  deletion_nodes_ready?: boolean
 } & (
   | ({ action: 'install' } & PluginUpload)
   | { action: PluginAction; key: string; version: string }
@@ -77,15 +80,32 @@ export type PluginMutation = {
 export class PluginError extends Error {
   constructor(
     public readonly kind: 'conflict' | 'rejected' | 'unknown' | 'read',
-    message: string
+    message: string,
+    public readonly repair?:
+      | { code: 'invalid_channel_mapping'; channel_id: string }
+      | { code: 'invalid_task_data'; task_id: string }
+      | { code: 'invalid_plugin_pricing'; option_key: string }
   ) {
     super(message)
   }
 }
 function classifyRequestError(
   status: number | undefined,
-  write: boolean
+  write: boolean,
+  payload: unknown
 ): PluginError['kind'] {
+  if (
+    write &&
+    status === 503 &&
+    z
+      .object({
+        success: z.literal(false),
+        code: z.literal('catalog_operation_not_committed'),
+        committed: z.literal(false),
+      })
+      .safeParse(payload).success
+  )
+    return 'rejected'
   if (status === 409) return 'conflict'
   if (
     status &&
@@ -100,6 +120,41 @@ function classifyRequestError(
 
 const options = { skipBusinessError: true, skipErrorHandler: true }
 const endpoint = '/api/task_plugins'
+function requestError(
+  kind: PluginError['kind'],
+  payload: unknown,
+  fallback: string
+): PluginError {
+  const repair = z
+    .discriminatedUnion('code', [
+      z.object({
+        code: z.literal('invalid_channel_mapping'),
+        channel_id: z.union([
+          z.string().regex(/^(?:0|-?[1-9][0-9]*)$/),
+          z
+            .number()
+            .int()
+            .min(Number.MIN_SAFE_INTEGER)
+            .max(Number.MAX_SAFE_INTEGER)
+            .transform(String),
+        ]),
+      }),
+      z.object({
+        code: z.literal('invalid_task_data'),
+        task_id: z.string().regex(/^(?:0|-?[1-9][0-9]*)$/),
+      }),
+      z.object({
+        code: z.literal('invalid_plugin_pricing'),
+        option_key: z.string().min(1).max(128),
+      }),
+    ])
+    .safeParse(payload)
+  return new PluginError(
+    kind,
+    fallback,
+    repair.success ? repair.data : undefined
+  )
+}
 async function request<T>(
   run: () => Promise<{ data: unknown }>,
   schema: z.ZodType<T>,
@@ -111,11 +166,16 @@ async function request<T>(
         success: z.boolean(),
         message: z.string().optional(),
         data: z.unknown().optional(),
+        code: z.unknown().optional(),
+        channel_id: z.unknown().optional(),
+        task_id: z.unknown().optional(),
+        option_key: z.unknown().optional(),
       })
       .parse((await run()).data)
     if (!raw.success)
-      throw new PluginError(
+      throw requestError(
         'rejected',
+        raw,
         raw.message || 'Invalid task plugin request'
       )
     return schema.parse(raw.data)
@@ -124,11 +184,14 @@ async function request<T>(
     if (isAxiosError(error)) {
       const status = error.response?.status
       const message: unknown = error.response?.data?.message
-      const kind = classifyRequestError(status, write)
-      throw new PluginError(
-        kind,
-        typeof message === 'string' ? message : 'Task plugin request failed'
-      )
+      const kind = classifyRequestError(status, write, error.response?.data)
+      const knownNoCommit = kind === 'rejected' && status === 503
+      let fallback = 'Task plugin request failed'
+      if (knownNoCommit)
+        fallback =
+          'Task plugin catalog unavailable; reread before another mutation'
+      else if (typeof message === 'string') fallback = message
+      throw requestError(kind, error.response?.data, fallback)
     }
     throw new PluginError(
       write ? 'unknown' : 'read',
@@ -164,6 +227,7 @@ export const taskPluginAPI = {
       pluginSchema
     )
     if (
+      upload.expected_sha256 &&
       entry.digest !== upload.expected_sha256 &&
       !(
         entry.format_version === 3 &&

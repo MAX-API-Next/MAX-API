@@ -1,5 +1,6 @@
 // Copyright (C) 2023-2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 import { useMemo } from 'react'
+import { AxiosError } from 'axios'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   createMemoryHistory,
@@ -9,14 +10,38 @@ import {
   Outlet,
   RouterContextProvider,
 } from '@tanstack/react-router'
+import english from '@/i18n/locales/en.json'
+import french from '@/i18n/locales/fr.json'
 import { createReactTestEnvironment } from '@/test/react'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { after as afterAll, afterEach, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
 import type { PluginEntry, PluginMutation, TaskPluginAPI } from './api'
 
 const env = createReactTestEnvironment()
 await env.setup()
+env.i18n.addResourceBundle('en', 'translation', {
+  'Search task plugins': english.translation['Search task plugins'],
+  'No task plugin packages found':
+    english.translation['No task plugin packages found'],
+  'Plugin catalog': english.translation['Plugin catalog'],
+  'All catalog nodes have been upgraded to support version deletion. Older nodes may suspend their plugin host after deletion.':
+    english.translation[
+      'All catalog nodes have been upgraded to support version deletion. Older nodes may suspend their plugin host after deletion.'
+    ],
+  'Task Plugins': english.translation['Task Plugins'],
+  'Plugin details': english.translation['Plugin details'],
+  'Install plugin package': english.translation['Install plugin package'],
+  'Task plugin catalog could not be loaded':
+    english.translation['Task plugin catalog could not be loaded'],
+  'Plugin catalog updated. Execution and paid admission remain unavailable.':
+    english.translation[
+      'Plugin catalog updated. Execution and paid admission remain unavailable.'
+    ],
+  'Task plugin request failed':
+    english.translation['Task plugin request failed'],
+})
 const originalScrollTo = Object.getOwnPropertyDescriptor(globalThis, 'scrollTo')
 // The real router scrolls on navigation; JSDOM needs this browser primitive.
 Object.defineProperty(globalThis, 'scrollTo', {
@@ -26,7 +51,7 @@ Object.defineProperty(globalThis, 'scrollTo', {
 const { render, cleanup, fireEvent, waitFor, act, within } =
   await import('@testing-library/react')
 const { TaskPlugins } = await import('./index')
-const { PluginError } = await import('./api')
+const { PluginError, taskPluginAPI } = await import('./api')
 const { useSidebarData } = await import('@/hooks/use-sidebar-data')
 const { useAuthStore } = await import('@/stores/auth-store')
 const { Route } = await import('@/routes/_authenticated/task-plugins')
@@ -128,7 +153,10 @@ function fixture() {
       ...state,
       entries: state.entries.map((e) => ({ ...e })),
     }),
-    validate: async (upload) => ({ ...entry, digest: upload.expected_sha256 }),
+    validate: async (upload) => ({
+      ...entry,
+      digest: upload.expected_sha256 ?? entry.digest,
+    }),
     mutate: async (command) => {
       writes.push(command)
       state.revision = String(BigInt(state.revision) + 1n)
@@ -173,31 +201,668 @@ function fixture() {
     )
   return { state, writes, api, client, view, router }
 }
+test('catalog filters retain exact version selection across card and table views', async () => {
+  const f = fixture()
+  f.state.entries.push(
+    { ...entry, key: 'disabled', name: 'Disabled Fixture', enabled: false },
+    { ...entry, version: '1.1.0', name: 'Historical Fixture', active: false },
+    { ...entry, key: 'revoked', name: 'Revoked Fixture', revoked: true }
+  )
+  const v = f.view()
+  await v.findByText('Kling Fixture')
+  assert.equal(v.getAllByRole('article').length, 4)
+  fireEvent.change(v.getByRole('combobox', { name: 'Filter by status' }), {
+    target: { value: 'historical' },
+  })
+  assert.equal(v.getAllByRole('article').length, 1)
+  assert.ok(v.getByText('Historical Fixture'))
+  fireEvent.click(v.getByRole('button', { name: 'Table view' }))
+  assert.ok(v.getByRole('table'))
+  assert.equal(
+    v.getByRole('button', { name: 'Table view' }).getAttribute('aria-pressed'),
+    'true'
+  )
+  assert.equal(v.queryByText('Kling Fixture'), null)
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
+  const panel = within(await v.findByRole('dialog'))
+  assert.ok(panel.getByRole('heading', { name: 'Historical Fixture' }))
+  assert.ok(panel.getByText('kling · 1.1.0'))
+  assert.ok(panel.getByRole('button', { name: 'Activate version' }))
+  assert.deepEqual(
+    f.writes,
+    [],
+    'view/filter/detail interactions never mutate the catalog'
+  )
+})
+
+test('closing unchanged details restores the opening button', async () => {
+  const f = fixture(),
+    v = f.view()
+  const opener = await v.findByRole('button', { name: 'Details kling@1.2.0' })
+  fireEvent.click(opener)
+  await v.findByRole('dialog')
+  fireEvent.keyDown(document, { key: 'Escape', code: 'Escape', keyCode: 27 })
+  await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
+  await waitFor(() => assert.equal(document.activeElement, opener))
+})
+
+test('closing details after a refresh restores the same opening button', async () => {
+  const f = fixture(),
+    v = f.view()
+  const opener = await v.findByRole('button', { name: 'Details kling@1.2.0' })
+  fireEvent.click(opener)
+  const panel = within(await v.findByRole('dialog'))
+  const originalRead = f.api.read
+  const pending = deferred<Awaited<ReturnType<TaskPluginAPI['read']>>>()
+  f.api.read = () => pending.promise
+  try {
+    fireEvent.click(panel.getByRole('button', { name: 'Disable' }))
+    fireEvent.click(panel.getByRole('button', { name: 'Confirm' }))
+    await waitFor(() => assert.equal(f.writes.length, 1))
+    await waitFor(() => assert.ok(v.getByText('Loading...')))
+    assert.equal(
+      opener.isConnected,
+      true,
+      'the last catalog snapshot remains mounted during refresh'
+    )
+  } finally {
+    pending.resolve(await originalRead())
+  }
+  await waitFor(() =>
+    assert.equal(
+      (panel.getByRole('button', { name: 'Enable' }) as HTMLButtonElement)
+        .disabled,
+      false
+    )
+  )
+  fireEvent.keyDown(document, { key: 'Escape', code: 'Escape', keyCode: 27 })
+  await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
+  await waitFor(() => assert.equal(document.activeElement, opener))
+})
+
+for (const repair of [
+  { code: 'invalid_channel_mapping', channel_id: '9007199254740993' },
+  { code: 'invalid_task_data', task_id: '9007199254740993' },
+  {
+    code: 'invalid_plugin_pricing',
+    option_key: 'billing_setting.plugin_billing_expr',
+  },
+] as const) {
+  test(`repair feedback translates on language changes (${repair.code})`, async () => {
+    const originalAdapter = api.defaults.adapter
+    const previousLanguage = env.i18n.language
+    env.i18n.addResourceBundle(
+      'fr',
+      'translation',
+      french.translation,
+      true,
+      true
+    )
+    const f = fixture()
+    f.api.mutate = taskPluginAPI.mutate
+    api.defaults.adapter = async (config) => {
+      const response = {
+        config,
+        status: 422,
+        statusText: 'fixture',
+        headers: {},
+        data: { success: false, message: 'English fallback', ...repair },
+      }
+      throw new AxiosError(
+        'controlled-repair',
+        undefined,
+        config,
+        undefined,
+        response
+      )
+    }
+    try {
+      const v = f.view()
+      fireEvent.click(
+        await v.findByRole('button', { name: 'Details kling@1.2.0' })
+      )
+      const panel = within(await v.findByRole('dialog'))
+      fireEvent.click(panel.getByRole('button', { name: 'Delete version' }))
+      fireEvent.click(panel.getByRole('checkbox'))
+      fireEvent.click(panel.getByRole('button', { name: 'Confirm' }))
+      await panel.findByText('English fallback')
+      fireEvent.keyDown(document, {
+        key: 'Escape',
+        code: 'Escape',
+        keyCode: 27,
+      })
+      await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
+      await act(async () => {
+        await env.i18n.changeLanguage('fr')
+      })
+      let translated: string
+      if (repair.code === 'invalid_channel_mapping') {
+        translated = french.translation[
+          'Channel {{id}} has an invalid model mapping; repair it before deleting the API extension'
+        ].replace('{{id}}', repair.channel_id)
+      } else if (repair.code === 'invalid_task_data') {
+        translated = french.translation[
+          'Task record {{id}} has invalid private data; repair it before deleting the API extension'
+        ].replace('{{id}}', repair.task_id)
+      } else {
+        translated = french.translation[
+          'Plugin pricing option {{key}} is invalid; repair it before deleting the API extension'
+        ].replace('{{key}}', repair.option_key)
+      }
+      await v.findByText(translated)
+    } finally {
+      api.defaults.adapter = originalAdapter
+      await act(async () => {
+        await env.i18n.changeLanguage(previousLanguage || 'en')
+      })
+    }
+  })
+}
+
+test('a confirmed deletion restores focus from another control in the removed card', async () => {
+  const f = fixture()
+  f.state.entries[0] = {
+    ...entry,
+    models: ['one', 'two', 'three', 'four', 'five'],
+  }
+  const other = {
+    ...entry,
+    key: 'other',
+    name: 'Other Fixture',
+    models: ['other-model'],
+    digest: 'b'.repeat(64),
+  }
+  f.state.entries.push(other)
+  const v = f.view()
+  const opener = await v.findByRole('button', {
+    name: 'Declared models: +1 kling@1.2.0',
+  })
+  const details = v.getByRole('button', {
+    name: 'Details kling@1.2.0',
+  }) as HTMLButtonElement
+  const receipt = deferred<void>()
+  const refresh = deferred<Awaited<ReturnType<TaskPluginAPI['read']>>>()
+  f.api.read = () => refresh.promise
+  f.api.mutate = async (command) => {
+    f.writes.push(command)
+    await receipt.promise
+    f.state.entries = [other]
+    f.state.revision = '2'
+    return {
+      committed: true,
+      revision: '2',
+      execution_ready: false,
+      admission_ready: false,
+    }
+  }
+  try {
+    fireEvent.click(opener)
+    const panel = within(await v.findByRole('dialog'))
+    fireEvent.click(panel.getByRole('button', { name: 'Delete version' }))
+    fireEvent.click(panel.getByRole('checkbox'))
+    fireEvent.click(panel.getByRole('button', { name: 'Confirm' }))
+    await waitFor(() => assert.equal(f.writes.length, 1))
+    fireEvent.keyDown(document, { key: 'Escape', code: 'Escape', keyCode: 27 })
+    await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
+    await waitFor(() => assert.equal(document.activeElement, opener))
+    await act(async () => details.focus())
+    assert.equal(document.activeElement, details)
+    receipt.resolve(undefined)
+    await v.findByText('Loading...')
+    await waitFor(() =>
+      assert.equal(
+        v.queryByRole('button', { name: 'Details kling@1.2.0' }),
+        null
+      )
+    )
+    const search = v.getByRole('textbox', {
+      name: 'Search API extensions',
+    }) as HTMLInputElement
+    assert.equal(search.disabled, false)
+    await waitFor(() => assert.equal(document.activeElement, search))
+    assert.equal(
+      (
+        v.getByRole('button', {
+          name: 'Details other@1.2.0',
+        }) as HTMLButtonElement
+      ).disabled,
+      false
+    )
+  } finally {
+    receipt.resolve(undefined)
+    refresh.resolve({ revision: '2', entries: [other] })
+  }
+})
+
+test('a failed bundle replacement clears the previous local filename', async () => {
+  const f = fixture()
+  f.api.bundled = async () => [
+    { key: 'kling', version: '1.2.0', sha256: 'a'.repeat(64) },
+  ]
+  f.api.bundle = async () => {
+    throw new PluginError('read', 'Official plugin source could not be read')
+  }
+  const v = f.view()
+  await v.findByText('Kling Fixture')
+  fireEvent.click(v.getByRole('button', { name: 'Import API extension' }))
+  const panel = within(await v.findByRole('dialog'))
+  fireEvent.change(panel.getByLabelText('Package file'), {
+    target: {
+      files: [
+        {
+          name: 'previous.js',
+          size: 2,
+          arrayBuffer: async () => new TextEncoder().encode('{}').buffer,
+        },
+      ],
+    },
+  })
+  await panel.findByText('previous.js')
+  fireEvent.change(await panel.findByLabelText('Bundled plugins'), {
+    target: { value: 'kling@1.2.0' },
+  })
+  await panel.findByText('Official plugin source could not be read')
+  assert.equal(panel.queryByText('previous.js'), null)
+  assert.equal(
+    (
+      panel.getByRole('button', {
+        name: 'Validate package',
+      }) as HTMLButtonElement
+    ).disabled,
+    true
+  )
+})
+
+test('custom package validation and installation work without an external SHA-256', async () => {
+  const f = fixture()
+  const uploads: unknown[] = []
+  f.api.validate = async (upload) => {
+    uploads.push(upload)
+    return { ...entry, format_version: 1 }
+  }
+  const v = f.view()
+  await v.findByText('Kling Fixture')
+  fireEvent.click(v.getByRole('button', { name: 'Import API extension' }))
+  fireEvent.change(v.getByLabelText('Package file'), {
+    target: {
+      files: [
+        {
+          name: 'custom.json',
+          size: 2,
+          arrayBuffer: async () => new TextEncoder().encode('{}').buffer,
+        },
+      ],
+    },
+  })
+  const check = v.getByRole('button', { name: 'Validate package' })
+  await waitFor(() =>
+    assert.equal((check as HTMLButtonElement).disabled, false)
+  )
+  const pin = v.getByLabelText('SHA-256 (optional)')
+  fireEvent.change(pin, { target: { value: 'not-a-digest' } })
+  assert.equal((check as HTMLButtonElement).disabled, true)
+  fireEvent.change(pin, { target: { value: '' } })
+  assert.equal((check as HTMLButtonElement).disabled, false)
+  fireEvent.click(check)
+  const install = await v.findByRole('button', { name: 'Install and activate' })
+  assert.ok(v.getByText(`Submitted content SHA-256: ${entry.digest}`))
+  assert.equal((install as HTMLButtonElement).disabled, false)
+  assert.deepEqual(uploads, [{ document: '{}', expected_sha256: undefined }])
+  fireEvent.click(install)
+  await waitFor(() => assert.equal(f.writes.length, 1))
+  assert.equal(f.writes[0].action, 'install')
+  assert.equal(f.writes[0].expected_sha256, undefined)
+})
+
+for (const [name, document] of [
+  ['raw JavaScript', '\uFEFFexport const meta = {};\r\n'],
+  ['format-3 JSON envelope', '\uFEFF{"format_version":3}\r\n'],
+  ['raw JavaScript with a later BOM', ' \uFEFF{}; export const meta = {};\r\n'],
+  [
+    'raw JavaScript with a leading BOM and block',
+    '\uFEFF{}; export const meta = {};\r\n',
+  ],
+]) {
+  test(`computed upload digest identifies the file bytes for ${name}`, async () => {
+    const f = fixture()
+    const bytes = new TextEncoder().encode(document)
+    const expectedDigest = createHash('sha256').update(bytes).digest('hex')
+    f.api.validate = async (upload) => {
+      const actual = createHash('sha256').update(upload.document).digest('hex')
+      return {
+        ...entry,
+        format_version: 3,
+        digest: name === 'format-3 JSON envelope' ? actual : entry.digest,
+        source_sha256:
+          name === 'format-3 JSON envelope' ? 'b'.repeat(64) : actual,
+      }
+    }
+    const v = f.view()
+    await v.findByText('Kling Fixture')
+    fireEvent.click(v.getByRole('button', { name: 'Import API extension' }))
+    fireEvent.change(v.getByLabelText('Package file'), {
+      target: {
+        files: [
+          {
+            name: 'custom',
+            size: document.length,
+            arrayBuffer: async () => new TextEncoder().encode(document).buffer,
+          },
+        ],
+      },
+    })
+    const validate = v.getByRole('button', { name: 'Validate package' })
+    await waitFor(() =>
+      assert.equal((validate as HTMLButtonElement).disabled, false)
+    )
+    fireEvent.click(validate)
+    await v.findByText(`Submitted content SHA-256: ${expectedDigest}`)
+    assert.deepEqual(f.writes, [])
+  })
+}
+
+test('deleting an installed version requires node acknowledgement and closes only after a receipt', async () => {
+  const f = fixture()
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  f.api.mutate = async (command) => {
+    f.writes.push(command)
+    await pending
+    f.state.entries = []
+    f.state.revision = '2'
+    return {
+      committed: true,
+      revision: '2',
+      execution_ready: false,
+      admission_ready: false,
+    }
+  }
+  const v = f.view()
+  fireEvent.click(await v.findByRole('button', { name: /^Details\b/ }))
+  const panel = within(await v.findByRole('dialog'))
+  fireEvent.click(panel.getByRole('button', { name: 'Delete version' }))
+  const confirm = panel.getByRole('button', { name: 'Confirm' })
+  assert.match(
+    panel.getByRole('checkbox').parentElement!.textContent!,
+    /task writers, channel writers and pricing writers/
+  )
+  assert.equal((confirm as HTMLButtonElement).disabled, true)
+  fireEvent.click(panel.getByRole('checkbox'))
+  assert.equal((confirm as HTMLButtonElement).disabled, false)
+  await act(async () => {
+    fireEvent.click(confirm)
+  })
+  try {
+    await waitFor(() => assert.equal(f.writes.length, 1))
+    assert.ok(v.getByRole('dialog'), 'the dialog stays open before the receipt')
+  } finally {
+    await act(async () => {
+      release()
+      await pending
+    })
+  }
+  await v.findByText('No API extensions found')
+  await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
+  await waitFor(() =>
+    assert.equal(
+      document.activeElement,
+      v.getByRole('textbox', { name: 'Search API extensions' })
+    )
+  )
+  assert.equal(f.writes.length, 1)
+  assert.equal(f.writes[0].action, 'delete')
+  assert.equal(f.writes[0].expected_revision, '1')
+  assert.equal(f.writes[0].deletion_nodes_ready, true)
+})
+
+for (const custom of [false, true]) {
+  test(`bundled source pin is paired with its document (custom=${custom})`, async () => {
+    const f = fixture()
+    const uploads: { document: string; expected_sha256?: string }[] = []
+    f.api.bundled = async () => [
+      { key: 'kling', version: '1.2.0', sha256: 'a'.repeat(64) },
+    ]
+    f.api.bundle = async () => ({
+      document: 'bundled-source',
+      expected_sha256: 'a'.repeat(64),
+    })
+    f.api.validate = async (upload) => {
+      uploads.push(upload)
+      return entry
+    }
+    const v = f.view()
+    await v.findByText('Kling Fixture')
+    fireEvent.click(v.getByRole('button', { name: 'Import API extension' }))
+    const panel = within(await v.findByRole('dialog'))
+    fireEvent.change(await panel.findByLabelText('Bundled plugins'), {
+      target: { value: 'kling@1.2.0' },
+    })
+    const pin = panel.getByLabelText('SHA-256 (optional)') as HTMLInputElement
+    await waitFor(() => assert.equal(pin.value, 'a'.repeat(64)))
+    assert.equal(pin.readOnly, true)
+    if (custom) {
+      fireEvent.change(panel.getByLabelText('Package file'), {
+        target: {
+          files: [
+            {
+              name: 'custom.js',
+              size: 13,
+              arrayBuffer: async () =>
+                new TextEncoder().encode('custom-source').buffer,
+            },
+          ],
+        },
+      })
+      await waitFor(() => assert.equal(pin.readOnly, false))
+      assert.equal(pin.value, '')
+    } else {
+      fireEvent.change(pin, { target: { value: '' } })
+      assert.equal(pin.value, 'a'.repeat(64))
+    }
+    const validate = panel.getByRole('button', { name: 'Validate package' })
+    await waitFor(() =>
+      assert.equal((validate as HTMLButtonElement).disabled, false)
+    )
+    fireEvent.click(validate)
+    await waitFor(() => assert.equal(uploads.length, 1))
+    assert.deepEqual(uploads[0], {
+      document: custom ? 'custom-source' : 'bundled-source',
+      expected_sha256: custom ? undefined : 'a'.repeat(64),
+    })
+    const install = await panel.findByRole('button', {
+      name: 'Install and activate',
+    })
+    fireEvent.click(panel.getByRole('checkbox'))
+    fireEvent.click(install)
+    await waitFor(() => assert.equal(f.writes.length, 1))
+    assert.equal(f.writes[0].action, 'install')
+    if (f.writes[0].action === 'install') {
+      assert.equal(
+        f.writes[0].document,
+        custom ? 'custom-source' : 'bundled-source'
+      )
+      assert.equal(
+        f.writes[0].expected_sha256,
+        custom ? undefined : 'a'.repeat(64)
+      )
+    }
+  })
+}
+
+test('delete is available directly and rejects referenced versions without retry', async () => {
+  const f = fixture()
+  f.state.entries[0].revoked = true
+  const v = f.view()
+  fireEvent.click(await v.findByRole('button', { name: /^Details\b/ }))
+  const panel = within(await v.findByRole('dialog'))
+  assert.ok(
+    panel.getByText(
+      'Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles, audit identity and historical revocation are retained. Re-importing the same file remains blocked.'
+    )
+  )
+  assert.equal(
+    panel.queryByText(
+      'Delete directly when there are no task, channel or pricing references. Deletion removes installed source and keeps distribution bundles and audit identity. If you may need this version again, validate the original file before deleting. Reimport requires the same file to pass current validation.'
+    ),
+    null
+  )
+  assert.equal(panel.queryByRole('button', { name: 'Revoke version' }), null)
+  assert.equal(
+    (panel.getByRole('button', { name: 'Delete version' }) as HTMLButtonElement)
+      .disabled,
+    false
+  )
+  f.api.mutate = async (command) => {
+    f.writes.push(command)
+    throw new PluginError(
+      'rejected',
+      'Task plugin version is still referenced; remove task, channel or pricing references before deleting'
+    )
+  }
+  fireEvent.click(panel.getByRole('button', { name: 'Delete version' }))
+  fireEvent.click(panel.getByRole('checkbox'))
+  fireEvent.click(panel.getByRole('button', { name: 'Confirm' }))
+  await panel.findByText(
+    'Task plugin version is still referenced; remove task, channel or pricing references before deleting'
+  )
+  assert.equal(f.writes.length, 1)
+  assert.ok(v.getByRole('dialog'))
+})
+
+test('a lost deletion receipt stays unknown after the version disappears from the catalog', async () => {
+  const f = fixture()
+  f.state.entries[0].enabled = false
+  f.api.mutate = async (command) => {
+    f.writes.push(command)
+    f.state.entries = []
+    f.state.revision = '2'
+    throw new PluginError('unknown', 'lost deletion receipt')
+  }
+  const v = f.view()
+  fireEvent.click(await v.findByRole('button', { name: /^Details\b/ }))
+  const panel = within(await v.findByRole('dialog'))
+  fireEvent.click(panel.getByRole('button', { name: 'Delete version' }))
+  fireEvent.click(panel.getByRole('checkbox'))
+  fireEvent.click(panel.getByRole('button', { name: 'Confirm' }))
+  await panel.findByText(/The mutation result is unknown/)
+  await waitFor(() =>
+    assert.equal(
+      (panel.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement)
+        .disabled,
+      false
+    )
+  )
+  const refreshed = deferred<{ revision: string; entries: PluginEntry[] }>()
+  let refreshStarted = false
+  let refreshCompleted = false
+  f.api.read = async () => {
+    refreshStarted = true
+    const result = await refreshed.promise
+    refreshCompleted = true
+    return result
+  }
+  fireEvent.click(panel.getByRole('button', { name: 'Refresh' }))
+  try {
+    await waitFor(() => assert.equal(refreshStarted, true))
+    assert.ok(panel.getByText(/The mutation result is unknown/))
+  } finally {
+    await act(async () => refreshed.resolve({ revision: '2', entries: [] }))
+  }
+  await waitFor(() => {
+    assert.equal(refreshCompleted, true)
+    assert.equal(
+      (panel.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement)
+        .disabled,
+      false
+    )
+  })
+  assert.equal(f.writes.length, 1)
+  assert.ok(v.getByRole('dialog'))
+  assert.ok(
+    panel.getByText('The selected version is not in the current catalog')
+  )
+  assert.ok(panel.getByText(/The mutation result is unknown/))
+  assert.equal(
+    panel.queryByText(
+      'API extension catalog updated. Execution and paid admission remain unavailable.'
+    ),
+    null
+  )
+})
+
+test('catalog search includes models hidden behind card overflow and distinguishes empty matches', async () => {
+  const f = fixture()
+  f.state.entries[0].models = ['one', 'two', 'three', 'four', 'hidden-model']
+  const v = f.view()
+  const content = within(v.container)
+  await v.findByText('Kling Fixture')
+  const searchStatus = v.getByRole('status', { name: 'API extension catalog' })
+  assert.equal(searchStatus.textContent, '')
+  fireEvent.change(v.getByRole('textbox', { name: 'Search API extensions' }), {
+    target: { value: ' hidden-model ' },
+  })
+  assert.ok(v.getByText('Kling Fixture'))
+  fireEvent.click(
+    v.getByRole('button', { name: 'Declared models: +1 kling@1.2.0' })
+  )
+  const panel = within(await v.findByRole('dialog'))
+  assert.ok(panel.getByText('hidden-model'))
+  fireEvent.click(panel.getByRole('button', { name: 'Close' }))
+  await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
+  const searchInput = await content.findByRole('textbox', {
+    name: 'Search API extensions',
+  })
+  await act(async () => searchInput.focus())
+  fireEvent.change(searchInput, {
+    target: { value: 'does-not-exist' },
+  })
+  assert.ok(v.getByText('No matching plugins'))
+  assert.equal(
+    v.getByRole('status', { name: 'API extension catalog' }),
+    searchStatus
+  )
+  assert.match(searchStatus.textContent || '', /No matching plugins/)
+  assert.equal(document.activeElement, searchInput)
+  assert.equal(v.queryByText('No API extensions found'), null)
+  fireEvent.change(searchInput, { target: { value: '' } })
+  assert.equal(
+    v.getByRole('status', { name: 'API extension catalog' }),
+    searchStatus
+  )
+  assert.equal(searchStatus.textContent, '')
+  assert.equal(document.activeElement, searchInput)
+  assert.deepEqual(f.writes, [])
+})
+
 test('lists real metadata and disables with the observed revision while invalidating prices', async () => {
   const f = fixture()
   f.client.setQueryData(['model-pricing-config', 'fixture'], { saved: true })
   const v = f.view()
   await v.findByText('Kling Fixture')
-  fireEvent.click(v.getByRole('button', { name: 'Details' }))
-  await v.findByRole('heading', { name: 'Model usage schemas' })
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
+  const panel = within(await v.findByRole('dialog'))
+  await panel.findByRole('heading', { name: 'Model usage schemas' })
+  const pricingLink = await panel.findByRole('link', {
+    name: 'Open model and source pricing',
+  })
   assert.equal(
-    v
-      .getByRole('link', { name: 'Open model and source pricing' })
-      .getAttribute('href'),
+    pricingLink.getAttribute('href'),
     '/system-settings/billing/model-pricing'
   )
-  fireEvent.click(v.getByRole('button', { name: 'Disable' }))
-  fireEvent.click(v.getByRole('button', { name: 'Confirm' }))
+  fireEvent.click(panel.getByRole('button', { name: 'Disable' }))
+  fireEvent.click(await panel.findByRole('button', { name: 'Confirm' }))
   await waitFor(() => assert.equal(f.writes.length, 1))
-  await v.findByRole('button', { name: 'Enable' })
+  await panel.findByRole('button', { name: 'Enable' })
   assert.equal(f.writes[0].expected_revision, '1')
   assert.equal(
     f.client.getQueryState(['model-pricing-config', 'fixture'])?.isInvalidated,
     true
   )
-  assert.ok(v.getByText(/Execution and paid admission remain unavailable/))
+  assert.ok(panel.getByText(/Execution and paid admission remain unavailable/))
   fireEvent.click(
-    v.getByRole('link', { name: 'Open model and source pricing' })
+    await panel.findByRole('link', { name: 'Open model and source pricing' })
   )
   await waitFor(() =>
     assert.equal(
@@ -209,17 +874,17 @@ test('lists real metadata and disables with the observed revision while invalida
     saved: true,
   })
 })
-test('closing details discards a pending revocation before reopening the same version', async () => {
+test('closing details discards a pending disable before reopening the same version', async () => {
   const f = fixture()
   const v = f.view()
   await v.findByText('Kling Fixture')
-  fireEvent.click(v.getByRole('button', { name: 'Details' }))
-  fireEvent.click(await v.findByRole('button', { name: 'Revoke version' }))
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
+  fireEvent.click(await v.findByRole('button', { name: 'Disable' }))
   assert.ok(v.getByRole('button', { name: 'Confirm' }))
   fireEvent.click(v.getByRole('button', { name: 'Close' }))
   await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
-  fireEvent.click(v.getByRole('button', { name: 'Details' }))
-  await v.findByRole('button', { name: 'Revoke version' })
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
+  await v.findByRole('button', { name: 'Disable' })
   assert.equal(
     v.queryByRole('button', { name: 'Confirm' }) === null,
     true,
@@ -230,17 +895,17 @@ test('closing details discards a pending revocation before reopening the same ve
     0,
     'dismissing and reopening must not mutate the catalog'
   )
-  fireEvent.click(v.getByRole('button', { name: 'Revoke version' }))
+  fireEvent.click(v.getByRole('button', { name: 'Disable' }))
   fireEvent.click(v.getByRole('button', { name: 'Confirm' }))
   await waitFor(() => assert.equal(f.writes.length, 1))
-  assert.equal(f.writes[0].action, 'revoke')
+  assert.equal(f.writes[0].action, 'disable')
   assert.equal(f.writes[0].expected_revision, '1')
 })
 test('a refreshed catalog cannot silently rebase an open confirmation', async () => {
   const f = fixture(),
     v = f.view()
   await v.findByText('Kling Fixture')
-  fireEvent.click(v.getByRole('button', { name: 'Details' }))
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
   fireEvent.click(await v.findByRole('button', { name: 'Disable' }))
   f.state.revision = '2'
   // Programmatic click exercises the page refresh even while the modal is open.
@@ -264,7 +929,7 @@ test('unknown mutation rereads without replay and remains unresolved after match
   }
   const v = f.view()
   await v.findByText('Kling Fixture')
-  fireEvent.click(v.getByRole('button', { name: 'Details' }))
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
   fireEvent.click(await v.findByRole('button', { name: 'Disable' }))
   fireEvent.click(v.getByRole('button', { name: 'Confirm' }))
   await v.findByRole('button', { name: 'Enable' })
@@ -290,48 +955,134 @@ test('unknown mutation rereads without replay and remains unresolved after match
   )
   assert.ok(v.getByText('lost receipt'))
 })
-test('late validation is ignored after changing the pin; v2 installation requires acknowledgement', async () => {
+test('late validation is ignored after changing the pin', async () => {
   const f = fixture(),
     pending = deferred<PluginEntry>(),
     v = f.view()
   await v.findByText('Kling Fixture')
   f.api.validate = () => pending.promise
-  fireEvent.click(v.getByRole('button', { name: 'Install plugin package' }))
-  fireEvent.change(v.getByLabelText('Package file'), {
+  fireEvent.click(v.getByRole('button', { name: 'Import API extension' }))
+  const panel = within(await v.findByRole('dialog'))
+  fireEvent.change(panel.getByLabelText('Package file'), {
     target: {
       files: [
-        { name: 'fixture.json', size: 8, text: async () => 'document-A' },
+        {
+          name: 'fixture.json',
+          size: 8,
+          arrayBuffer: async () =>
+            new TextEncoder().encode('document-A').buffer,
+        },
       ],
     },
   })
-  fireEvent.change(v.getByLabelText('Trusted package SHA-256'), {
+  fireEvent.change(panel.getByLabelText('SHA-256 (optional)'), {
     target: { value: 'a'.repeat(64) },
   })
-  const check = v.getByRole('button', { name: 'Validate package' })
+  const check = panel.getByRole('button', { name: 'Validate package' })
   await waitFor(() =>
     assert.equal((check as HTMLButtonElement).disabled, false)
   )
   fireEvent.click(check)
-  fireEvent.change(v.getByLabelText('Trusted package SHA-256'), {
+  fireEvent.change(panel.getByLabelText('SHA-256 (optional)'), {
     target: { value: 'b'.repeat(64) },
   })
   await act(async () => pending.resolve(entry))
-  assert.equal(v.queryByRole('button', { name: 'Install and activate' }), null)
-  f.api.validate = async (upload) => ({
-    ...entry,
-    digest: upload.expected_sha256,
-  })
-  fireEvent.click(check)
-  const install = await v.findByRole('button', { name: 'Install and activate' })
-  assert.equal((install as HTMLButtonElement).disabled, true)
-  fireEvent.click(v.getByRole('checkbox'))
-  fireEvent.click(install)
-  await waitFor(() => assert.equal(f.writes.length, 1))
-  assert.equal(f.writes[0].action, 'install')
-  assert.equal(f.writes[0].expected_revision, '1')
-  if (f.writes[0].action === 'install')
-    assert.equal(f.writes[0].expected_sha256, 'b'.repeat(64))
+  assert.equal(
+    panel.queryByRole('button', { name: 'Install and activate' }),
+    null
+  )
+  assert.deepEqual(f.writes, [])
 })
+
+for (const sample of [
+  { format: 2, bom: false },
+  { format: 2, bom: true },
+  { format: 1, bom: true },
+] as const)
+  test(`format-${sample.format} installation requires node acknowledgement (BOM=${sample.bom})`, async () => {
+    const f = fixture()
+    f.api.validate = async () => ({
+      ...entry,
+      format_version: sample.format,
+      bom_prefixed: sample.bom,
+    })
+    const v = f.view()
+    fireEvent.click(
+      await v.findByRole('button', { name: 'Import API extension' })
+    )
+    const panel = within(await v.findByRole('dialog'))
+    fireEvent.change(panel.getByLabelText('Package file'), {
+      target: {
+        files: [
+          {
+            name: 'fixture.json',
+            size: 8,
+            arrayBuffer: async () =>
+              new TextEncoder().encode('document-A').buffer,
+          },
+        ],
+      },
+    })
+    fireEvent.change(panel.getByLabelText('SHA-256 (optional)'), {
+      target: { value: 'b'.repeat(64) },
+    })
+    const check = panel.getByRole('button', { name: 'Validate package' })
+    await waitFor(() =>
+      assert.equal((check as HTMLButtonElement).disabled, false)
+    )
+    fireEvent.click(check)
+    const install = await panel.findByRole('button', {
+      name: 'Install and activate',
+    })
+    assert.equal((install as HTMLButtonElement).disabled, true)
+    const ready = panel.getByRole('checkbox')
+    if (sample.bom)
+      assert.match(
+        ready.parentElement!.textContent!,
+        sample.format >= 2
+          ? /package format and UTF-8 BOM/
+          : /support UTF-8 BOM/
+      )
+    fireEvent.click(ready)
+    fireEvent.click(install)
+    await waitFor(() => assert.equal(f.writes.length, 1))
+    assert.equal(f.writes[0].action, 'install')
+    assert.equal(f.writes[0].expected_revision, '1')
+    if (f.writes[0].action === 'install') {
+      assert.equal(f.writes[0].expected_sha256, 'b'.repeat(64))
+      assert.equal(f.writes[0].format2_nodes_ready, true)
+      assert.equal(f.writes[0].bom_nodes_ready, sample.bom ? true : undefined)
+    }
+  })
+for (const format of [2, 1] as const)
+  test(`format-${format} BOM activation requires reader acknowledgement`, async () => {
+    const f = fixture()
+    f.state.entries[0].active = false
+    f.state.entries[0].format_version = format
+    f.state.entries[0].bom_prefixed = true
+    const v = f.view()
+    fireEvent.click(await v.findByRole('button', { name: /^Details\b/ }))
+    const panel = within(await v.findByRole('dialog'))
+    fireEvent.click(panel.getByRole('button', { name: 'Activate version' }))
+    const confirm = panel.getByRole('button', {
+      name: 'Confirm',
+    }) as HTMLButtonElement
+    assert.equal(confirm.disabled, true)
+    fireEvent.click(
+      panel.getByRole('checkbox', {
+        name:
+          format >= 2
+            ? 'All catalog nodes support this package format and UTF-8 BOM packages. Older nodes may suspend their entire plugin host.'
+            : 'All catalog nodes support UTF-8 BOM packages. Older nodes may suspend their entire plugin host.',
+      })
+    )
+    fireEvent.click(confirm)
+    await waitFor(() => assert.equal(f.writes.length, 1))
+    assert.equal(f.writes[0].action, 'activate')
+    assert.equal(f.writes[0].format2_nodes_ready, true)
+    assert.equal(f.writes[0].bom_nodes_ready, true)
+  })
+
 test('late official source download cannot replace a manually changed pin', async () => {
   const f = fixture(),
     download = deferred<{ document: string; expected_sha256: string }>(),
@@ -341,10 +1092,10 @@ test('late official source download cannot replace a manually changed pin', asyn
   ]
   f.api.bundle = async () => download.promise
   await v.findByText('Kling Fixture')
-  fireEvent.click(v.getByRole('button', { name: 'Install plugin package' }))
+  fireEvent.click(v.getByRole('button', { name: 'Import API extension' }))
   const select = await v.findByLabelText('Bundled plugins')
   fireEvent.change(select, { target: { value: 'kling@1.2.0' } })
-  fireEvent.change(v.getByLabelText('Trusted package SHA-256'), {
+  fireEvent.change(v.getByLabelText('SHA-256 (optional)'), {
     target: { value: 'b'.repeat(64) },
   })
   await act(async () =>
@@ -354,7 +1105,7 @@ test('late official source download cannot replace a manually changed pin', asyn
     })
   )
   assert.equal(
-    (v.getByLabelText('Trusted package SHA-256') as HTMLInputElement).value,
+    (v.getByLabelText('SHA-256 (optional)') as HTMLInputElement).value,
     'b'.repeat(64)
   )
   assert.equal(
@@ -373,11 +1124,11 @@ test('catalog read failures remove actionable stale state', async () => {
     throw new Error('synthetic store fault')
   }
   fireEvent.click(v.getByRole('button', { name: 'Refresh' }))
-  await v.findByText('Task plugin catalog could not be loaded')
+  await v.findByText('API extension catalog could not be loaded')
   assert.equal(
     (
       v.getByRole('button', {
-        name: 'Install plugin package',
+        name: 'Import API extension',
       }) as HTMLButtonElement
     ).disabled,
     true
@@ -397,7 +1148,7 @@ test('failed bundle query clears loading and does not retry or install', async (
   }
   const v = f.view()
   await v.findByText('Kling Fixture')
-  fireEvent.click(v.getByRole('button', { name: 'Install plugin package' }))
+  fireEvent.click(v.getByRole('button', { name: 'Import API extension' }))
   const select = await v.findByLabelText('Bundled plugins')
   fireEvent.change(select, { target: { value: 'kling@1.2.0-maxapi.1' } })
   await v.findByText('Official plugin source could not be read')
@@ -424,7 +1175,7 @@ test('a rejected catalog operation stays visible inside the detail dialog', asyn
   }
   const v = f.view()
   await v.findByText('Kling Fixture')
-  fireEvent.click(v.getByRole('button', { name: 'Details' }))
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
   const panel = within(v.getByRole('dialog'))
   fireEvent.click(panel.getByRole('button', { name: 'Disable' }))
   fireEvent.click(panel.getByRole('button', { name: 'Confirm' }))
@@ -455,11 +1206,11 @@ test('an unknown operation can recover a failed reread inside the dialog without
   }
   const v = f.view()
   await v.findByText('Kling Fixture')
-  fireEvent.click(v.getByRole('button', { name: 'Details' }))
+  fireEvent.click(v.getByRole('button', { name: /^Details\b/ }))
   const panel = within(v.getByRole('dialog'))
   fireEvent.click(panel.getByRole('button', { name: 'Disable' }))
   fireEvent.click(panel.getByRole('button', { name: 'Confirm' }))
-  await panel.findByText('Task plugin catalog could not be loaded')
+  await panel.findByText('API extension catalog could not be loaded')
   assert.ok(panel.getByText(/The mutation result is unknown/))
   assert.equal(
     (
@@ -497,42 +1248,45 @@ test('an unknown operation can recover a failed reread inside the dialog without
   assert.equal(f.state.revision, '2')
 })
 
-test('empty and legacy sidebar settings expose and persist the task-plugin switch', async () => {
-  const adapter = api.defaults.adapter
-  const previous = useAuthStore.getState().auth.user
-  function NavigationProbe() {
-    const groups = useSidebarConfig(useSidebarData().navGroups)
-    const visible = groups
-      .flatMap((g) => g.items)
-      .some((item) => 'url' in item && item.url === '/task-plugins')
-    return (
-      <output>
-        {visible ? 'task-plugin-menu-visible' : 'task-plugin-menu-hidden'}
-      </output>
-    )
-  }
-  function SidebarSettingsProbe() {
-    const { status } = useStatus()
-    const serialized =
-      typeof status?.SidebarModulesAdmin === 'string'
-        ? status.SidebarModulesAdmin
-        : ''
-    const config = useMemo(
-      () => parseSidebarModulesAdmin(serialized),
-      [serialized]
-    )
-    return (
-      <SidebarModulesSection
-        config={config}
-        initialSerialized={serializeSidebarModulesAdmin(config)}
-      />
-    )
-  }
-  try {
-    useAuthStore
-      .getState()
-      .auth.setUser({ id: 901, username: 'fixture-root-role', role: 100 })
-    for (const initial of ['', '{"admin":{"enabled":true,"channel":false}}']) {
+for (const [caseName, initial] of [
+  ['empty', ''],
+  ['legacy', '{"admin":{"enabled":true,"channel":false}}'],
+]) {
+  test(`${caseName} sidebar settings expose and persist the task-plugin switch`, async () => {
+    const adapter = api.defaults.adapter
+    const previous = useAuthStore.getState().auth.user
+    function NavigationProbe() {
+      const groups = useSidebarConfig(useSidebarData().navGroups)
+      const visible = groups
+        .flatMap((g) => g.items)
+        .some((item) => 'url' in item && item.url === '/task-plugins')
+      return (
+        <output>
+          {visible ? 'task-plugin-menu-visible' : 'task-plugin-menu-hidden'}
+        </output>
+      )
+    }
+    function SidebarSettingsProbe() {
+      const { status } = useStatus()
+      const serialized =
+        typeof status?.SidebarModulesAdmin === 'string'
+          ? status.SidebarModulesAdmin
+          : ''
+      const config = useMemo(
+        () => parseSidebarModulesAdmin(serialized),
+        [serialized]
+      )
+      return (
+        <SidebarModulesSection
+          config={config}
+          initialSerialized={serializeSidebarModulesAdmin(config)}
+        />
+      )
+    }
+    try {
+      useAuthStore
+        .getState()
+        .auth.setUser({ id: 901, username: 'fixture-root-role', role: 100 })
       let saved = initial
       const requests: Array<{ key: string; value: string }> = []
       api.defaults.adapter = async (config) => {
@@ -571,12 +1325,19 @@ test('empty and legacy sidebar settings expose and persist the task-plugin switc
         </I18nextProvider>
       )
       try {
-        assert.ok(v.getByText('task-plugin-menu-visible'))
-        const toggle = v.getByRole('switch', { name: 'Task Plugins' })
+        const content = within(v.container)
+        const navigation = content.getByText('task-plugin-menu-visible')
+        const toggle = content.getByRole('switch', { name: 'API Extensions' })
+        const save = within(actions).getByRole('button', {
+          name: 'Save sidebar modules',
+        })
         assert.equal(toggle.getAttribute('aria-checked'), 'true')
         fireEvent.click(toggle)
-        fireEvent.click(v.getByRole('button', { name: 'Save sidebar modules' }))
-        await v.findByText('task-plugin-menu-hidden')
+        fireEvent.click(save)
+        await waitFor(() => {
+          assert.ok(navigation.isConnected)
+          assert.equal(navigation.textContent, 'task-plugin-menu-hidden')
+        })
         assert.equal(requests.length, 1)
         assert.equal(requests[0].key, 'SidebarModulesAdmin')
         assert.equal(JSON.parse(saved).admin.task_plugins, false)
@@ -585,13 +1346,15 @@ test('empty and legacy sidebar settings expose and persist the task-plugin switc
         await waitFor(() =>
           assert.equal(toggle.getAttribute('aria-checked'), 'false')
         )
-        const save = v.getByRole('button', { name: 'Save sidebar modules' })
         await waitFor(() =>
           assert.equal((save as HTMLButtonElement).disabled, false)
         )
         fireEvent.click(toggle)
         fireEvent.click(save)
-        await v.findByText('task-plugin-menu-visible')
+        await waitFor(() => {
+          assert.ok(navigation.isConnected)
+          assert.equal(navigation.textContent, 'task-plugin-menu-visible')
+        })
         assert.equal(requests.length, 2)
         assert.equal(JSON.parse(saved).admin.task_plugins, true)
         await waitFor(() => {
@@ -600,15 +1363,16 @@ test('empty and legacy sidebar settings expose and persist the task-plugin switc
         })
       } finally {
         await act(async () => {
+          await client.cancelQueries()
           v.unmount()
           client.clear()
         })
         actions.remove()
       }
+    } finally {
+      api.defaults.adapter = adapter
+      useAuthStore.getState().auth.setUser(previous)
+      window.localStorage.removeItem('status')
     }
-  } finally {
-    api.defaults.adapter = adapter
-    useAuthStore.getState().auth.setUser(previous)
-    window.localStorage.removeItem('status')
-  }
-})
+  })
+}

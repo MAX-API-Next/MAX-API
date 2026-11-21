@@ -16,6 +16,15 @@ import (
 // derives every host-owned field from executed meta. The persisted envelope
 // has a separate digest; neither one is inferred from user-supplied metadata.
 func LoadJavaScript(reader io.Reader, expectedSHA256 string) (*Package, error) {
+	return LoadJavaScriptContext(context.Background(), reader, expectedSHA256)
+}
+
+// LoadJavaScriptContext shares one metadata budget across compile and manifest
+// evaluation while preserving the original source pin and envelope identity.
+func LoadJavaScriptContext(ctx context.Context, reader io.Reader, expectedSHA256 string) (*Package, error) {
+	if err := managementContextError(ctx); err != nil {
+		return nil, err
+	}
 	if reader == nil {
 		return nil, ErrPluginCompile
 	}
@@ -28,12 +37,18 @@ func LoadJavaScript(reader io.Reader, expectedSHA256 string) (*Package, error) {
 	if err != nil || len(pin) != sha256.Size || !bytes.Equal(pin, sum[:]) {
 		return nil, ErrPluginCompile
 	}
-	program, err := CompileJavaScript(string(data), RuntimeOptions{})
+	program, err := compileJavaScriptContext(ctx, string(data), RuntimeOptions{})
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
-	m, err := program.Manifest(context.Background())
+	m, err := program.Manifest(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	document, err := common.Marshal(PackageDocument{FormatVersion: 3, Manifest: m, Source: string(data)})
@@ -41,12 +56,26 @@ func LoadJavaScript(reader io.Reader, expectedSHA256 string) (*Package, error) {
 		return nil, ErrPluginCompile
 	}
 	digest := sha256.Sum256(document)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return &Package{manifest: cloneManifest(m), source: string(data), digest: hex.EncodeToString(digest[:]), document: document, size: len(document), formatVersion: 3, program: program}, nil
 }
 
-// LoadUpload supports existing JSON packages and exact raw official plugin.js.
+// LoadUpload accepts JSON packages and raw plugin.js with an optional external
+// pin. Omission fixes the actual upload bytes without claiming publisher trust.
+// Internal loaders and persisted package identities remain strictly pinned.
 // Legacy envelopes keep their data-only behavior, regardless of their Source.
 func LoadUpload(reader io.Reader, pin string) (*Package, error) {
+	return LoadUploadContext(context.Background(), reader, pin)
+}
+
+// LoadUploadContext keeps raw-JS and envelope metadata under the same caller
+// deadline. As with LoadPackageContext, callers own their reader's I/O lifetime.
+func LoadUploadContext(ctx context.Context, reader io.Reader, pin string) (*Package, error) {
+	if err := managementContextError(ctx); err != nil {
+		return nil, err
+	}
 	if reader == nil {
 		return nil, ErrPluginCompile
 	}
@@ -54,10 +83,15 @@ func LoadUpload(reader io.Reader, pin string) (*Package, error) {
 	if err != nil || len(data) > MaxPackageBytes {
 		return nil, ErrPluginCompile
 	}
-	if bytes.HasPrefix(bytes.TrimSpace(data), []byte("{")) {
-		return LoadPackage(bytes.NewReader(data), pin)
+	if pin == "" {
+		sum := sha256.Sum256(data)
+		pin = hex.EncodeToString(sum[:])
 	}
-	return LoadJavaScript(bytes.NewReader(data), pin)
+	jsonData := bytes.TrimSpace(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}))
+	if bytes.HasPrefix(jsonData, []byte("{")) && common.ValidJSON(jsonData) {
+		return LoadPackageContext(ctx, bytes.NewReader(data), pin)
+	}
+	return LoadJavaScriptContext(ctx, bytes.NewReader(data), pin)
 }
 
 func (p *Package) SourceDigest() string {
@@ -212,7 +246,11 @@ func (p *Program) Manifest(ctx context.Context) (Manifest, error) {
 }
 
 func (p *Program) matchesManifest(m Manifest) bool {
-	compiled, err := p.Manifest(context.Background())
+	return p.matchesManifestContext(context.Background(), m)
+}
+
+func (p *Program) matchesManifestContext(ctx context.Context, m Manifest) bool {
+	compiled, err := p.Manifest(ctx)
 	if err != nil {
 		return false
 	}

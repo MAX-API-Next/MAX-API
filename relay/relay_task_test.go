@@ -2,11 +2,14 @@ package relay
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -16,14 +19,293 @@ import (
 	"github.com/MAX-API-Next/MAX-API/relay/channel"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/doubao"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/hailuo"
+	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
+
+func TestRealtimeTaskProgressCannotRestoreStaleVersion(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/realtime-task.db"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	pool, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pool.Close() })
+	previous := model.DB
+	model.DB = db
+	t.Cleanup(func() { model.DB = previous })
+	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.Channel{}))
+	service.InitHttpClient()
+	var providerCalls atomic.Int32
+	var providerDone atomic.Bool
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		providerCalls.Add(1)
+		if providerDone.Load() {
+			_, _ = io.WriteString(w, `{"name":"models/synthetic/operations/one","done":true}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"name":"models/synthetic/operations/one","done":false}`)
+	}))
+	defer provider.Close()
+	baseURL := provider.URL
+	channel := &model.Channel{Type: constant.ChannelTypeGemini, Name: "synthetic", Key: "fixture", BaseURL: &baseURL}
+	require.NoError(t, db.Create(channel).Error)
+	task := &model.Task{TaskID: "realtime-local", ChannelId: channel.Id, Status: model.TaskStatusInProgress,
+		Progress: "10%", Quota: 20, UpdatedAt: 100,
+		PrivateData: model.TaskPrivateData{UpstreamTaskID: taskcommon.EncodeLocalTaskID("models/synthetic/operations/one")}}
+	require.NoError(t, db.Create(task).Error)
+	awaiting := &model.Task{TaskID: "awaiting-provider", ChannelId: channel.Id, Status: model.TaskStatusSubmitted,
+		PrivateData: model.TaskPrivateData{AwaitingUpstreamID: true}}
+	require.NoError(t, db.Create(awaiting).Error)
+	require.Nil(t, tryRealtimeFetch(t.Context(), awaiting, false))
+	require.Zero(t, providerCalls.Load())
+	stale := *task
+	require.NotEmpty(t, tryRealtimeFetch(t.Context(), task, false))
+	progress, err := model.GetTaskPlaceholderByID(task.ID)
+	require.NoError(t, err)
+	require.Equal(t, "50%", progress.Progress)
+	require.Greater(t, progress.UpdatedAt, stale.UpdatedAt)
+	progress.Progress = "80%"
+	won, err := progress.UpdatePollingProgress(progress.Status)
+	require.NoError(t, err)
+	require.True(t, won)
+	sameStatus := stale
+	require.NotEmpty(t, tryRealtimeFetch(t.Context(), &sameStatus, false))
+	require.Equal(t, "80%", sameStatus.Progress)
+	observedVersion := progress.UpdatedAt
+	sameStored, err := model.GetTaskPlaceholderByID(task.ID)
+	require.NoError(t, err)
+	require.Equal(t, observedVersion, sameStored.UpdatedAt)
+	require.Equal(t, "80%", sameStored.Progress)
+	progress.Status = model.TaskStatusQueued
+	won, err = progress.UpdatePollingProgress(model.TaskStatusInProgress)
+	require.NoError(t, err)
+	require.True(t, won)
+
+	openAI := stale
+	response := tryRealtimeFetch(t.Context(), &stale, false)
+	require.Contains(t, string(response), `"status":"queued"`)
+	require.Equal(t, "80%", stale.Progress)
+	require.Nil(t, tryRealtimeFetch(t.Context(), &openAI, true))
+	require.EqualValues(t, model.TaskStatusQueued, openAI.Status)
+	require.Equal(t, "80%", openAI.Progress)
+	stored, err := model.GetTaskPlaceholderByID(stale.ID)
+	require.NoError(t, err)
+	require.Equal(t, "80%", stored.Progress)
+	require.Equal(t, progress.UpdatedAt, stored.UpdatedAt)
+	require.NoError(t, db.Model(stored).UpdateColumn("status", model.TaskStatusFailure).Error)
+	providerDone.Store(true)
+	staleTerminal := stale
+	require.Contains(t, string(tryRealtimeFetch(t.Context(), &staleTerminal, false)), `"status":"failed"`, "the settled status wins over a stale realtime success")
+	require.Equal(t, model.TaskStatus(model.TaskStatusFailure), staleTerminal.Status)
+	providerDone.Store(false)
+	terminal, err := model.GetTaskPlaceholderByID(task.ID)
+	require.NoError(t, err)
+	before := providerCalls.Load()
+	require.Contains(t, string(tryRealtimeFetch(t.Context(), terminal, false)), `"status":"failed"`)
+	terminal.PrivateData.ResultURL = "https://fixture.invalid/stored.webm"
+	require.NoError(t, model.DB.Model(terminal).UpdateColumns(map[string]any{
+		"status": model.TaskStatusSuccess, "data": []byte(`{"response":{"videos":[{"mimeType":"video/webm"}]}}`), "private_data": terminal.PrivateData,
+	}).Error)
+	terminal, err = model.GetTaskPlaceholderByID(task.ID)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"code":"success","message":"","data":{"error":null,"format":"video/webm","metadata":null,"status":"succeeded","task_id":"realtime-local","url":"https://fixture.invalid/stored.webm"}}`, string(tryRealtimeFetch(t.Context(), terminal, false)))
+	require.Nil(t, tryRealtimeFetch(t.Context(), terminal, true))
+	require.Equal(t, before, providerCalls.Load())
+	require.EqualValues(t, model.TaskStatusSuccess, terminal.Status)
+
+	require.NoError(t, db.Model(stored).UpdateColumns(map[string]any{
+		"status": model.TaskStatusInProgress, "private_data": `{"upstream_task_id":42}`,
+	}).Error)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/video/status", nil)
+	c.Set("task_id", stored.TaskID)
+	c.Set("id", stored.UserId)
+	publicResponse, taskErr := videoFetchByIDRespBodyBuilder(c)
+	require.Nil(t, taskErr)
+	var public dto.TaskResponse[dto.TaskDto]
+	require.NoError(t, common.Unmarshal(publicResponse, &public))
+	require.Equal(t, stored.TaskID, public.Data.TaskID)
+	require.EqualValues(t, model.TaskStatusInProgress, public.Data.Status)
+	require.Equal(t, "80%", public.Data.Progress)
+	require.Empty(t, public.Data.ResultURL)
+	require.Equal(t, before, providerCalls.Load(), "unreadable private metadata cannot dispatch")
+	older := *terminal
+	older.Status, older.Progress, older.UpdatedAt = model.TaskStatusInProgress, "15%", 100
+	response = tryRealtimeFetch(t.Context(), &older, false)
+	require.Contains(t, string(response), `"status":"processing"`)
+	require.Contains(t, string(response), `"url":""`)
+	require.Equal(t, "80%", older.Progress)
+	require.True(t, older.PrivateDataUnreadable())
+	require.Equal(t, before+1, providerCalls.Load(), "the public reload cannot dispatch again")
+	_, _, err = model.GetByTaskId(stored.UserId, stored.TaskID)
+	require.Error(t, err, "the strict billing lookup rejects the same broken private data")
+	const readHook = "synthetic:fail-realtime-status-reread"
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register(readHook, func(tx *gorm.DB) {
+		if tx.Statement.Table == "tasks" {
+			_ = tx.AddError(errors.New("synthetic task read outage"))
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(readHook) })
+	observed := *terminal
+	observed.Status, observed.Progress, observed.UpdatedAt = model.TaskStatusInProgress, "15%", 100
+	response = tryRealtimeFetch(t.Context(), &observed, false)
+	require.Contains(t, string(response), `"format":"video/webm"`)
+	require.Equal(t, "15%", observed.Progress)
+	require.Equal(t, before+2, providerCalls.Load())
+}
+
+func placeholderSnapshotInQuery(tx *gorm.DB) *model.Task {
+	if task, ok := tx.Statement.Dest.(*model.Task); ok {
+		return task
+	}
+	value := reflect.Indirect(reflect.ValueOf(tx.Statement.Dest))
+	if value.IsValid() && value.Kind() == reflect.Struct {
+		field := value.FieldByName("Task")
+		if field.IsValid() && field.CanAddr() {
+			task, _ := field.Addr().Interface().(*model.Task)
+			return task
+		}
+	}
+	return nil
+}
+
+func TestEnsureTaskPlaceholderNullVersionMatchesOnlyNull(t *testing.T) {
+	for _, changedToZero := range []bool{false, true} {
+		t.Run(fmt.Sprintf("changed-to-zero-%t", changedToZero), func(t *testing.T) {
+			db, err := gorm.Open(sqlite.Open(t.TempDir()+"/nullable-retry.db"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+			require.NoError(t, err)
+			require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.BillingSettlement{}))
+			previous, oldSQLite := model.DB, common.UsingSQLite
+			model.DB, common.UsingSQLite = db, true
+			t.Cleanup(func() {
+				model.DB, common.UsingSQLite = previous, oldSQLite
+				if pool, err := db.DB(); err == nil {
+					_ = pool.Close()
+				}
+			})
+			row := &model.Task{TaskID: "null-retry", UserId: 1, ChannelId: 1, Status: model.TaskStatusSubmitted, Quota: 10, PrivateData: model.TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: "original"}}
+			require.NoError(t, db.Create(row).Error)
+			require.NoError(t, db.Model(row).UpdateColumn("updated_at", nil).Error)
+			injected := false
+			require.NoError(t, db.Callback().Query().After("gorm:query").Register("replace-null-with-zero", func(tx *gorm.DB) {
+				if loaded := placeholderSnapshotInQuery(tx); loaded != nil && loaded.ID == row.ID && changedToZero && !injected {
+					injected = true
+					require.NoError(t, db.Model(&model.Task{}).Where("id = ?", row.ID).UpdateColumn("updated_at", 0).Error)
+				}
+			}))
+			info := &relaycommon.RelayInfo{RequestId: "retry", UserId: 1, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 99}, TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: row.ID}}
+			result, taskErr := ensureTaskPlaceholder("", info, 10)
+			require.NoError(t, db.Callback().Query().Remove("replace-null-with-zero"))
+			if changedToZero {
+				require.True(t, injected)
+				require.NotNil(t, taskErr)
+				require.Nil(t, result)
+				var stored model.Task
+				require.NoError(t, db.First(&stored, row.ID).Error)
+				require.Equal(t, 1, stored.ChannelId)
+				require.Equal(t, "original", stored.PrivateData.BillingRequestId)
+			} else {
+				require.Nil(t, taskErr)
+				require.NotNil(t, result)
+				require.Equal(t, 99, result.ChannelId)
+				require.Positive(t, result.UpdatedAt)
+			}
+		})
+	}
+}
+
+func TestEnsureTaskPlaceholderRetriesOnlyClaimChanges(t *testing.T) {
+	for _, change := range []string{"claim", "continuous-claims", "private-data", "manual-finalize", "confirmed-upstream", "terminal"} {
+		t.Run(change, func(t *testing.T) {
+			db, err := gorm.Open(sqlite.Open(t.TempDir()+"/retry.db"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+			require.NoError(t, err)
+			require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskSubmitFailureRecovery{}, &model.BillingSettlement{}))
+			previous, oldSQLite := model.DB, common.UsingSQLite
+			model.DB, common.UsingSQLite = db, true
+			t.Cleanup(func() {
+				model.DB, common.UsingSQLite = previous, oldSQLite
+				pool, _ := db.DB()
+				if pool != nil {
+					_ = pool.Close()
+				}
+			})
+			row := &model.Task{TaskID: "retry-placeholder", UserId: 1, ChannelId: 1, Status: model.TaskStatusSubmitted, Quota: 10, UpdatedAt: 100, PrivateData: model.TaskPrivateData{AwaitingUpstreamID: true, BillingRequestId: "original"}}
+			require.NoError(t, db.Create(row).Error)
+			injected := 0
+			require.NoError(t, db.Callback().Query().After("gorm:query").Register("poll-claims-between-read-and-rewrite", func(tx *gorm.DB) {
+				loaded := placeholderSnapshotInQuery(tx)
+				if loaded == nil || tx.Error != nil || loaded.ID != row.ID || injected > 0 && change != "continuous-claims" {
+					return
+				}
+				injected++
+				if change == "manual-finalize" {
+					input := model.BillingSettlementInput{OperationKey: model.BillingTaskFinalizeOperationKey(row.ID), Source: model.BillingSettlementSourceWallet, UserID: 1, TaskID: row.ID, TaskQuota: 10, TaskQuotaTarget: 10}
+					won, err := loaded.UpdateWithStatusAndManualSettlement(model.TaskStatusSubmitted, loaded.UpdatedAt, input, "manual decision")
+					require.NoError(t, err)
+					require.True(t, won)
+					return
+				}
+				updates := map[string]any{"updated_at": loaded.UpdatedAt + 1}
+				if change == "terminal" {
+					updates["status"] = model.TaskStatusFailure
+				}
+				if change == "private-data" || change == "confirmed-upstream" {
+					private := loaded.PrivateData
+					if change == "private-data" {
+						private.BillingRequestId = "newer-owner"
+					} else {
+						private.UpstreamTaskID, private.AwaitingUpstreamID = "accepted-provider-id", false
+					}
+					updates["private_data"] = private
+				}
+				require.NoError(t, db.Model(&model.Task{}).Where("id = ?", row.ID).Updates(updates).Error)
+			}))
+			info := &relaycommon.RelayInfo{RequestId: "retry-request", UserId: 1, TokenId: 2, BillingSource: model.BillingSettlementSourceWallet, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 99}, TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: row.ID}}
+			result, taskErr := ensureTaskPlaceholder("", info, 10)
+			require.NoError(t, db.Callback().Query().Remove("poll-claims-between-read-and-rewrite"))
+			var fresh model.Task
+			require.NoError(t, db.First(&fresh, row.ID).Error)
+			if change == "claim" {
+				require.Nil(t, taskErr)
+				require.NotNil(t, result)
+				require.Equal(t, "retry-request", fresh.PrivateData.BillingRequestId)
+				require.Equal(t, 99, fresh.ChannelId)
+				require.Equal(t, result.UpdatedAt, fresh.UpdatedAt)
+			} else {
+				require.NotNil(t, taskErr)
+				require.Nil(t, result)
+				require.Equal(t, 1, fresh.ChannelId)
+				require.Equal(t, 10, fresh.Quota)
+				if change == "private-data" {
+					require.Equal(t, "newer-owner", fresh.PrivateData.BillingRequestId)
+				}
+				if change == "confirmed-upstream" {
+					require.Equal(t, "accepted-provider-id", fresh.PrivateData.UpstreamTaskID)
+				}
+				if change == "terminal" || change == "confirmed-upstream" {
+					require.Equal(t, "task_lifecycle_advanced", taskErr.Code)
+					require.Equal(t, http.StatusConflict, taskErr.StatusCode)
+				}
+			}
+			if change == "continuous-claims" {
+				require.Equal(t, 3, injected, "two bounded reloads, no provider or money replay")
+				require.Equal(t, "task_rewrite_conflict", taskErr.Code)
+				require.Equal(t, http.StatusConflict, taskErr.StatusCode)
+			} else {
+				require.Equal(t, 1, injected)
+			}
+		})
+	}
+}
 
 type recordingTaskReservationBilling struct {
 	preConsumed int

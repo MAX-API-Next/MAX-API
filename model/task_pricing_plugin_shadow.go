@@ -2,7 +2,6 @@
 package model
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"slices"
@@ -10,7 +9,6 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
-	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskpricing"
 	"github.com/MAX-API-Next/MAX-API/types"
 )
@@ -23,7 +21,7 @@ func ReadTaskPricingPluginShadowContext(ctx context.Context, request TaskPricing
 	return readTaskPricingShadowWithPlugin(DB, ctx, request, time.Now().UTC(), &binding, registry)
 }
 
-func approvedPluginShadow(a *pricingAuthority, request TaskPricingShadowRequest, binding types.TaskPluginBinding, registry *taskpricing.PhaseRegistry) (ModelPricingContext, string, error) {
+func approvedPluginShadow(ctx context.Context, a *pricingAuthority, request TaskPricingShadowRequest, binding types.TaskPluginBinding, registry *taskpricing.PhaseRegistry) (ModelPricingContext, string, error) {
 	rejected := func() (ModelPricingContext, string, error) {
 		return ModelPricingContext{}, "", fmt.Errorf("plugin pricing has no matching configured binding and vetted package contract")
 	}
@@ -32,7 +30,11 @@ func approvedPluginShadow(a *pricingAuthority, request TaskPricingShadowRequest,
 		binding.ChannelID != request.ChannelID || binding.Model != request.ModelName || binding.SourceID != binding.PluginKey {
 		return rejected()
 	}
-	selected, found := findPricingContext(a.contexts(request.ModelName), fmt.Sprintf("channel:%d", request.ChannelID))
+	contexts, err := a.contextsContext(ctx, request.ModelName)
+	if err != nil {
+		return ModelPricingContext{}, "", err
+	}
+	selected, found := findPricingContext(contexts, fmt.Sprintf("channel:%d", request.ChannelID))
 	channel, valid := selected.binding.(pricingChannel)
 	if !found || !valid || channel.Status != 1 || !slices.Contains(strings.Split(channel.Models, ","), request.ModelName) ||
 		selected.Profile != taskpricing.NewAPITask || !slices.Contains(selected.Groups, request.Group) {
@@ -50,8 +52,8 @@ func approvedPluginShadow(a *pricingAuthority, request TaskPricingShadowRequest,
 		if !entry.Active || !entry.Enabled || entry.Revoked || entry.Digest != binding.PackageDigest {
 			continue
 		}
-		pkg, err := taskplugin.LoadPackage(bytes.NewReader(entry.Document), entry.Digest)
-		if err != nil {
+		pkg := a.validatedPackages[entry.Digest]
+		if pkg == nil {
 			return rejected()
 		}
 		m := pkg.Manifest()

@@ -31,6 +31,83 @@ const original = api.defaults.adapter
 afterEach(() => {
   api.defaults.adapter = original
 })
+
+test('known mapping repair errors preserve identifiers for reactive feedback', async () => {
+  const mutate = () =>
+    taskPluginAPI.mutate({
+      action: 'delete',
+      key: 'kling',
+      version: '1.2.0',
+      expected_revision: '4',
+      deletion_nodes_ready: true,
+    })
+  for (const channelId of [
+    23,
+    -23,
+    '0',
+    '9007199254740993',
+    '-9007199254740993',
+  ]) {
+    respond(
+      {
+        success: false,
+        code: 'invalid_channel_mapping',
+        channel_id: channelId,
+        message: 'English fallback',
+      },
+      422
+    )
+    await assert.rejects(
+      mutate,
+      (e) =>
+        e instanceof PluginError &&
+        e.kind === 'rejected' &&
+        e.message === 'English fallback' &&
+        e.repair?.code === 'invalid_channel_mapping' &&
+        e.repair.channel_id === String(channelId)
+    )
+  }
+  for (const channelId of [
+    Number.MIN_SAFE_INTEGER - 1,
+    Number.MAX_SAFE_INTEGER + 1,
+    '-0',
+    '+23',
+  ]) {
+    respond(
+      {
+        success: false,
+        code: 'invalid_channel_mapping',
+        channel_id: channelId,
+        message: 'English fallback',
+      },
+      422
+    )
+    await assert.rejects(mutate, (e) => e instanceof PluginError && !e.repair)
+  }
+})
+
+test('task data repair errors preserve canonical signed historical IDs', async () => {
+  for (const taskId of ['-9007199254740993', '-0', '+23']) {
+    respond({ success: false, code: 'invalid_task_data', task_id: taskId }, 422)
+    await assert.rejects(
+      () =>
+        taskPluginAPI.mutate({
+          action: 'delete',
+          key: 'kling',
+          version: '1.2.0',
+          expected_revision: '4',
+          deletion_nodes_ready: true,
+        }),
+      (e) =>
+        e instanceof PluginError &&
+        (taskId === '-9007199254740993'
+          ? e.repair?.code === 'invalid_task_data' &&
+            e.repair.task_id === taskId
+          : !e.repair)
+    )
+  }
+})
+
 function respond(data: unknown, status = 200) {
   const calls: InternalAxiosRequestConfig[] = []
   api.defaults.adapter = async (config) => {
@@ -83,8 +160,46 @@ test('validation rejects a receipt for different pinned bytes', async () => {
         document: 'synthetic',
         expected_sha256: 'b'.repeat(64),
       }),
-    (e) => e instanceof PluginError && e.kind === 'read'
+    (e) =>
+      e instanceof PluginError &&
+      e.kind === 'read' &&
+      e.message === 'Invalid task plugin response'
   )
+})
+
+test('API fallback errors retain the established translation keys', async () => {
+  for (const [payload, message, kind] of [
+    [{ success: false }, 'Invalid task plugin request', 'rejected'],
+    [{ success: true, data: {} }, 'Invalid task plugin response', 'read'],
+  ] as const) {
+    const calls = respond(payload)
+    await assert.rejects(
+      () => taskPluginAPI.read(),
+      (e) =>
+        e instanceof PluginError && e.message === message && e.kind === kind
+    )
+    assert.equal(calls.length, 1)
+  }
+})
+
+test('custom uploads may omit or leave the external SHA-256 empty', async () => {
+  for (const upload of [
+    { document: 'custom upload' },
+    { document: 'custom upload', expected_sha256: '' },
+  ]) {
+    const calls = respond({ success: true, data: entry })
+    const result = await taskPluginAPI.validate(upload)
+    assert.equal(result.digest, entry.digest)
+    assert.equal(calls.length, 1)
+    const sent = JSON.parse(calls[0].data)
+    assert.equal(sent.document, upload.document)
+    assert.equal(
+      Object.hasOwn(sent, 'expected_sha256'),
+      Object.hasOwn(upload, 'expected_sha256')
+    )
+    if (Object.hasOwn(upload, 'expected_sha256'))
+      assert.equal(sent.expected_sha256, '')
+  }
 })
 
 test('official JavaScript validates its source pin independently of the stored envelope', async () => {
@@ -153,12 +268,87 @@ test('mutations classify conflicts and unknown receipts without retrying', async
   await assert.rejects(
     () =>
       taskPluginAPI.mutate({
-        action: 'revoke',
+        action: 'delete',
         key: 'kling',
         version: '1.2.0',
         expected_revision: '4',
+        deletion_nodes_ready: true,
       }),
     (e) => e instanceof PluginError && e.kind === 'unknown'
   )
   assert.equal(calls.length, 1)
+})
+
+test('only explicit not-committed 503 responses reject a mutation safely', async () => {
+  for (const [payload, kind] of [
+    [{ code: 'catalog_operation_not_committed', committed: false }, 'rejected'],
+    [
+      {
+        code: 'catalog_operation_not_committed',
+        success: true,
+        committed: false,
+      },
+      'unknown',
+    ],
+    [
+      {
+        code: 'catalog_operation_not_committed',
+        success: undefined,
+        committed: false,
+      },
+      'unknown',
+    ],
+    [{ committed: false }, 'unknown'],
+    [{ code: 'catalog_operation_not_committed', committed: true }, 'unknown'],
+    [
+      { code: 'catalog_operation_not_committed', committed: 'false' },
+      'unknown',
+    ],
+    [{}, 'unknown'],
+  ] as const) {
+    const calls = respond({ success: false, ...payload }, 503)
+    await assert.rejects(
+      () =>
+        taskPluginAPI.mutate({
+          action: 'disable',
+          key: 'kling',
+          version: '1.2.0',
+          expected_revision: '4',
+        }),
+      (e) => e instanceof PluginError && e.kind === kind
+    )
+    assert.equal(calls.length, 1)
+  }
+  respond({ success: false, committed: false }, 503)
+  await assert.rejects(
+    () => taskPluginAPI.read(),
+    (e) => e instanceof PluginError && e.kind === 'read'
+  )
+})
+
+test('known no-commit code maps to an established translated recovery instruction', async () => {
+  respond(
+    {
+      success: false,
+      code: 'catalog_operation_not_committed',
+      committed: false,
+      message:
+        'Task plugin catalog mutation stopped before commit; refresh and retry',
+    },
+    503
+  )
+  await assert.rejects(
+    () =>
+      taskPluginAPI.mutate({
+        action: 'disable',
+        key: 'kling',
+        version: '1.2.0',
+        expected_revision: '4',
+      }),
+    (e) =>
+      e instanceof PluginError &&
+      e.kind === 'rejected' &&
+      e.message ===
+        'Task plugin catalog unavailable; reread before another mutation'
+  )
 })

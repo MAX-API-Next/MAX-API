@@ -246,7 +246,7 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	}
 	uri = taskcommon.BuildTaskQueryURL(baseUrl, body, uri)
 
-	req, err := http.NewRequest(http.MethodGet, uri, nil)
+	req, err := http.NewRequestWithContext(taskcommon.TaskQueryContext(body), http.MethodGet, uri, nil)
 	if err != nil {
 		return nil, err
 	}

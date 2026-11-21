@@ -1,9 +1,10 @@
 // Copyright (C) 2023-2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
+import { PluginError } from './api'
 
 type TaskPluginFeedbackProps = {
-  error: string
+  error: string | PluginError
   readError: string
   notice: string
   unknown: boolean
@@ -18,11 +19,34 @@ type TaskPluginFeedbackProps = {
 // Render feedback in the active surface so modal isolation cannot hide it.
 export function TaskPluginFeedback(props: TaskPluginFeedbackProps) {
   const { t } = useTranslation()
+  const repair =
+    props.error instanceof PluginError ? props.error.repair : undefined
+  const fallback =
+    typeof props.error === 'string' ? props.error : props.error.message
+  let errorMessage: string
+  if (repair?.code === 'invalid_channel_mapping') {
+    errorMessage = t(
+      'Channel {{id}} has an invalid model mapping; repair it before deleting the API extension',
+      { id: repair.channel_id, defaultValue: fallback }
+    )
+  } else if (repair?.code === 'invalid_task_data') {
+    errorMessage = t(
+      'Task record {{id}} has invalid private data; repair it before deleting the API extension',
+      { id: repair.task_id, defaultValue: fallback }
+    )
+  } else if (repair?.code === 'invalid_plugin_pricing') {
+    errorMessage = t(
+      'Plugin pricing option {{key}} is invalid; repair it before deleting the API extension',
+      { key: repair.option_key, defaultValue: fallback }
+    )
+  } else {
+    errorMessage = t(fallback)
+  }
   return (
     <>
       {props.error && (
         <p role='alert' className='text-destructive'>
-          {t(props.error)}
+          {errorMessage}
         </p>
       )}
       {props.readError && (

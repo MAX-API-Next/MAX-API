@@ -213,7 +213,7 @@ func seedSQLiteUpgradeFixture(t *testing.T, mode string) string {
 		if item.State == "complete" {
 			record.EffectStatus = BillingSettlementEffectApplied
 		}
-		require.NoError(t, seed.Create(&record).Error)
+		require.NoError(t, seed.Omit("TokenMissingAtApply").Create(&record).Error)
 		if item.State == "effect_logged" || item.State == "complete" {
 			logs := logDB.Session(&gorm.Session{SkipHooks: true})
 			require.NoError(t, logs.Create(&Log{UserId: item.ID, Type: LogTypeConsume, Quota: int(item.Quota), PromptTokens: prompt,
