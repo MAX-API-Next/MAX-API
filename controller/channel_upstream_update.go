@@ -363,6 +363,9 @@ func checkAndPersistChannelUpstreamModelUpdates(
 	force bool,
 	allowAutoApply bool,
 ) (modelsChanged bool, autoAdded int, err error) {
+	if channel.Type == constant.ChannelTypeTaskPlugin {
+		return false, 0, model.ErrTaskPluginUpstreamModelUpdates
+	}
 	now := common.GetTimestamp()
 	if !force {
 		minInterval := getUpstreamModelUpdateMinCheckIntervalSeconds()
@@ -539,16 +542,7 @@ func runChannelUpstreamModelUpdateTaskOnce() {
 
 	lastID := 0
 	for {
-		var channels []*model.Channel
-		query := model.DB.
-			Select(channelUpstreamModelUpdateSelectFields).
-			Where("status = ?", common.ChannelStatusEnabled).
-			Order("id asc").
-			Limit(channelUpstreamModelUpdateTaskBatchSize)
-		if lastID > 0 {
-			query = query.Where("id > ?", lastID)
-		}
-		err := query.Find(&channels).Error
+		channels, err := findEnabledChannelsAfterID(lastID, channelUpstreamModelUpdateTaskBatchSize)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("upstream model update task query failed: %v", err))
 			break
@@ -680,6 +674,17 @@ func StartChannelUpstreamModelUpdateTask() {
 	})
 }
 
+func getChannelForUpstreamModelUpdate(id int) (*model.Channel, error) {
+	channel, err := model.GetChannelById(id, true)
+	if err != nil {
+		return nil, err
+	}
+	if channel.Type == constant.ChannelTypeTaskPlugin {
+		return nil, model.ErrTaskPluginUpstreamModelUpdates
+	}
+	return channel, nil
+}
+
 func ApplyChannelUpstreamModelUpdates(c *gin.Context) {
 	var req applyChannelUpstreamModelUpdatesRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -694,7 +699,7 @@ func ApplyChannelUpstreamModelUpdates(c *gin.Context) {
 		return
 	}
 
-	channel, err := model.GetChannelById(req.ID, true)
+	channel, err := getChannelForUpstreamModelUpdate(req.ID)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -750,7 +755,7 @@ func DetectChannelUpstreamModelUpdates(c *gin.Context) {
 		return
 	}
 
-	channel, err := model.GetChannelById(req.ID, true)
+	channel, err := getChannelForUpstreamModelUpdate(req.ID)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -793,6 +798,9 @@ func applyChannelUpstreamModelUpdates(
 	modelsChanged bool,
 	err error,
 ) {
+	if channel.Type == constant.ChannelTypeTaskPlugin {
+		return nil, nil, nil, nil, false, model.ErrTaskPluginUpstreamModelUpdates
+	}
 	settings := channel.GetOtherSettings()
 	pendingAddModels := normalizeModelNames(settings.UpstreamModelUpdateLastDetectedModels)
 	pendingRemoveModels := normalizeModelNames(settings.UpstreamModelUpdateLastRemovedModels)
@@ -839,6 +847,7 @@ func findEnabledChannelsAfterID(lastID int, batchSize int) ([]*model.Channel, er
 	query := model.DB.
 		Select(channelUpstreamModelUpdateSelectFields).
 		Where("status = ?", common.ChannelStatusEnabled).
+		Where("(type <> ? OR type IS NULL)", constant.ChannelTypeTaskPlugin).
 		Order("id asc").
 		Limit(batchSize)
 	if lastID > 0 {

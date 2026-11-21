@@ -910,6 +910,9 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     if (typeof settingsObj.upstream_model_update_last_check_time !== 'number') {
       settingsObj.upstream_model_update_last_check_time = 0
     }
+  } else if (formData.type === CHANNEL_TYPE_TASK_PLUGIN) {
+    delete settingsObj.upstream_model_update_check_enabled
+    delete settingsObj.upstream_model_update_auto_sync_enabled
   }
 
   const isVideoTaskChannel = VIDEO_TASK_CHANNEL_TYPES.has(formData.type)

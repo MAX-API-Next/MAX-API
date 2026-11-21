@@ -20,6 +20,14 @@ function describeUsageField(
   return field.enum.join('/')
 }
 
+function hasTaskUsageCall(expression: string): boolean {
+  const unquoted = expression.replace(
+    /"(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*'/g,
+    ' '
+  )
+  return /\bu\s*\(/.test(unquoted)
+}
+
 function matchesUsageField(field: TaskUsageField, other: TaskUsageField) {
   if ('unit' in field)
     return (
@@ -70,7 +78,7 @@ export function ModelPricingFields(props: {
   )
   const defaultTaskSchema =
     !plugin &&
-    (hasTaskDefault || /\bu\s*\(/.test(expression)) &&
+    (hasTaskDefault || hasTaskUsageCall(expression)) &&
     defaultSchemas.length
       ? Object.fromEntries(
           Object.entries(defaultSchemas[0]).filter(([key, field]) =>

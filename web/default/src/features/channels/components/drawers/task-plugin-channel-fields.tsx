@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea'
 import type { PluginEntry } from '@/features/task-plugins/api'
 import type { ChannelFormValues } from '../../lib'
 import {
+  acceptsTaskPluginParameter,
   readTaskPluginSettings,
   requiredTaskPluginParameters,
   taskPluginUpstreams,
@@ -23,6 +24,7 @@ type ParameterValue = string | number | boolean
 function ParameterInput(props: {
   field: TaskPluginParameterField
   required: boolean
+  invalid: boolean
   value?: ParameterValue
   onChange: (value?: ParameterValue) => void
 }) {
@@ -33,9 +35,7 @@ function ParameterInput(props: {
     const options =
       field.type === 'boolean' ? [true, false] : (field.enum ?? [])
     const value = props.value === undefined ? '' : JSON.stringify(props.value)
-    const unavailable =
-      props.value !== undefined &&
-      !options.some((option) => option === props.value)
+    const unavailable = props.invalid
     return (
       <select
         className={selectClass}
@@ -74,21 +74,32 @@ function ParameterInput(props: {
       <Textarea
         required={props.required && props.value === undefined}
         aria-required={props.required}
+        aria-invalid={props.invalid || undefined}
         value={String(props.value ?? '')}
         placeholder={placeholder}
         onChange={(event) => props.onChange(event.target.value || undefined)}
       />
     )
   }
-  const numeric = field.type === 'number' || field.type === 'integer'
+  const integer = field.type === 'integer'
+  const numeric = field.type === 'number' || integer
+  const minimum =
+    integer && field.minimum !== undefined
+      ? Math.ceil(field.minimum)
+      : field.minimum
+  const maximum =
+    integer && field.maximum !== undefined
+      ? Math.floor(field.maximum)
+      : field.maximum
   return (
     <Input
       required={props.required && (numeric || props.value === undefined)}
       aria-required={props.required}
+      aria-invalid={props.invalid || undefined}
       type={numeric ? 'number' : 'text'}
-      min={field.minimum}
-      max={field.maximum}
-      step={field.type === 'integer' ? 1 : 'any'}
+      min={minimum}
+      max={maximum}
+      step={integer ? 1 : 'any'}
       value={String(props.value ?? '')}
       placeholder={placeholder}
       onChange={(event) => {
@@ -276,6 +287,8 @@ export function TaskPluginChannelFields(props: {
             const value = Object.hasOwn(config, name) ? config[name] : undefined
             const required = requiredParameters.includes(name)
             const label = field.title || name
+            const invalid =
+              value !== undefined && !acceptsTaskPluginParameter(field, value)
             const canToggleEmpty =
               field.type === 'string' &&
               !field.enum &&
@@ -288,6 +301,7 @@ export function TaskPluginChannelFields(props: {
                   <ParameterInput
                     field={field}
                     required={required}
+                    invalid={invalid}
                     value={value}
                     onChange={(next) => changeParameter(name, next)}
                   />
@@ -297,7 +311,14 @@ export function TaskPluginChannelFields(props: {
                     </span>
                   )}
                 </label>
-                {canToggleEmpty && (
+                {invalid && (
+                  <p className='text-destructive text-xs'>
+                    {t('Invalid task plugin parameters: {{parameters}}', {
+                      parameters: label,
+                    })}
+                  </p>
+                )}
+                {(canToggleEmpty || invalid) && (
                   <Button
                     type='button'
                     size='sm'

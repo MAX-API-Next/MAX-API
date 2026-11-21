@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Invalid task plugin parameters: {{parameters}}": "無効なタスクプラグインパラメーター：{{parameters}}",
     "Choose a supported parameter value": "対応しているパラメーター値を選択してください",
     "Set {{name}} to an empty string": "{{name}} を空文字列に設定",
     "Unset {{name}}": "{{name}} の設定を解除",

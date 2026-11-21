@@ -777,6 +777,10 @@ test('default visual token pricing generates existing per-million coefficients',
   assert.equal((f.getByLabelText('Input price') as HTMLInputElement).value, '4')
   fireEvent.change(f.getByLabelText('Input price'), { target: { value: '2' } })
   assert.equal(code().value, 'p * 2 + c * 5')
+  fireEvent.change(code(), { target: { value: 'tier("u(", p * 4 + c * 5)' } })
+  assert.equal((f.getByLabelText('Input price') as HTMLInputElement).value, '4')
+  fireEvent.change(f.getByLabelText('Input price'), { target: { value: '2' } })
+  assert.equal(code().value, 'tier("u(", p * 2 + c * 5)')
   fireEvent.click(f.getByRole('button', { name: 'Save model pricing' }))
   await waitFor(() => assert.equal(f.writes.length, 1))
   assert.equal(

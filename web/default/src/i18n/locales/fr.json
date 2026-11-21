@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Invalid task plugin parameters: {{parameters}}": "Paramètres du plugin de tâches non valides : {{parameters}}",
     "Choose a supported parameter value": "Choisissez une valeur de paramètre prise en charge",
     "Set {{name}} to an empty string": "Définir {{name}} sur une chaîne vide",
     "Unset {{name}}": "Supprimer la valeur de {{name}}",

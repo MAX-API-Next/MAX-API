@@ -22,8 +22,13 @@ type TaskPluginChannelSettings struct {
 	Config   json.RawMessage `json:"task_plugin_config"`
 }
 
+var ErrTaskPluginUpstreamModelUpdates = errors.New("Task plugin channels do not support upstream model updates")
+
 func (channel *Channel) BeforeCreate(tx *gorm.DB) error {
 	if channel.Type == constant.ChannelTypeTaskPlugin {
+		if err := validateTaskPluginUpstreamModelSettings(channel); err != nil {
+			return err
+		}
 		if err := lockTaskPluginCatalogHead(tx); err != nil {
 			return taskplugin.ErrCatalogUnavailable
 		}
@@ -86,6 +91,11 @@ func taskPluginBindingFields(channel *Channel) map[string]any {
 }
 
 func validateTaskPluginChannelUpdate(tx *gorm.DB, channel, observed *Channel, updates map[string]any) error {
+	if _, selected := updates["settings"]; selected {
+		if err := validateTaskPluginUpstreamModelSettings(channel); err != nil {
+			return err
+		}
+	}
 	proposed := taskPluginBindingFields(channel)
 	bindingChanged := false
 	for column := range proposed {
@@ -125,6 +135,17 @@ func validateTaskPluginChannelUpdate(tx *gorm.DB, channel, observed *Channel, up
 		}
 	}
 	return validateTaskPluginChannelWrite(tx, channel)
+}
+
+func validateTaskPluginUpstreamModelSettings(channel *Channel) error {
+	settings, err := channel.ParseOtherSettings()
+	if err != nil {
+		return err
+	}
+	if settings.UpstreamModelUpdateCheckEnabled || settings.UpstreamModelUpdateAutoSyncEnabled {
+		return ErrTaskPluginUpstreamModelUpdates
+	}
+	return nil
 }
 
 // Call with the catalog head locked to serialize with catalog mutations.

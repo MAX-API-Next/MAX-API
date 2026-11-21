@@ -62,6 +62,8 @@ describe('channel form settings round trip', () => {
     const reopened = transformChannelToFormDefaults(
       channelSchema.parse({
         ...channel,
+        settings:
+          '{"upstream_model_update_check_enabled":true,"upstream_model_update_auto_sync_enabled":true}',
         id: 8,
         created_time: 1,
         test_time: 0,
@@ -75,6 +77,12 @@ describe('channel form settings round trip', () => {
     assert.equal(reopened.expected_task_plugin_digest, undefined)
     reopened.expected_task_plugin_digest = 'refreshed-digest'
     const update = transformFormDataToUpdatePayload(reopened, 8)
+    const savedSettings = JSON.parse(update.settings ?? '{}')
+    assert.equal(savedSettings.upstream_model_update_check_enabled, undefined)
+    assert.equal(
+      savedSettings.upstream_model_update_auto_sync_enabled,
+      undefined
+    )
     assert.equal(update.key, undefined)
     assert.equal(update.model_mapping, form.model_mapping)
     assert.equal(update.expected_task_plugin_digest, 'refreshed-digest')

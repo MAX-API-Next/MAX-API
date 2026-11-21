@@ -122,12 +122,42 @@ func TestTaskPluginChannelConfigAndPricingLifecycle(t *testing.T) {
 	r = call("POST", "/api/channel/", add, rootCookies)
 	require.Contains(t, r.Body.String(), "must be declared")
 	channel["model_mapping"] = `{"isolated-kling":"kling-v2-5-turbo"}`
+	const automaticModelSettings = `{"upstream_model_update_check_enabled":true,"upstream_model_update_auto_sync_enabled":true,"upstream_model_update_last_detected_models":["undeclared-model"]}`
+	channel["settings"] = automaticModelSettings
+	r = call("POST", "/api/channel/", add, rootCookies)
+	require.Contains(t, r.Body.String(), model.ErrTaskPluginUpstreamModelUpdates.Error())
+	delete(channel, "settings")
 	r = call("POST", "/api/channel/", add, rootCookies)
 	require.Contains(t, r.Body.String(), `"success":true`, r.Body.String())
 	var stored model.Channel
 	require.NoError(t, db.First(&stored, "name = ?", channel["name"]).Error)
 	require.Empty(t, stored.TaskPluginExpectedDigest)
 	require.NotContains(t, *stored.Setting, first.Digest())
+	t.Run("excludes plugin channels from upstream model updates", func(t *testing.T) {
+		response := call("PUT", "/api/channel/", map[string]any{
+			"id": stored.Id, "settings": automaticModelSettings,
+		}, rootCookies)
+		require.Contains(t, response.Body.String(), model.ErrTaskPluginUpstreamModelUpdates.Error())
+		// Simulate legacy settings written before the guard existed.
+		row := db.Model(&model.Channel{}).Where("id = ?", stored.Id)
+		require.NoError(t, row.UpdateColumn("settings", automaticModelSettings).Error)
+		t.Cleanup(func() { require.NoError(t, row.UpdateColumn("settings", stored.OtherSettings).Error) })
+		for _, action := range []string{"apply", "detect"} {
+			response := call("POST", "/api/channel/upstream_updates/"+action, map[string]any{
+				"id": stored.Id, "add_models": []string{"undeclared-model"},
+			}, adminCookies)
+			require.Contains(t, response.Body.String(), model.ErrTaskPluginUpstreamModelUpdates.Error())
+		}
+		for _, action := range []string{"apply_all", "detect_all"} {
+			response := call("POST", "/api/channel/upstream_updates/"+action, nil, adminCookies)
+			require.Contains(t, response.Body.String(), `"success":true`)
+			require.NotContains(t, response.Body.String(), "undeclared-model")
+		}
+		var after model.Channel
+		require.NoError(t, db.First(&after, stored.Id).Error)
+		require.Equal(t, stored.Models, after.Models)
+		require.Equal(t, automaticModelSettings, after.OtherSettings)
+	})
 	t.Run("bulk tag edits include plugin channels only for root", func(t *testing.T) {
 		ordinary := model.Channel{
 			Name: "ordinary-tagged", Type: constant.ChannelTypeOpenAI, Key: "fixture-only",

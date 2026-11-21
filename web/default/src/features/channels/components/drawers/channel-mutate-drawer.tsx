@@ -147,6 +147,7 @@ import {
   collectNewDisallowedStatusCodeRedirects,
 } from '../../lib/status-code-risk-guard'
 import {
+  invalidTaskPluginParameters,
   missingTaskPluginParameters,
   readTaskPluginSettings,
   taskPluginUpstreams,
@@ -1170,6 +1171,20 @@ export function ChannelMutateDrawer({
           toast.error(
             t('Fill in required task plugin parameters: {{parameters}}', {
               parameters: missing
+                .map((name) => schema?.properties[name]?.title || name)
+                .join(', '),
+            })
+          )
+          return
+        }
+        const invalid = invalidTaskPluginParameters(
+          schema,
+          settings.task_plugin_config
+        )
+        if (invalid.length) {
+          toast.error(
+            t('Invalid task plugin parameters: {{parameters}}', {
+              parameters: invalid
                 .map((name) => schema?.properties[name]?.title || name)
                 .join(', '),
             })

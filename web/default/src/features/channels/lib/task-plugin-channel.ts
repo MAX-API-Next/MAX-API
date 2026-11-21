@@ -25,6 +25,9 @@ export function taskPluginUpstreams(upstreams?: string[]): string[] {
 
 type ChannelConfig = NonNullable<PluginEntry['channel_config']>
 export type TaskPluginParameterField = ChannelConfig['properties'][string]
+type ParameterValues = ReturnType<
+  typeof readTaskPluginSettings
+>['task_plugin_config']
 
 export function requiredTaskPluginParameters(schema?: ChannelConfig): string[] {
   if (!schema) return []
@@ -35,9 +38,39 @@ export function requiredTaskPluginParameters(schema?: ChannelConfig): string[] {
 
 export function missingTaskPluginParameters(
   schema: ChannelConfig | undefined,
-  config: ReturnType<typeof readTaskPluginSettings>['task_plugin_config']
+  config: ParameterValues
 ): string[] {
   return requiredTaskPluginParameters(schema).filter(
     (name) => !Object.hasOwn(config, name)
+  )
+}
+
+export function acceptsTaskPluginParameter(
+  field: TaskPluginParameterField,
+  value: ParameterValues[string]
+): boolean {
+  if (field.type === 'string')
+    return (
+      typeof value === 'string' && (!field.enum || field.enum.includes(value))
+    )
+  if (field.type === 'boolean') return typeof value === 'boolean'
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    (field.type !== 'integer' || Number.isSafeInteger(value)) &&
+    (field.minimum === undefined || value >= field.minimum) &&
+    (field.maximum === undefined || value <= field.maximum)
+  )
+}
+
+export function invalidTaskPluginParameters(
+  schema: ChannelConfig | undefined,
+  config: ParameterValues
+): string[] {
+  const fields = schema?.properties ?? {}
+  return Object.keys(config).filter(
+    (name) =>
+      !Object.hasOwn(fields, name) ||
+      !acceptsTaskPluginParameter(fields[name], config[name])
   )
 }

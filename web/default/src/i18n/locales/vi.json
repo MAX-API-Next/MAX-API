@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Invalid task plugin parameters: {{parameters}}": "Tham số plugin tác vụ không hợp lệ: {{parameters}}",
     "Choose a supported parameter value": "Chọn giá trị tham số được hỗ trợ",
     "Set {{name}} to an empty string": "Đặt {{name}} thành chuỗi rỗng",
     "Unset {{name}}": "Bỏ thiết lập {{name}}",

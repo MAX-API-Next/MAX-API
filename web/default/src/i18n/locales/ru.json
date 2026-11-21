@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Invalid task plugin parameters: {{parameters}}": "Недопустимые параметры плагина задач: {{parameters}}",
     "Choose a supported parameter value": "Выберите поддерживаемое значение параметра",
     "Set {{name}} to an empty string": "Задать пустую строку для {{name}}",
     "Unset {{name}}": "Сбросить значение {{name}}",

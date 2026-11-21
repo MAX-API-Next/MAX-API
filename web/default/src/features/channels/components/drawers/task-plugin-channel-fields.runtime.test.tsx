@@ -7,7 +7,10 @@ import { after, afterEach, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
 import type { PluginEntry } from '@/features/task-plugins/api'
 import { CHANNEL_FORM_DEFAULT_VALUES, type ChannelFormValues } from '../../lib'
-import { missingTaskPluginParameters } from '../../lib/task-plugin-channel'
+import {
+  invalidTaskPluginParameters,
+  missingTaskPluginParameters,
+} from '../../lib/task-plugin-channel'
 
 const env = createReactTestEnvironment()
 await env.setup()
@@ -286,4 +289,48 @@ test('keeps an unavailable parameter choice visible until explicitly replaced', 
   assert.equal(select.checkValidity(), true)
   const data = JSON.parse(view.getByLabelText('Form values').textContent ?? '')
   assert.equal(JSON.parse(data.setting).task_plugin_config.region, 'eu')
+})
+
+test('identifies a retained invalid parameter and aligns integer input bounds', () => {
+  const original: PluginEntry = {
+    ...plugin,
+    channel_config: { properties: { retries: { type: 'string' } } },
+  }
+  const schema: NonNullable<PluginEntry['channel_config']> = {
+    properties: {
+      retries: { type: 'integer', minimum: 0.5, maximum: 3.9 },
+      scale: { type: 'number', minimum: 0.5, maximum: 3.9 },
+    },
+  }
+  const view = render(<Fixture options={[original]} />)
+  fireEvent.change(view.getByLabelText('Task Plugin'), {
+    target: { value: plugin.key },
+  })
+  fireEvent.change(view.getByLabelText('retries'), {
+    target: { value: '3' },
+  })
+  view.rerender(
+    <Fixture
+      options={[{ ...original, digest: 'digest-two', channel_config: schema }]}
+    />
+  )
+  const retries = view.getByLabelText('retries') as HTMLInputElement
+  const scale = view.getByLabelText('scale') as HTMLInputElement
+  assert.equal(retries.getAttribute('aria-invalid'), 'true')
+  assert.ok(view.getByText('Invalid task plugin parameters: retries'))
+  assert.equal(retries.min, '1')
+  assert.equal(retries.max, '3')
+  assert.equal(scale.min, '0.5')
+  assert.equal(scale.max, '3.9')
+  assert.deepEqual(
+    invalidTaskPluginParameters(schema, { retries: '3', scale: 0.5 }),
+    ['retries']
+  )
+  fireEvent.click(view.getByRole('button', { name: 'Unset retries' }))
+  fireEvent.change(retries, { target: { value: '1' } })
+  assert.equal(retries.checkValidity(), true)
+  assert.equal(
+    view.queryByText('Invalid task plugin parameters: retries'),
+    null
+  )
 })
