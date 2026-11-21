@@ -215,15 +215,21 @@ func validateModelPricing(name string, draft, previous types.ModelPricingValues,
 				if !ok || strings.TrimSpace(expression) == "" || !validPricingName(plugin) || strings.Contains(plugin, "::") {
 					return errors.New("valid plugin key and nonempty expression required")
 				}
-				context, found := findPricingContext(contexts, "plugin:"+plugin)
+				found := false
+				for _, context := range contexts {
+					if context.PluginKey != plugin || context.Schema == nil {
+						continue
+					}
+					found = true
+					if err := validatePricingSchema(expression, context.Schema); err != nil {
+						return err
+					}
+				}
 				if !found {
 					if prior[plugin] == expression {
 						continue
 					}
 					return fmt.Errorf("plugin %s has no declared host schema", plugin)
-				}
-				if err := validatePricingSchema(expression, context.Schema); err != nil {
-					return err
 				}
 			}
 		case "billing_setting.billing_mode":

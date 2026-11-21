@@ -71,6 +71,14 @@ func parsePluginURL(value string) (*url.URL, error) {
 	return u, nil
 }
 
+func ValidateChannelBaseURL(value string) error {
+	u, err := parsePluginURL(value)
+	if err != nil || u.ForceQuery || u.RawQuery != "" || strings.ContainsAny(value, "?#") {
+		return ErrRequestPolicy
+	}
+	return nil
+}
+
 func pluginOrigin(u *url.URL) string {
 	port := u.Port()
 	if port == "" {

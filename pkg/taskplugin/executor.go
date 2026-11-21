@@ -67,6 +67,14 @@ func (host *Host) RestoreExecutor(binding ExecutionBinding, actor Actor) (*Execu
 
 func (e *Executor) Binding() ExecutionBinding { return e.binding }
 
+func (e *Executor) ConfiguredChannelParams(raw json.RawMessage, upstream string) (json.RawMessage, error) {
+	p, err := e.current()
+	if err != nil {
+		return nil, err
+	}
+	return p.manifest.ResolveChannelConfig(raw, upstream)
+}
+
 func (e *Executor) current() (*Package, error) {
 	if e == nil || e.host == nil || !validActor(e.actor) || e.binding.Actor != e.actor || e.binding.Version != 1 || e.binding.SDK != ExecutionSDK || e.binding.OriginalModel == "" || e.binding.UpstreamModel == "" || strings.TrimSpace(e.binding.OriginalModel) != e.binding.OriginalModel || strings.TrimSpace(e.binding.UpstreamModel) != e.binding.UpstreamModel || strings.TrimSpace(e.binding.Action) != e.binding.Action {
 		return nil, ErrBindingRejected

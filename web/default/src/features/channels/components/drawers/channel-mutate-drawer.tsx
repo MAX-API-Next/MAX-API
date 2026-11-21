@@ -40,11 +40,13 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/auth-store'
 import {
   parseChannelConnectionInfo,
   type ChannelConnectionInfo,
 } from '@/lib/channel-connection-info'
 import { getLobeIcon } from '@/lib/lobe-icon'
+import { ROLE } from '@/lib/roles'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -91,6 +93,7 @@ import {
   SecureVerificationDialog,
   useSecureVerification,
 } from '@/features/auth/secure-verification'
+import { taskPluginAPI } from '@/features/task-plugins/api'
 import {
   fetchModels,
   getAllModels,
@@ -105,6 +108,7 @@ import {
   CHANNEL_STATUS_LABELS,
   CHANNEL_TYPE_DOUBAO_VIDEO,
   CHANNEL_TYPE_OPTIONS,
+  CHANNEL_TYPE_TASK_PLUGIN,
   CHANNEL_TYPE_WARNINGS,
   ERROR_MESSAGES,
   FIELD_DESCRIPTIONS,
@@ -142,6 +146,7 @@ import {
   collectInvalidStatusCodeEntries,
   collectNewDisallowedStatusCodeRedirects,
 } from '../../lib/status-code-risk-guard'
+import { readTaskPluginSettings } from '../../lib/task-plugin-channel'
 import type { Channel } from '../../types'
 import { ChannelCapabilityMatrix } from '../channel-capability-matrix'
 import { ChannelRoutingHealthCard } from '../channel-routing-health-card'
@@ -187,6 +192,7 @@ import {
   ChannelEditorLoadingState,
   ChannelModelsSection,
 } from './sections'
+import { TaskPluginChannelFields } from './task-plugin-channel-fields'
 
 type ChannelMutateDrawerProps = {
   open: boolean
@@ -330,6 +336,31 @@ export function ChannelMutateDrawer({
   const keyMode = form.watch('key_mode')
   const currentGroups = form.watch('group')
   const currentType = Number(form.watch('type') || 0)
+  const isTaskPlugin = currentType === CHANNEL_TYPE_TASK_PLUGIN
+  const canConfigureTaskPlugins = useAuthStore(
+    (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
+  )
+  const taskPluginQuery = useQuery({
+    queryKey: ['task-plugin-channel-options'],
+    queryFn: ({ signal }) => taskPluginAPI.read(signal),
+    enabled: open && isTaskPlugin && canConfigureTaskPlugins,
+    retry: false,
+    gcTime: 0,
+  })
+  const pluginOptions = taskPluginQuery.isError
+    ? []
+    : (taskPluginQuery.data?.entries ?? []).filter(
+        (entry) =>
+          entry.channel_configurable &&
+          entry.active &&
+          entry.enabled &&
+          !entry.revoked
+      )
+  const selectedTaskPlugin = pluginOptions.find(
+    (entry) =>
+      entry.key ===
+      readTaskPluginSettings(form.watch('setting')).task_plugin_key
+  )
   const currentBaseUrl = form.watch('base_url')
   const currentModels = form.watch('models')
   const currentName = form.watch('name')
@@ -521,7 +552,11 @@ export function ChannelMutateDrawer({
   )
 
   const channelTypeOptions = useMemo(() => {
-    const options = CHANNEL_TYPE_OPTIONS.map((option) => ({
+    const options = CHANNEL_TYPE_OPTIONS.filter(
+      (option) =>
+        option.value !== CHANNEL_TYPE_TASK_PLUGIN ||
+        (canConfigureTaskPlugins && (!isEditing || isTaskPlugin))
+    ).map((option) => ({
       value: String(option.value),
       label: t(option.label),
       icon: getLobeIcon(`${getChannelTypeIcon(option.value)}.Color`, 16),
@@ -534,7 +569,7 @@ export function ChannelMutateDrawer({
       })
     }
     return options
-  }, [currentType, t])
+  }, [currentType, canConfigureTaskPlugins, isEditing, isTaskPlugin, t])
 
   const formErrors = form.formState.errors
   const identityHasErrors = Boolean(
@@ -1097,6 +1132,15 @@ export function ChannelMutateDrawer({
   // Submit handler
   const onSubmit = useCallback(
     async (data: ChannelFormValues) => {
+      if (
+        data.type === CHANNEL_TYPE_TASK_PLUGIN &&
+        (!canConfigureTaskPlugins ||
+          !selectedTaskPlugin ||
+          data.expected_task_plugin_digest !== selectedTaskPlugin.digest)
+      ) {
+        toast.error(t('Refresh task plugin options before saving'))
+        return
+      }
       // Validate key is required when creating
       if (!isEditing && !data.key?.trim()) {
         form.setError('key', {
@@ -1185,6 +1229,8 @@ export function ChannelMutateDrawer({
       confirmMissingModelMappings,
       confirmStatusCodeRisk,
       channelMutation,
+      canConfigureTaskPlugins,
+      selectedTaskPlugin,
       t,
     ]
   )
@@ -1444,6 +1490,7 @@ export function ChannelMutateDrawer({
                       <ChannelBasicSection
                         channelTypeOptions={channelTypeOptions}
                         isEditing={isEditing}
+                        lockType={isEditing && isTaskPlugin}
                       />
 
                       <ChannelCapabilityMatrix
@@ -1458,6 +1505,25 @@ export function ChannelMutateDrawer({
                       className='scroll-mt-4'
                     >
                       <ChannelApiAccessSection>
+                        {isTaskPlugin && canConfigureTaskPlugins && (
+                          <TaskPluginChannelFields
+                            options={pluginOptions}
+                            loading={taskPluginQuery.isFetching}
+                            failed={taskPluginQuery.isError}
+                            refresh={() => {
+                              void taskPluginQuery.refetch()
+                            }}
+                          />
+                        )}
+                        {isTaskPlugin && !canConfigureTaskPlugins && (
+                          <Alert>
+                            <AlertDescription>
+                              {t(
+                                'Task plugin channel configuration requires root access'
+                              )}
+                            </AlertDescription>
+                          </Alert>
+                        )}
                         {CHANNEL_TYPE_WARNINGS[currentType] && (
                           <Alert>
                             <AlertDescription>
@@ -2154,7 +2220,7 @@ export function ChannelMutateDrawer({
                         )}
 
                         <ChannelAuthSection>
-                          {!isEditing && (
+                          {!isEditing && !isTaskPlugin && (
                             <FormField
                               control={form.control}
                               name='multi_key_mode'
@@ -2525,13 +2591,17 @@ export function ChannelMutateDrawer({
                       className='scroll-mt-4'
                     >
                       <ChannelModelsSection
-                        allModels={allModelsList}
-                        basicModels={basicModels}
+                        allModels={
+                          isTaskPlugin
+                            ? (selectedTaskPlugin?.models ?? [])
+                            : allModelsList
+                        }
+                        basicModels={isTaskPlugin ? [] : basicModels}
                         groupOptions={groupOptions}
                         isLoadingGroups={isLoadingGroups}
                         isSubmitting={isSubmitting}
                         onFetchModels={handleFetchModels}
-                        prefillGroups={prefillGroups}
+                        prefillGroups={isTaskPlugin ? [] : prefillGroups}
                       />
                     </div>
 

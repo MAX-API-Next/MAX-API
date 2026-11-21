@@ -55,6 +55,8 @@ type Channel struct {
 
 	OtherSettings string `json:"settings" gorm:"column:settings"` // 其他设置，存储azure版本等不需要检索的信息，详见dto.ChannelOtherSettings
 
+	TaskPluginExpectedDigest string `json:"expected_task_plugin_digest,omitempty" gorm:"-"`
+
 	// cache info
 	Keys []string `json:"-" gorm:"-"`
 }
@@ -692,12 +694,23 @@ func (channel *Channel) UpdateFields(fields ...string) error {
 	}
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if workingChannel.Type == constant.ChannelTypeTaskPlugin {
+			for _, name := range []string{"type", "key", "base_url", "other", "models", "model_mapping", "setting"} {
+				if _, changed := updates[name]; changed {
+					if err := validateTaskPluginChannelWrite(tx, workingChannel); err != nil {
+						return err
+					}
+					break
+				}
+			}
+		}
 		if err := tx.Model(&Channel{}).Where("id = ?", workingChannel.Id).Updates(updates).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&Channel{}).First(workingChannel, "id = ?", workingChannel.Id).Error; err != nil {
 			return err
 		}
+		workingChannel.TaskPluginExpectedDigest = ""
 		if keySelected {
 			workingChannel.Keys = nil
 		}
@@ -1062,7 +1075,18 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 		updateData.HeaderOverride = headerOverride
 	}
 
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Updates(updateData).Error
+	query := DB.Model(&Channel{}).Where("tag = ?", tag)
+	if updateData.Models != "" || updateData.ModelMapping != nil {
+		var pluginChannels int64
+		if err := DB.Model(&Channel{}).Where("tag = ? AND type = ?", tag, constant.ChannelTypeTaskPlugin).Count(&pluginChannels).Error; err != nil {
+			return err
+		}
+		if pluginChannels > 0 {
+			return errors.New("Edit task plugin model mappings on the individual channel")
+		}
+		query = query.Where("type <> ?", constant.ChannelTypeTaskPlugin)
+	}
+	err := query.Updates(updateData).Error
 	if err != nil {
 		return err
 	}

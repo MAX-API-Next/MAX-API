@@ -131,6 +131,8 @@ func (p *Program) Manifest(ctx context.Context) (Manifest, error) {
 		BaseURL       string                `json:"baseUrl"`
 		AllowedHosts  []string              `json:"allowedHosts"`
 		Upstreams     []string              `json:"upstreams"`
+		ChannelConfig json.RawMessage       `json:"channelConfig"`
+		KeyHint       json.RawMessage       `json:"keyHint"`
 		UsageSchema   map[string]UsageField `json:"usageSchema"`
 		UsageProfiles []UsageProfile        `json:"usageProfiles"`
 		Capabilities  []string              `json:"requiredCapabilities"`
@@ -150,6 +152,8 @@ func (p *Program) Manifest(ctx context.Context) (Manifest, error) {
 		}
 	}
 	m := Manifest{APIVersion: meta.APIVersion, Key: meta.Key, Name: meta.Name, Version: meta.Version, Models: meta.Models, ChannelTypes: meta.ChannelTypes, BaseURL: meta.BaseURL, AllowedHosts: meta.AllowedHosts, Upstreams: meta.Upstreams, UsageSchema: meta.UsageSchema, UsageProfiles: meta.UsageProfiles}
+	m.ChannelConfig = meta.ChannelConfig
+	_ = common.Unmarshal(meta.KeyHint, &m.KeyHint)
 	for _, protocol := range meta.Protocols {
 		var bare string
 		if common.Unmarshal(protocol, &bare) == nil {
@@ -245,21 +249,13 @@ func (p *Program) Manifest(ctx context.Context) (Manifest, error) {
 	return m, nil
 }
 
-func (p *Program) matchesManifest(m Manifest) bool {
-	return p.matchesManifestContext(context.Background(), m)
-}
-
-func (p *Program) matchesManifestContext(ctx context.Context, m Manifest) bool {
-	compiled, err := p.Manifest(ctx)
-	if err != nil {
-		return false
-	}
+func matchesManifestContract(compiled, stored Manifest) bool {
 	// Compare the persisted contract: omitempty makes empty optional arrays
 	// equivalent to absent ones, but nonempty and explicit scalar values remain.
 	actual, err := common.Marshal(compiled)
 	if err != nil {
 		return false
 	}
-	expected, err := common.Marshal(m)
+	expected, err := common.Marshal(stored)
 	return err == nil && bytes.Equal(actual, expected)
 }

@@ -45,6 +45,7 @@ import {
 type ChannelBasicSectionProps = {
   channelTypeOptions: ComboboxInputOption[]
   isEditing: boolean
+  lockType?: boolean
 }
 
 export function ChannelBasicSection(props: ChannelBasicSectionProps) {
@@ -82,34 +83,39 @@ export function ChannelBasicSection(props: ChannelBasicSectionProps) {
             <FormItem>
               <FormLabel>{t('Type *')}</FormLabel>
               <FormControl>
-                <Combobox
-                  options={props.channelTypeOptions}
-                  value={String(field.value)}
-                  onValueChange={(value) => {
-                    const nextType = Number(value)
-                    if (Number.isInteger(nextType) && nextType > 0) {
-                      field.onChange(nextType)
-                      if (!props.isEditing && nextType !== field.value) {
-                        const scopedDefaults =
-                          getChannelTypeScopedFieldDefaults(nextType)
-                        form.setValue('base_url', scopedDefaults.base_url, {
-                          shouldDirty: true,
-                          shouldTouch: true,
-                          shouldValidate: true,
-                        })
-                        form.setValue('other', scopedDefaults.other, {
-                          shouldDirty: true,
-                          shouldTouch: true,
-                          shouldValidate: true,
-                        })
+                {props.lockType ? (
+                  <Input value={t('Task Plugin')} readOnly />
+                ) : (
+                  <Combobox
+                    options={props.channelTypeOptions}
+                    value={String(field.value)}
+                    onValueChange={(value) => {
+                      if (props.lockType) return
+                      const nextType = Number(value)
+                      if (Number.isInteger(nextType) && nextType > 0) {
+                        field.onChange(nextType)
+                        if (!props.isEditing && nextType !== field.value) {
+                          const scopedDefaults =
+                            getChannelTypeScopedFieldDefaults(nextType)
+                          form.setValue('base_url', scopedDefaults.base_url, {
+                            shouldDirty: true,
+                            shouldTouch: true,
+                            shouldValidate: true,
+                          })
+                          form.setValue('other', scopedDefaults.other, {
+                            shouldDirty: true,
+                            shouldTouch: true,
+                            shouldValidate: true,
+                          })
+                        }
                       }
-                    }
-                  }}
-                  placeholder={t('Select channel type')}
-                  searchPlaceholder={t('Search channel type...')}
-                  emptyText={t('No channel type found.')}
-                  allowCustomValue
-                />
+                    }}
+                    placeholder={t('Select channel type')}
+                    searchPlaceholder={t('Search channel type...')}
+                    emptyText={t('No channel type found.')}
+                    allowCustomValue
+                  />
+                )}
               </FormControl>
               <FormMessage />
             </FormItem>

@@ -194,7 +194,11 @@ func (a *pricingAuthority) contextsContext(ctx context.Context, model string) ([
 				return nil, err
 			}
 			if advertised, found := references.models[model]; found {
-				result = append(result, channel.pricingModelContext(model, advertised, references))
+				context, err := a.pricingChannelContext(ctx, channel, model, advertised, references)
+				if err != nil {
+					return nil, err
+				}
+				result = append(result, context)
 			}
 		}
 	}
@@ -319,12 +323,62 @@ func (a *pricingAuthority) indexChannelContexts(ctx context.Context, models []st
 				return err
 			}
 			if relevant[model] {
-				index[model] = append(index[model], channel.pricingModelContext(model, advertised, references))
+				context, err := a.pricingChannelContext(ctx, channel, model, advertised, references)
+				if err != nil {
+					return err
+				}
+				index[model] = append(index[model], context)
 			}
 		}
 	}
 	a.channelContexts = index
 	return ctx.Err()
+}
+
+func (a *pricingAuthority) pricingChannelContext(ctx context.Context, channel pricingChannel, model string, advertised bool, references pricingChannelReferences) (ModelPricingContext, error) {
+	result := channel.pricingModelContext(model, advertised, references)
+	if channel.Type != constant.ChannelTypeTaskPlugin {
+		return result, nil
+	}
+	result.legacyDefaultConsumer = false
+	result.Reason = "configured task plugin is unavailable"
+	settings, err := ReadTaskPluginChannelSettings(channel.Setting)
+	if err != nil || !advertised || !references.mappingValid {
+		return result, nil
+	}
+	result.PluginKey = settings.Key
+	result.source = taskpricing.Source{Driver: "task_plugin", PluginKey: settings.Key}
+	for _, entry := range a.plugins {
+		if !entry.Active || entry.Digest == a.excludedPluginDigest {
+			continue
+		}
+		p, err := a.pricingPluginPackage(ctx, entry)
+		if err != nil {
+			return result, err
+		}
+		manifest := p.Manifest()
+		if manifest.Key != settings.Key {
+			continue
+		}
+		schema, err := p.ModelUsageSchema(result.MappedModel)
+		if err != nil {
+			result.Reason = "mapped model is unavailable in the active task plugin"
+			break
+		}
+		source := (pricingPluginSchema{entry: entry, key: settings.Key, executable: p.Executable(), schema: schema}).pricingContext(result.MappedModel)
+		result.Schema, result.Reason, result.Profile = source.Schema, source.Reason, source.Profile
+		result.PreviewOnly = source.PreviewOnly
+		result.Available = source.Available && channel.Status == 1
+		if _, err := manifest.ResolveChannelConfig(settings.Config, settings.Upstream); err != nil {
+			result.Available = false
+			result.Reason = "channel configuration does not match the active task plugin"
+		} else if source.Available && channel.Status != 1 {
+			result.Reason = "channel disabled or mapped-target-only; quote its advertised alias"
+		}
+		result.binding = struct{ Channel, Plugin any }{channel, source.binding}
+		break
+	}
+	return result, nil
 }
 
 type pricingPluginSchema struct {
@@ -545,7 +599,7 @@ func buildModelPricingEntryContext(ctx context.Context, values pricingMaps, a *p
 	// Keep stale configured overrides visible even if the source disappeared.
 	variants, _ := entry.Configured[billing_setting.PluginBillingExprOption].(map[string]any)
 	for plugin, raw := range variants {
-		if _, found := findPricingContext(contexts, "plugin:"+plugin); !found {
+		if !slices.ContainsFunc(contexts, func(context ModelPricingContext) bool { return context.PluginKey == plugin }) {
 			expression, _ := raw.(string)
 			entry.PluginVariants = append(entry.PluginVariants, ModelPricingContext{ID: "plugin:" + plugin, PluginKey: plugin, MappedModel: name, Configured: &expression, Reason: "source unavailable"})
 		}

@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	relaychannel "github.com/MAX-API-Next/MAX-API/relay/channel"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/gemini"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/ollama"
@@ -228,6 +230,10 @@ func FetchUpstreamModels(c *gin.Context) {
 		return
 	}
 
+	if channel.Type == constant.ChannelTypeTaskPlugin {
+		common.ApiError(c, errors.New("Select models from the task plugin declaration"))
+		return
+	}
 	ids, err := fetchChannelUpstreamModelIDs(channel)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -632,6 +638,18 @@ func AddChannel(c *gin.Context) {
 		return
 	}
 
+	if channel := addChannelRequest.Channel; channel.Type == constant.ChannelTypeTaskPlugin {
+		if !requireTaskPluginChannelRoot(c) {
+			return
+		}
+		if addChannelRequest.Mode != "single" || addChannelRequest.BatchAddSetKeyPrefix2Name || channel.ChannelInfo.IsMultiKey {
+			common.ApiError(c, errors.New("Task plugin channels require single-credential mode"))
+			return
+		}
+		if !validateTaskPluginChannelURL(c, channel) {
+			return
+		}
+	}
 	addChannelRequest.Channel.CreatedTime = common.GetTimestamp()
 	keys := make([]string, 0)
 	switch addChannelRequest.Mode {
@@ -945,6 +963,8 @@ type PatchChannel struct {
 	OtherSettings      *string `json:"settings"`
 	MultiKeyMode       *string `json:"multi_key_mode"`
 	KeyMode            *string `json:"key_mode"` // 多key模式下密钥覆盖或者追加
+
+	TaskPluginExpectedDigest string `json:"expected_task_plugin_digest,omitempty"`
 }
 
 func (patch *PatchChannel) applyTo(origin *model.Channel) (model.Channel, []string, error) {
@@ -1085,6 +1105,26 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 
+	if channel.Type == constant.ChannelTypeTaskPlugin || originChannel.Type == constant.ChannelTypeTaskPlugin {
+		if !requireTaskPluginChannelRoot(c) {
+			return
+		}
+		if channel.Type != originChannel.Type {
+			common.ApiError(c, errors.New("Task plugin channels cannot change channel type"))
+			return
+		}
+		oldBinding, _ := model.ReadTaskPluginChannelSettings(originChannel.Setting)
+		newBinding, _ := model.ReadTaskPluginChannelSettings(channel.Setting)
+		if (oldBinding.Key != newBinding.Key || oldBinding.Upstream != newBinding.Upstream ||
+			!equalStringPtr(channel.BaseURL, originChannel.BaseURL)) && (patch.Key == nil || strings.TrimSpace(*patch.Key) == "") {
+			common.ApiError(c, errors.New("Enter a credential when changing the task plugin or upstream"))
+			return
+		}
+		if (patch.BaseURL != nil && !equalStringPtr(channel.BaseURL, originChannel.BaseURL)) && !validateTaskPluginChannelURL(c, &channel) {
+			return
+		}
+		channel.TaskPluginExpectedDigest = patch.TaskPluginExpectedDigest
+	}
 	// Always copy the original ChannelInfo so that fields like IsMultiKey and MultiKeySize are retained.
 	channel.ChannelInfo = originChannel.ChannelInfo
 
@@ -1238,6 +1278,23 @@ func equalStringPtr(a, b *string) bool {
 	return *a == *b
 }
 
+func requireTaskPluginChannelRoot(c *gin.Context) bool {
+	if c.GetInt("role") == common.RoleRootUser {
+		return true
+	}
+	c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Task plugin channel configuration requires root access"})
+	return false
+}
+
+func validateTaskPluginChannelURL(c *gin.Context, channel *model.Channel) bool {
+	if channel.BaseURL != nil && taskplugin.ValidateChannelBaseURL(*channel.BaseURL) == nil &&
+		service.ValidateSSRFProtectedFetchURL(*channel.BaseURL) == nil {
+		return true
+	}
+	common.ApiError(c, errors.New("Task plugin upstream URL is invalid or blocked by the fetch policy"))
+	return false
+}
+
 func FetchModels(c *gin.Context) {
 	var req struct {
 		BaseURL string `json:"base_url"`
@@ -1253,6 +1310,10 @@ func FetchModels(c *gin.Context) {
 		return
 	}
 
+	if req.Type == constant.ChannelTypeTaskPlugin {
+		common.ApiError(c, errors.New("Select models from the task plugin declaration"))
+		return
+	}
 	baseURL := req.BaseURL
 	if baseURL == "" {
 		baseURL = constant.ChannelBaseURLs[req.Type]
@@ -1464,6 +1525,10 @@ func CopyChannel(c *gin.Context) {
 		return
 	}
 
+	if origin.Type == constant.ChannelTypeTaskPlugin {
+		common.ApiError(c, errors.New("Create a task plugin channel from the active plugin declaration"))
+		return
+	}
 	// clone channel
 	clone := *origin // shallow copy is sufficient as we will overwrite primitives
 	clone.Id = 0     // let DB auto-generate

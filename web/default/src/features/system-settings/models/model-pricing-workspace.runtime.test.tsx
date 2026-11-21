@@ -648,6 +648,96 @@ test('full JSON editing retains formatting through valid intermediate decimal in
   assert.equal(f.writes[0][0].pricing.ModelPrice, 0.05)
 })
 
+test('visual plugin pricing generates, saves and reopens an editable tier without rewriting complex code', async () => {
+  const value = entry('isolated-model', 'price-v1', {})
+  value.plugin_variants = [
+    {
+      id: 'plugin:kling',
+      plugin_key: 'kling',
+      mapped_model: 'kling-v2-5-turbo',
+      usage_schema: { units: { type: 'number', unit: 'credit' } },
+      compatible: true,
+      schema_compatible: true,
+      available: true,
+      execution_ready: false,
+      preview_only: true,
+    },
+  ]
+  const f = setup([value])
+  await waitFor(() =>
+    assert.ok(f.getByRole('button', { name: 'isolated-model' }))
+  )
+  fireEvent.click(f.getByRole('button', { name: 'isolated-model' }))
+  await waitFor(() => assert.ok(f.queryByLabelText('Pricing source')))
+  fireEvent.change(f.getByLabelText('Pricing source'), {
+    target: { value: 'plugin:kling' },
+  })
+  const code = () =>
+    f.getByLabelText('Plugin expression override') as HTMLTextAreaElement
+  assert.equal(code().value, '', 'opening the form must keep inheritance')
+  fireEvent.change(f.getByLabelText('units (USD / credit)'), {
+    target: { value: '0.1' },
+  })
+  fireEvent.click(f.getByRole('button', { name: 'Add tier' }))
+  fireEvent.change(f.getByLabelText('Value'), { target: { value: '1' } })
+  const [highFee, fallbackFee] = f.getAllByLabelText('Base fee (USD)')
+  assert.equal((fallbackFee as HTMLInputElement).value, '')
+  fireEvent.change(highFee, { target: { value: '0.05' } })
+  fireEvent.change(f.getAllByLabelText('units (USD / credit)')[0], {
+    target: { value: '0.2' },
+  })
+  const generated =
+    'u("units") >= 1 ? tier("tier-1", 0.05 + u("units") * 0.2) : tier("default", u("units") * 0.1)'
+  assert.equal(code().value, generated)
+  fireEvent.change(f.getByLabelText('Pricing source'), {
+    target: { value: '' },
+  })
+  fireEvent.change(f.getByLabelText('Pricing source'), {
+    target: { value: 'plugin:kling' },
+  })
+  assert.equal(
+    (f.getAllByLabelText('units (USD / credit)')[0] as HTMLInputElement).value,
+    '0.2'
+  )
+  const complex = '  let fee = u("units") * 0.2; fee + 0.05  '
+  fireEvent.change(code(), { target: { value: complex } })
+  assert.equal(f.queryByRole('button', { name: 'Add tier' }), null)
+  assert.equal(code().value, complex)
+  fireEvent.change(code(), { target: { value: generated } })
+  fireEvent.click(f.getByRole('button', { name: 'Save model pricing' }))
+  await waitFor(() => assert.equal(f.writes.length, 1))
+  assert.equal(
+    f.writes[0][0].pricing['billing_setting.plugin_billing_expr']?.kling,
+    generated
+  )
+})
+
+test('default visual token pricing generates existing per-million coefficients', async () => {
+  const f = setup([entry('token-model', 'price-v1', {})])
+  await waitFor(() => assert.ok(f.getByRole('button', { name: 'token-model' })))
+  fireEvent.click(f.getByRole('button', { name: 'token-model' }))
+  await waitFor(() => assert.ok(f.queryByLabelText('Default expression')))
+  const code = () =>
+    f.getByLabelText('Default expression') as HTMLTextAreaElement
+  assert.equal(code().value, '')
+  fireEvent.change(f.getByLabelText('Billing mode'), {
+    target: { value: 'tiered_expr' },
+  })
+  fireEvent.change(f.getByLabelText('Input price'), { target: { value: '2' } })
+  fireEvent.change(f.getByLabelText('Output price'), { target: { value: '5' } })
+  assert.equal(code().value, 'tier("base", p * 2 + c * 5)')
+  fireEvent.change(code(), { target: { value: 'p * 4 + c * 5' } })
+  assert.equal((f.getByLabelText('Input price') as HTMLInputElement).value, '4')
+  fireEvent.change(f.getByLabelText('Input price'), { target: { value: '2' } })
+  assert.equal(code().value, 'p * 2 + c * 5')
+  fireEvent.click(f.getByRole('button', { name: 'Save model pricing' }))
+  await waitFor(() => assert.equal(f.writes.length, 1))
+  assert.equal(
+    f.writes[0][0].pricing['billing_setting.billing_expr'],
+    code().value
+  )
+})
+
 test('empty default expression removes its override while expression zero remains explicit', async () => {
   const f = setup([
     entry('kling-v1', 'price-v1', {

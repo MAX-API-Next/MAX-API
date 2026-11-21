@@ -77,9 +77,11 @@ export const CHANNEL_TYPES = {
   56: 'Replicate',
   57: 'Codex',
   58: 'Advanced Custom',
+  61: 'Task Plugin',
 } as const
 
 export const CHANNEL_TYPE_XUNFEI = 18
+export const CHANNEL_TYPE_TASK_PLUGIN = 61
 export const CHANNEL_TYPE_VOLCENGINE = 45
 export const CHANNEL_TYPE_DOUBAO_VIDEO = 54
 

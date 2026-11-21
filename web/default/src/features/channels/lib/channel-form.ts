@@ -20,6 +20,7 @@ import { z } from 'zod'
 import {
   CHANNEL_STATUS,
   CHANNEL_TYPE_DOUBAO_VIDEO,
+  CHANNEL_TYPE_TASK_PLUGIN,
   CHANNEL_TYPE_VOLCENGINE,
   CHANNEL_TYPE_XUNFEI,
   ERROR_MESSAGES,
@@ -40,6 +41,7 @@ import {
   hasVertexDefaultRegion,
   hasVideoTaskQueryPlaceholder,
 } from './channel-config-rules'
+import { readTaskPluginSettings } from './task-plugin-channel'
 
 const VIDEO_TASK_PROTOCOL = 'generic_video_task'
 const CONFIGURED_VIDEO_TASK_PROTOCOLS = new Set([VIDEO_TASK_PROTOCOL])
@@ -208,6 +210,7 @@ export const channelFormSchema = z
       .string()
       .optional()
       .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
+    expected_task_plugin_digest: z.string().optional(),
     param_override: z
       .string()
       .optional()
@@ -790,6 +793,9 @@ export function transformChannelToFormDefaults(
  */
 function buildSettingJSON(formData: ChannelFormValues): string {
   const settingObj = {
+    ...(formData.type === CHANNEL_TYPE_TASK_PLUGIN
+      ? readTaskPluginSettings(formData.setting)
+      : {}),
     force_format: formData.force_format || false,
     thinking_to_content: formData.thinking_to_content || false,
     proxy: formData.proxy || '',
@@ -1037,9 +1043,13 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
   batch_add_set_key_prefix_2_name?: boolean
   channel: Partial<Channel>
 } {
-  const mode = formData.multi_key_mode || 'single'
+  const isTaskPlugin = formData.type === CHANNEL_TYPE_TASK_PLUGIN
+  const mode = isTaskPlugin ? 'single' : formData.multi_key_mode || 'single'
 
   const channel: Partial<Channel> = {
+    ...(isTaskPlugin
+      ? { expected_task_plugin_digest: formData.expected_task_plugin_digest }
+      : {}),
     name: formData.name,
     type: formData.type,
     base_url: normalizeBaseUrl(formData.base_url) || null,
@@ -1088,6 +1098,9 @@ export function transformFormDataToUpdatePayload(
   channelId: number
 ): Partial<Channel> {
   const payload: Partial<Channel> = {
+    ...(formData.type === CHANNEL_TYPE_TASK_PLUGIN
+      ? { expected_task_plugin_digest: formData.expected_task_plugin_digest }
+      : {}),
     id: channelId,
     name: formData.name,
     type: formData.type,

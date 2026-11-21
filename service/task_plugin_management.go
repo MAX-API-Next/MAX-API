@@ -5,8 +5,10 @@ package service
 
 import (
 	"context"
+	"slices"
 	"strconv"
 
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	"github.com/MAX-API-Next/MAX-API/types"
 )
@@ -43,6 +45,13 @@ type TaskPluginManagementEntry struct {
 	UsageProfiles  []TaskPluginProfileView         `json:"usage_profiles"`
 	ExecutionReady bool                            `json:"execution_ready"`
 	AdmissionReady bool                            `json:"admission_ready"`
+
+	ChannelConfigurable bool                            `json:"channel_configurable,omitempty"`
+	ChannelConfig       *taskplugin.ChannelConfigSchema `json:"channel_config,omitempty"`
+	BaseURL             string                          `json:"base_url,omitempty"`
+	Upstreams           []string                        `json:"upstreams,omitempty"`
+	KeyHint             string                          `json:"key_hint,omitempty"`
+	RegionParameter     bool                            `json:"region_parameter,omitempty"`
 }
 type TaskPluginManagementSnapshot struct {
 	// Decimal equality token: JSON numbers cannot represent every int64 in JS.
@@ -62,6 +71,12 @@ func TaskPluginManagementView(input taskplugin.ManagementEntry) TaskPluginManage
 	out := TaskPluginManagementEntry{Key: m.Key, Name: m.Name, Version: m.Version, Digest: input.Digest, FormatVersion: input.FormatVersion,
 		SourceDigest: input.SourceDigest, BOMPrefixed: input.BOMPrefixed, Active: input.Active, Enabled: input.Enabled, Revoked: input.Revoked, Models: m.Models,
 		Protocols: []TaskPluginProtocolView{}, Routes: []TaskPluginRouteView{}, UsageProfiles: []TaskPluginProfileView{}, UsageSchema: taskPluginUsageView(m.UsageSchema)}
+	if schema, err := m.ChannelSchema(); err == nil && input.FormatVersion == 3 && len(m.Models) != 0 {
+		out.ChannelConfigurable = true
+		out.ChannelConfig = schema
+		out.BaseURL, out.Upstreams, out.KeyHint = m.BaseURL, m.Upstreams, m.KeyHint
+		out.RegionParameter = slices.Contains(m.ChannelTypes, constant.ChannelTypeVertexAi)
+	}
 	for _, p := range m.Protocols {
 		out.Protocols = append(out.Protocols, TaskPluginProtocolView{Name: p.Name, Supports: append([]string{}, p.Supports...), Models: append([]string(nil), p.Models...)})
 	}
