@@ -36,7 +36,11 @@ import {
   SideDrawerSectionHeader,
   sideDrawerSwitchItemClassName,
 } from '@/components/drawer-layout'
-import { FIELD_DESCRIPTIONS, FIELD_PLACEHOLDERS } from '../../../constants'
+import {
+  CHANNEL_TYPE_TASK_PLUGIN,
+  FIELD_DESCRIPTIONS,
+  FIELD_PLACEHOLDERS,
+} from '../../../constants'
 import {
   getChannelTypeScopedFieldDefaults,
   type ChannelFormValues,
@@ -46,6 +50,7 @@ type ChannelBasicSectionProps = {
   channelTypeOptions: ComboboxInputOption[]
   isEditing: boolean
   lockType?: boolean
+  allowTaskPluginType: boolean
 }
 
 export function ChannelBasicSection(props: ChannelBasicSectionProps) {
@@ -90,8 +95,12 @@ export function ChannelBasicSection(props: ChannelBasicSectionProps) {
                     options={props.channelTypeOptions}
                     value={String(field.value)}
                     onValueChange={(value) => {
-                      if (props.lockType) return
                       const nextType = Number(value)
+                      if (
+                        nextType === CHANNEL_TYPE_TASK_PLUGIN &&
+                        !props.allowTaskPluginType
+                      )
+                        return
                       if (Number.isInteger(nextType) && nextType > 0) {
                         field.onChange(nextType)
                         if (!props.isEditing && nextType !== field.value) {

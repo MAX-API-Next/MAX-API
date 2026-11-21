@@ -23,6 +23,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestTaskPluginChannelConfigAndPricingLifecycle(t *testing.T) {
@@ -149,6 +150,34 @@ func TestTaskPluginChannelConfigAndPricingLifecycle(t *testing.T) {
 	require.NoError(t, db.First(&stored, stored.Id).Error)
 	require.Equal(t, "isolated-renamed", stored.Name)
 	require.True(t, stored.Key == credential, "omitted credential must be retained")
+
+	t.Run("rejects an update based on a stale channel binding", func(t *testing.T) {
+		const callback = "task_plugin_channel:replace_binding_after_read"
+		const newAlias = "concurrent-kling"
+		const newMapping = `{"concurrent-kling":"kling-v2-5-turbo"}`
+		var changed bool
+		require.NoError(t, db.Callback().Query().After("gorm:query").Register(callback, func(tx *gorm.DB) {
+			channel, ok := tx.Statement.Dest.(*model.Channel)
+			if changed || tx.Error != nil || !ok || channel.Id != stored.Id {
+				return
+			}
+			changed = true
+			tx.AddError(db.Model(&model.Channel{}).Where("id = ?", stored.Id).
+				UpdateColumns(map[string]any{"models": newAlias, "model_mapping": newMapping}).Error)
+		}))
+		t.Cleanup(func() { require.NoError(t, db.Callback().Query().Remove(callback)) })
+		response := call("PUT", "/api/channel/", map[string]any{
+			"id": stored.Id, "models": alias, "expected_task_plugin_digest": first.Digest(),
+		}, rootCookies)
+		require.True(t, changed, "the competing write must run after the handler read")
+		require.Contains(t, response.Body.String(), "Task plugin channel configuration changed")
+		var committed model.Channel
+		require.NoError(t, db.First(&committed, stored.Id).Error)
+		require.Equal(t, newAlias, committed.Models)
+		require.Equal(t, newMapping, *committed.ModelMapping)
+		require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", stored.Id).
+			UpdateColumns(map[string]any{"models": alias, "model_mapping": stored.ModelMapping}).Error)
+	})
 
 	actor := taskplugin.Actor{UserID: root.Id, TokenID: 2, ChannelID: stored.Id, RequestID: "isolated-request"}
 	executor, input, err := service.BindConfiguredTaskPlugin(t.Context(), catalog, &stored, actor, alias, "text_to_video")

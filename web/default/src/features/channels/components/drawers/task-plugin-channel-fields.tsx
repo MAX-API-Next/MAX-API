@@ -9,9 +9,77 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import type { PluginEntry } from '@/features/task-plugins/api'
 import type { ChannelFormValues } from '../../lib'
-import { readTaskPluginSettings } from '../../lib/task-plugin-channel'
+import {
+  readTaskPluginSettings,
+  taskPluginUpstreams,
+} from '../../lib/task-plugin-channel'
 
 const selectClass = 'bg-background w-full rounded-md border p-2'
+
+type ParameterValue = string | number | boolean
+type ParameterField = NonNullable<
+  PluginEntry['channel_config']
+>['properties'][string]
+
+function ParameterInput(props: {
+  field: ParameterField
+  value?: ParameterValue
+  onChange: (value?: ParameterValue) => void
+}) {
+  const { t } = useTranslation()
+  const field = props.field
+  const placeholder = field.default === undefined ? '' : String(field.default)
+  if (field.type === 'boolean' || field.enum) {
+    const options =
+      field.type === 'boolean' ? [true, false] : (field.enum ?? [])
+    return (
+      <select
+        className={selectClass}
+        value={props.value === undefined ? '' : JSON.stringify(props.value)}
+        onChange={(event) =>
+          props.onChange(
+            options.find(
+              (option) => JSON.stringify(option) === event.target.value
+            )
+          )
+        }
+      >
+        <option value=''>{placeholder || t('Not configured')}</option>
+        {options.map((option) => (
+          <option key={String(option)} value={JSON.stringify(option)}>
+            {String(option)}
+          </option>
+        ))}
+      </select>
+    )
+  }
+  if (field.format === 'textarea') {
+    return (
+      <Textarea
+        value={String(props.value ?? '')}
+        placeholder={placeholder}
+        onChange={(event) => props.onChange(event.target.value || undefined)}
+      />
+    )
+  }
+  const numeric = field.type === 'number' || field.type === 'integer'
+  return (
+    <Input
+      type={numeric ? 'number' : 'text'}
+      min={field.minimum}
+      max={field.maximum}
+      step={field.type === 'integer' ? 1 : 'any'}
+      value={String(props.value ?? '')}
+      placeholder={placeholder}
+      onChange={(event) => {
+        const { value, valueAsNumber } = event.target
+        if (value === '') props.onChange()
+        else if (numeric) props.onChange(valueAsNumber)
+        else props.onChange(value)
+      }}
+    />
+  )
+}
 
 export function TaskPluginChannelFields(props: {
   options: PluginEntry[]
@@ -27,6 +95,8 @@ export function TaskPluginChannelFields(props: {
   const settings = readTaskPluginSettings(setting)
   const key = settings.task_plugin_key
   const selected = props.options.find((option) => option.key === key)
+  const upstreams = taskPluginUpstreams(selected?.upstreams)
+  const upstreamUnavailable = !upstreams.includes(settings.task_plugin_upstream)
   const schema = selected?.channel_config
   const config = settings.task_plugin_config
   const dirty = { shouldDirty: true, shouldValidate: true }
@@ -43,7 +113,7 @@ export function TaskPluginChannelFields(props: {
       'setting',
       JSON.stringify({
         task_plugin_key: nextKey,
-        task_plugin_upstream: next?.upstreams?.[0] ?? 'vendor',
+        task_plugin_upstream: taskPluginUpstreams(next?.upstreams)[0],
         task_plugin_config: {},
       }),
       dirty
@@ -56,7 +126,7 @@ export function TaskPluginChannelFields(props: {
     setValue('model_mapping', '', dirty)
   }
 
-  function changeParameter(name: string, value?: string | number | boolean) {
+  function changeParameter(name: string, value?: ParameterValue) {
     const next =
       value === undefined ? { ...config } : { ...config, [name]: value }
     if (value === undefined) delete next[name]
@@ -147,7 +217,8 @@ export function TaskPluginChannelFields(props: {
             <select
               className={selectClass}
               value={settings.task_plugin_upstream}
-              onChange={(e) =>
+              aria-invalid={upstreamUnavailable}
+              onChange={(e) => {
                 setValue(
                   'setting',
                   JSON.stringify({
@@ -156,9 +227,15 @@ export function TaskPluginChannelFields(props: {
                   }),
                   dirty
                 )
-              }
+                setValue('key', '', dirty)
+              }}
             >
-              {(selected.upstreams ?? ['vendor', 'new_api']).map((kind) => (
+              {upstreamUnavailable && (
+                <option value={settings.task_plugin_upstream} disabled>
+                  {settings.task_plugin_upstream} ({t('Unavailable')})
+                </option>
+              )}
+              {upstreams.map((kind) => (
                 <option key={kind} value={kind}>
                   {kind === 'vendor' ? t('Vendor') : 'New API'}
                 </option>
@@ -178,69 +255,15 @@ export function TaskPluginChannelFields(props: {
             const value = Object.hasOwn(config, name) ? config[name] : undefined
             const required =
               schema?.required?.includes(name) && field.default === undefined
-            const constrained = field.type === 'boolean' || field.enum
-            const numeric = field.type === 'number' || field.type === 'integer'
-            const placeholder =
-              field.default === undefined ? '' : String(field.default)
             return (
               <label className='grid gap-1 text-sm' key={name}>
                 {field.title || name}
                 {required ? ' *' : ''}
-                {constrained ? (
-                  <select
-                    className={selectClass}
-                    value={value === undefined ? '' : JSON.stringify(value)}
-                    onChange={(e) =>
-                      changeParameter(
-                        name,
-                        e.target.value ? JSON.parse(e.target.value) : undefined
-                      )
-                    }
-                  >
-                    <option value=''>
-                      {placeholder || t('Not configured')}
-                    </option>
-                    {(field.type === 'boolean'
-                      ? [true, false]
-                      : (field.enum ?? [])
-                    ).map((option) => (
-                      <option
-                        key={String(option)}
-                        value={JSON.stringify(option)}
-                      >
-                        {String(option)}
-                      </option>
-                    ))}
-                  </select>
-                ) : field.format === 'textarea' ? (
-                  <Textarea
-                    value={String(value ?? '')}
-                    placeholder={placeholder}
-                    onChange={(e) =>
-                      changeParameter(name, e.target.value || undefined)
-                    }
-                  />
-                ) : (
-                  <Input
-                    type={numeric ? 'number' : 'text'}
-                    min={field.minimum}
-                    max={field.maximum}
-                    step={field.type === 'integer' ? 1 : 'any'}
-                    value={String(value ?? '')}
-                    placeholder={placeholder}
-                    onChange={(e) => {
-                      const next = e.target.value
-                      changeParameter(
-                        name,
-                        next === ''
-                          ? undefined
-                          : numeric
-                            ? e.target.valueAsNumber
-                            : next
-                      )
-                    }}
-                  />
-                )}
+                <ParameterInput
+                  field={field}
+                  value={value}
+                  onChange={(next) => changeParameter(name, next)}
+                />
                 {field.description && (
                   <span className='text-muted-foreground text-xs'>
                     {field.description}

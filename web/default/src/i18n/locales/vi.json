@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Select an upstream supported by the active task plugin": "Chọn dịch vụ thượng nguồn được plugin tác vụ đang hoạt động hỗ trợ",
     "Select a bundled JavaScript plugin or a MAX package. Compatibility revisions have explicit MAX versions and source hashes. Paid task admission requires separate verification.": "Chọn plugin JavaScript đi kèm hoặc gói MAX. Bản sửa tương thích có phiên bản MAX và mã băm nguồn riêng. Việc tiếp nhận tác vụ trả phí cần được xác minh riêng.",
     "Bundled plugins": "Plugin đi kèm",
     "Select a bundled plugin version": "Chọn phiên bản plugin đi kèm",

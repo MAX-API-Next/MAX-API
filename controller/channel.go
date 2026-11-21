@@ -1225,7 +1225,11 @@ func UpdateChannel(c *gin.Context) {
 			updateFields = append(updateFields, "channel_info")
 		}
 	}
-	err = channel.UpdateFields(updateFields...)
+	if channel.Type == constant.ChannelTypeTaskPlugin {
+		err = channel.UpdateTaskPluginFields(originChannel, updateFields...)
+	} else {
+		err = channel.UpdateFields(updateFields...)
+	}
 	pollingLock.Unlock()
 	pollingLocked = false
 	if err != nil {

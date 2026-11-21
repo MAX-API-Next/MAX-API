@@ -3,7 +3,7 @@ import { act } from 'react'
 import { FormProvider, useForm } from 'react-hook-form'
 import { createReactTestEnvironment } from '@/test/react'
 import assert from 'node:assert/strict'
-import { after, test } from 'node:test'
+import { after, afterEach, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
 import type { PluginEntry } from '@/features/task-plugins/api'
 import { CHANNEL_FORM_DEFAULT_VALUES, type ChannelFormValues } from '../../lib'
@@ -13,10 +13,9 @@ await env.setup()
 const { render, fireEvent, cleanup } =
   await import('@testing-library/react/pure')
 const { TaskPluginChannelFields } = await import('./task-plugin-channel-fields')
-after(async () => {
-  await act(async () => cleanup())
-  env.teardown()
-})
+const { ChannelBasicSection } = await import('./sections/channel-basic-section')
+afterEach(async () => act(async () => cleanup()))
+after(() => env.teardown())
 
 const plugin: PluginEntry = {
   key: 'fixture',
@@ -99,4 +98,52 @@ test('chooses a declared plugin, retains zero and false, and requires reviewing 
     retries: 0,
     flag: false,
   })
+})
+
+test('shows a removed upstream until a declared replacement is explicitly selected', () => {
+  const view = render(<Fixture options={[plugin]} />)
+  fireEvent.change(view.getByLabelText('Task Plugin'), {
+    target: { value: plugin.key },
+  })
+  const next: PluginEntry = {
+    ...plugin,
+    digest: 'digest-two',
+    upstreams: ['new_api'],
+  }
+  view.rerender(<Fixture options={[next]} />)
+  fireEvent.click(view.getByRole('button', { name: 'Use active version' }))
+  const select = view.getByLabelText('Upstream kind') as HTMLSelectElement
+  assert.equal(select.value, 'vendor')
+  assert.equal(select.selectedOptions[0].disabled, true)
+  fireEvent.change(select, { target: { value: 'new_api' } })
+  const data = JSON.parse(view.getByLabelText('Form values').textContent ?? '')
+  assert.equal(JSON.parse(data.setting).task_plugin_upstream, 'new_api')
+  assert.equal(data.expected_task_plugin_digest, next.digest)
+})
+
+test('rejects the reserved plugin type typed into an existing channel selector', () => {
+  function ExistingChannel() {
+    const form = useForm<ChannelFormValues>({
+      defaultValues: { ...CHANNEL_FORM_DEFAULT_VALUES, type: 1 },
+    })
+    return (
+      <I18nextProvider i18n={env.i18n}>
+        <FormProvider {...form}>
+          <ChannelBasicSection
+            channelTypeOptions={[{ value: '1', label: 'OpenAI' }]}
+            isEditing
+            allowTaskPluginType={false}
+          />
+          <output aria-label='Channel type'>{form.watch('type')}</output>
+        </FormProvider>
+      </I18nextProvider>
+    )
+  }
+  const view = render(<ExistingChannel />)
+  const input = view.getByRole('combobox')
+  fireEvent.change(input, { target: { value: '61' } })
+  fireEvent.keyDown(input, { key: 'Enter' })
+  assert.equal(view.getByLabelText('Channel type').textContent, '1')
+  fireEvent.change(input, { target: { value: '1000' } })
+  assert.equal(view.getByLabelText('Channel type').textContent, '1000')
 })

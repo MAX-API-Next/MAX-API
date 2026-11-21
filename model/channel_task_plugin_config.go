@@ -5,6 +5,7 @@ package model
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -23,6 +24,9 @@ type TaskPluginChannelSettings struct {
 
 func (channel *Channel) BeforeCreate(tx *gorm.DB) error {
 	if channel.Type == constant.ChannelTypeTaskPlugin {
+		if err := lockTaskPluginCatalogHead(tx); err != nil {
+			return taskplugin.ErrCatalogUnavailable
+		}
 		return validateTaskPluginChannelWrite(tx, channel)
 	}
 	return nil
@@ -65,8 +69,63 @@ func (channel *Channel) TaskPluginModels() (map[string]string, error) {
 	return models, nil
 }
 
+func taskPluginBindingFields(channel *Channel) map[string]any {
+	return map[string]any{
+		"type":          channel.Type,
+		"key":           channel.Key,
+		"base_url":      channel.BaseURL,
+		"other":         channel.Other,
+		"models":        channel.Models,
+		"model_mapping": channel.ModelMapping,
+		"setting":       channel.Setting,
+		"channel_info":  channel.ChannelInfo.IsMultiKey,
+	}
+}
+
+func validateTaskPluginChannelUpdate(tx *gorm.DB, channel, observed *Channel, updates map[string]any) error {
+	proposed := taskPluginBindingFields(channel)
+	bindingChanged := false
+	for column := range proposed {
+		if _, selected := updates[column]; selected {
+			bindingChanged = true
+			break
+		}
+	}
+	if !bindingChanged {
+		return nil
+	}
+
+	// Match the catalog's head-before-channel lock order. Acquiring the head also
+	// starts a write transaction on SQLite, where row-level locking is unavailable.
+	if err := lockTaskPluginCatalogHead(tx); err != nil {
+		return taskplugin.ErrCatalogUnavailable
+	}
+	var committed Channel
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&committed, channel.Id).Error; err != nil {
+		return err
+	}
+	conflict := errors.New("Task plugin channel configuration changed. Reload the channel before saving")
+	if committed.Type != channel.Type {
+		return conflict
+	}
+	current := taskPluginBindingFields(&committed)
+	if observed != nil {
+		if observed.Id != channel.Id || !reflect.DeepEqual(current, taskPluginBindingFields(observed)) {
+			return conflict
+		}
+	}
+	for column, value := range proposed {
+		// Validate the identical combination of fields that the write will leave in
+		// the database, including when a model caller supplies no observed snapshot.
+		if _, selected := updates[column]; !selected && !reflect.DeepEqual(value, current[column]) {
+			return conflict
+		}
+	}
+	return validateTaskPluginChannelWrite(tx, channel)
+}
+
+// Call with the catalog head locked to serialize with catalog mutations.
 // The observed digest is a write precondition. Only the plugin key is stored.
-// The catalog head serializes this check with activation, revocation and deletion.
 func validateTaskPluginChannelWrite(tx *gorm.DB, channel *Channel) error {
 	if channel.BaseURL == nil || taskplugin.ValidateChannelBaseURL(*channel.BaseURL) != nil ||
 		strings.TrimSpace(channel.Key) == "" || channel.ChannelInfo.IsMultiKey {
@@ -78,9 +137,6 @@ func validateTaskPluginChannelWrite(tx *gorm.DB, channel *Channel) error {
 	}
 	if channel.TaskPluginExpectedDigest == "" {
 		return errors.New("Refresh task plugin options before saving")
-	}
-	if err := lockTaskPluginCatalogHead(tx); err != nil {
-		return taskplugin.ErrCatalogUnavailable
 	}
 	var record TaskPluginVersion
 	err = tx.Session(&gorm.Session{NewDB: true}).Clauses(clause.Locking{Strength: "UPDATE"}).

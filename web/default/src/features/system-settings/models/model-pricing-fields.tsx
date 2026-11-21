@@ -20,6 +20,20 @@ function describeUsageField(
   return field.enum.join('/')
 }
 
+function matchesUsageField(field: TaskUsageField, other: TaskUsageField) {
+  if ('unit' in field)
+    return (
+      'unit' in other && field.type === other.type && field.unit === other.unit
+    )
+  if ('enum' in field)
+    return (
+      'enum' in other &&
+      field.enum.length === other.enum.length &&
+      field.enum.every((value) => other.enum.includes(value))
+    )
+  return other.type === field.type
+}
+
 export function ModelPricingFields(props: {
   document: PricingDraftView
   session: ModelPricingDraftSession
@@ -64,16 +78,7 @@ export function ModelPricingFields(props: {
               const other = Object.hasOwn(candidate, key)
                 ? candidate[key]
                 : undefined
-              return (
-                other &&
-                field.type === other.type &&
-                ('unit' in field
-                  ? 'unit' in other && field.unit === other.unit
-                  : field.type === 'boolean' ||
-                    ('enum' in other &&
-                      field.enum.every((value) => other.enum.includes(value)) &&
-                      field.enum.length === other.enum.length))
-              )
+              return other && matchesUsageField(field, other)
             })
           )
         )

@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Select an upstream supported by the active task plugin": "Выберите вышестоящий сервис, поддерживаемый активным плагином задач",
     "Select a bundled JavaScript plugin or a MAX package. Compatibility revisions have explicit MAX versions and source hashes. Paid task admission requires separate verification.": "Выберите встроенный плагин JavaScript или пакет MAX. Исправления совместимости имеют отдельные версии MAX и хеши исходного кода. Допуск платных задач требует отдельной проверки.",
     "Bundled plugins": "Встроенные плагины",
     "Select a bundled plugin version": "Выберите версию встроенного плагина",

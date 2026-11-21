@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Select an upstream supported by the active task plugin": "Select an upstream supported by the active task plugin",
     "Task Plugin": "Task Plugin",
     "The channel follows the active plugin version. Production task admission is unavailable.": "The channel follows the active plugin version. Production task admission is unavailable.",
     "Select a task plugin": "Select a task plugin",

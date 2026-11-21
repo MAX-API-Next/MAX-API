@@ -612,6 +612,15 @@ func cloneChannelForUpdate(channel *Channel) *Channel {
 }
 
 func (channel *Channel) UpdateFields(fields ...string) error {
+	return channel.updateFields(nil, fields)
+}
+
+// UpdateTaskPluginFields protects the channel snapshot used to authorize the edit.
+func (channel *Channel) UpdateTaskPluginFields(observed *Channel, fields ...string) error {
+	return channel.updateFields(observed, fields)
+}
+
+func (channel *Channel) updateFields(observed *Channel, fields []string) error {
 	if channel.Id == 0 {
 		return errors.New("channel ID is 0")
 	}
@@ -695,13 +704,8 @@ func (channel *Channel) UpdateFields(fields ...string) error {
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		if workingChannel.Type == constant.ChannelTypeTaskPlugin {
-			for _, name := range []string{"type", "key", "base_url", "other", "models", "model_mapping", "setting"} {
-				if _, changed := updates[name]; changed {
-					if err := validateTaskPluginChannelWrite(tx, workingChannel); err != nil {
-						return err
-					}
-					break
-				}
+			if err := validateTaskPluginChannelUpdate(tx, workingChannel, observed, updates); err != nil {
+				return err
 			}
 		}
 		if err := tx.Model(&Channel{}).Where("id = ?", workingChannel.Id).Updates(updates).Error; err != nil {

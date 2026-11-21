@@ -712,6 +712,53 @@ test('visual plugin pricing generates, saves and reopens an editable tier withou
   )
 })
 
+test('default visual task pricing accepts both enum declarations across sources', async () => {
+  const expression =
+    'u("mode") == "std" ? tier("standard", 0.05) : tier("default", 0)'
+  const value = entry('shared-task-model', 'price-v1', {
+    'billing_setting.billing_expr': expression,
+  })
+  value.contexts = []
+  value.plugin_variants = [
+    {
+      id: 'plugin:implicit',
+      plugin_key: 'implicit',
+      mapped_model: value.model_name,
+      usage_schema: { mode: { enum: ['std', 'pro'] } },
+      compatible: true,
+      schema_compatible: true,
+      available: true,
+      execution_ready: false,
+    },
+    {
+      id: 'plugin:explicit',
+      plugin_key: 'explicit',
+      mapped_model: value.model_name,
+      usage_schema: { mode: { type: 'enum', enum: ['pro', 'std'] } },
+      compatible: true,
+      schema_compatible: true,
+      available: true,
+      execution_ready: false,
+    },
+  ]
+  const f = setup([value])
+  fireEvent.click(await f.findByRole('button', { name: 'shared-task-model' }))
+  const code = (await f.findByLabelText(
+    'Default expression'
+  )) as HTMLTextAreaElement
+  assert.equal(code.value, expression)
+  assert.ok(f.getByRole('button', { name: 'Add tier' }))
+  const [fee] = f.getAllByLabelText('Base fee (USD)')
+  fireEvent.change(fee, { target: { value: '0.07' } })
+  assert.equal(code.value, expression.replace('0.05', '0.07'))
+  fireEvent.click(f.getByRole('button', { name: 'Save model pricing' }))
+  await waitFor(() => assert.equal(f.writes.length, 1))
+  assert.equal(
+    f.writes[0][0].pricing['billing_setting.billing_expr'],
+    expression.replace('0.05', '0.07')
+  )
+})
+
 test('default visual token pricing generates existing per-million coefficients', async () => {
   const f = setup([entry('token-model', 'price-v1', {})])
   await waitFor(() => assert.ok(f.getByRole('button', { name: 'token-model' })))

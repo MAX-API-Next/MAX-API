@@ -17,3 +17,7 @@ export function readTaskPluginSettings(setting?: string) {
     return settingsSchema.parse({})
   }
 }
+
+export function taskPluginUpstreams(upstreams?: string[]): string[] {
+  return upstreams?.length ? upstreams : ['vendor', 'new_api']
+}

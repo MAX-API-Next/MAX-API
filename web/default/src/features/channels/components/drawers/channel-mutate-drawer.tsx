@@ -146,7 +146,10 @@ import {
   collectInvalidStatusCodeEntries,
   collectNewDisallowedStatusCodeRedirects,
 } from '../../lib/status-code-risk-guard'
-import { readTaskPluginSettings } from '../../lib/task-plugin-channel'
+import {
+  readTaskPluginSettings,
+  taskPluginUpstreams,
+} from '../../lib/task-plugin-channel'
 import type { Channel } from '../../types'
 import { ChannelCapabilityMatrix } from '../channel-capability-matrix'
 import { ChannelRoutingHealthCard } from '../channel-routing-health-card'
@@ -337,6 +340,8 @@ export function ChannelMutateDrawer({
   const currentGroups = form.watch('group')
   const currentType = Number(form.watch('type') || 0)
   const isTaskPlugin = currentType === CHANNEL_TYPE_TASK_PLUGIN
+  const savedTaskPlugin =
+    (channelData?.data?.type ?? currentRow?.type) === CHANNEL_TYPE_TASK_PLUGIN
   const canConfigureTaskPlugins = useAuthStore(
     (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
   )
@@ -555,7 +560,7 @@ export function ChannelMutateDrawer({
     const options = CHANNEL_TYPE_OPTIONS.filter(
       (option) =>
         option.value !== CHANNEL_TYPE_TASK_PLUGIN ||
-        (canConfigureTaskPlugins && (!isEditing || isTaskPlugin))
+        (canConfigureTaskPlugins && !isEditing)
     ).map((option) => ({
       value: String(option.value),
       label: t(option.label),
@@ -569,7 +574,7 @@ export function ChannelMutateDrawer({
       })
     }
     return options
-  }, [currentType, canConfigureTaskPlugins, isEditing, isTaskPlugin, t])
+  }, [currentType, canConfigureTaskPlugins, isEditing, t])
 
   const formErrors = form.formState.errors
   const identityHasErrors = Boolean(
@@ -1132,14 +1137,26 @@ export function ChannelMutateDrawer({
   // Submit handler
   const onSubmit = useCallback(
     async (data: ChannelFormValues) => {
-      if (
-        data.type === CHANNEL_TYPE_TASK_PLUGIN &&
-        (!canConfigureTaskPlugins ||
+      if (data.type === CHANNEL_TYPE_TASK_PLUGIN) {
+        if (
+          !canConfigureTaskPlugins ||
           !selectedTaskPlugin ||
-          data.expected_task_plugin_digest !== selectedTaskPlugin.digest)
-      ) {
-        toast.error(t('Refresh task plugin options before saving'))
-        return
+          data.expected_task_plugin_digest !== selectedTaskPlugin.digest
+        ) {
+          toast.error(t('Refresh task plugin options before saving'))
+          return
+        }
+        const upstream = readTaskPluginSettings(
+          data.setting
+        ).task_plugin_upstream
+        if (
+          !taskPluginUpstreams(selectedTaskPlugin.upstreams).includes(upstream)
+        ) {
+          toast.error(
+            t('Select an upstream supported by the active task plugin')
+          )
+          return
+        }
       }
       // Validate key is required when creating
       if (!isEditing && !data.key?.trim()) {
@@ -1490,7 +1507,10 @@ export function ChannelMutateDrawer({
                       <ChannelBasicSection
                         channelTypeOptions={channelTypeOptions}
                         isEditing={isEditing}
-                        lockType={isEditing && isTaskPlugin}
+                        lockType={savedTaskPlugin}
+                        allowTaskPluginType={
+                          canConfigureTaskPlugins && !isEditing
+                        }
                       />
 
                       <ChannelCapabilityMatrix
