@@ -801,6 +801,50 @@ test('default visual task pricing accepts both enum declarations across sources'
   )
 })
 
+test('a plugin override offers only compatible dimensions shared by its channels', async () => {
+  const value = entry('shared-alias', 'price-v1', {})
+  const first = {
+    ...value.contexts[0],
+    plugin_key: 'p',
+    usage_schema: {
+      shared: { type: 'number', unit: 'credit' },
+      units: { type: 'number', unit: 'count' },
+      duration: { type: 'number', unit: 'second' },
+    },
+  } as const
+  value.contexts = [
+    first,
+    {
+      ...first,
+      id: 'channel:2',
+      channel_id: 2,
+      mapped_model: 'other-model',
+      usage_schema: {
+        shared: { type: 'number', unit: 'credit' },
+        duration: { type: 'number', unit: 'count' },
+      },
+    },
+  ]
+  const f = setup([value])
+  fireEvent.click(await f.findByRole('button', { name: 'shared-alias' }))
+  fireEvent.change(await f.findByLabelText('Pricing source'), {
+    target: { value: 'channel:1' },
+  })
+  assert.ok(!f.queryByLabelText('units (USD / count)'))
+  assert.ok(!f.queryByLabelText('duration (USD / second)'))
+  fireEvent.change(f.getByLabelText('shared (USD / credit)'), {
+    target: { value: '0.25' },
+  })
+  fireEvent.click(f.getByRole('button', { name: 'Save model pricing' }))
+  await waitFor(() => assert.equal(f.writes.length, 1))
+  assert.deepEqual(
+    f.writes[0][0].pricing['billing_setting.plugin_billing_expr'],
+    {
+      p: 'tier("default", u("shared") * 0.25)',
+    }
+  )
+})
+
 test('default visual token pricing generates existing per-million coefficients', async () => {
   const f = setup([entry('token-model', 'price-v1', {})])
   await waitFor(() => assert.ok(f.getByRole('button', { name: 'token-model' })))

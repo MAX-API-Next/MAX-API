@@ -28,7 +28,9 @@ import {
 import { createReactTestEnvironment } from '@/test/react'
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
+import { useAuthStore } from '@/stores/auth-store'
 import { api } from '@/lib/api'
+import { CHANNEL_TYPE_TASK_PLUGIN } from '../constants'
 import type { ChannelRoutingHealth } from '../lib/channel-routing-health'
 import { channelSchema, type Channel } from '../types'
 
@@ -155,6 +157,62 @@ async function renderPage(content: ReactElement, queryClient: QueryClient) {
   )
   return { ...view, router }
 }
+
+test(
+  'root can save only changed metadata when the channel plugin is offline',
+  { timeout: 60_000 },
+  async () => {
+    const queryClient = client()
+    const adapter = api.defaults.adapter
+    const previousUser = useAuthStore.getState().auth.user
+    const row = {
+      ...channel(11),
+      type: CHANNEL_TYPE_TASK_PLUGIN,
+      base_url: 'https://provider.example',
+      setting:
+        '{"task_plugin_key":"offline","task_plugin_upstream":"vendor","task_plugin_config":{}}',
+    }
+    const writes: unknown[] = []
+    api.defaults.adapter = async (config) => {
+      if (config.method === 'put') writes.push(JSON.parse(String(config.data)))
+      let data: unknown = []
+      if (config.url === '/api/channel/11') data = row
+      if (config.url === '/api/task_plugins')
+        data = { revision: '1', entries: [] }
+      return {
+        config,
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        data: { success: true, data },
+      }
+    }
+    useAuthStore
+      .getState()
+      .auth.setUser({ id: 11, role: 100, username: 'test-root' })
+    const view = await renderPage(
+      <ChannelMutateDrawer open onOpenChange={() => {}} currentRow={row} />,
+      queryClient
+    )
+    try {
+      const body = within(env.dom.window.document.body)
+      await waitFor(() =>
+        assert.ok(body.queryByText(/The saved task plugin is unavailable/))
+      )
+      const input = body.getByLabelText('Configured priority')
+      await act(async () =>
+        fireEvent.change(input, { target: { value: '20' } })
+      )
+      await view.click(body.getByText('Update Channel', { selector: 'button' }))
+      await waitFor(() => assert.deepEqual(writes, [{ id: 11, priority: 20 }]))
+    } finally {
+      await view.unmount()
+      queryClient.clear()
+      api.defaults.adapter = adapter
+      useAuthStore.getState().auth.setUser(previousUser)
+    }
+  }
+)
 
 test(
   'runtime polling updates the real editor card while draft and detail invalidations remain isolated',

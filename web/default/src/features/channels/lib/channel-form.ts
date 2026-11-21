@@ -1149,8 +1149,41 @@ export function transformFormDataToUpdatePayload(
   payload.status_code_mapping = formData.status_code_mapping || ''
   payload.param_override = formData.param_override || ''
   payload.header_override = formData.header_override || ''
+  if (formData.type === CHANNEL_TYPE_TASK_PLUGIN)
+    payload.other = formData.other || ''
 
   return payload
+}
+
+// Metadata may be updated while the saved plugin is offline. Compare the wire
+// values with the form as opened so an automatic digest refresh is not an edit.
+export function taskPluginMetadataPatch(
+  data: ChannelFormValues,
+  initial: ChannelFormValues,
+  id: number
+): Partial<Channel> | undefined {
+  if (initial.type !== CHANNEL_TYPE_TASK_PLUGIN || data.type !== initial.type)
+    return undefined
+  const before = transformFormDataToUpdatePayload(initial, id)
+  const after = transformFormDataToUpdatePayload(data, id)
+  const binding = [
+    'type',
+    'key',
+    'base_url',
+    'other',
+    'models',
+    'model_mapping',
+    'setting',
+    'channel_info',
+  ] as const
+  if (binding.some((field) => before[field] !== after[field])) return undefined
+  return Object.fromEntries(
+    Object.entries(after).filter(
+      ([field, value]) =>
+        field !== 'expected_task_plugin_digest' &&
+        value !== before[field as keyof Channel]
+    )
+  )
 }
 
 // ============================================================================

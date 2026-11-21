@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -306,6 +307,12 @@ func TestTaskPluginChannelConfigAndPricingLifecycle(t *testing.T) {
 		"id": stored.Id, "setting": channel["setting"], "expected_task_plugin_digest": second.Digest(),
 	}, rootCookies)
 	require.Contains(t, r.Body.String(), "plugin is unavailable")
+	r = call("PUT", "/api/channel/", map[string]any{"id": stored.Id, "remark": "offline maintenance"}, rootCookies)
+	require.Contains(t, r.Body.String(), `"success":true`, r.Body.String())
+	var edited model.Channel
+	require.NoError(t, db.First(&edited, stored.Id).Error)
+	require.Equal(t, "offline maintenance", *edited.Remark)
+	require.Equal(t, stored.Models, edited.Models)
 	history, err := catalog.Host().RestoreExecutor(prior.Binding, actor)
 	require.NoError(t, err)
 	polled, err := history.Poll(t.Context(), broker, input, prior, authorize)
@@ -319,6 +326,17 @@ func TestTaskPluginChannelConfigAndPricingLifecycle(t *testing.T) {
 	require.EqualValues(t, 1, gets.Load())
 
 	require.NoError(t, transition("enable", second.Manifest().Version))
+	all, err := model.GetModelPricingSnapshot(nil)
+	require.NoError(t, err)
+	var canonical int
+	for _, item := range all.Entries {
+		require.Equal(t, strings.TrimSpace(item.ModelName), item.ModelName)
+		if item.ModelName == alias {
+			canonical++
+			require.NotEmpty(t, item.Contexts)
+		}
+	}
+	require.Equal(t, 1, canonical)
 	snapshot, err := model.GetModelPricingSnapshot([]string{alias})
 	require.NoError(t, err)
 	entry := snapshot.Entries[0]

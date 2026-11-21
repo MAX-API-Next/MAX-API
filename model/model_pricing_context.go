@@ -247,16 +247,20 @@ type pricingChannelReferences struct {
 	mappingValid bool
 }
 
+func (channel pricingChannel) advertisedModelName(name string) string {
+	if channel.Type == constant.ChannelTypeTaskPlugin {
+		return strings.TrimSpace(name)
+	}
+	return name
+}
+
 func (channel pricingChannel) pricingModelReferences(ctx context.Context) (pricingChannelReferences, error) {
 	references := pricingChannelReferences{models: make(map[string]bool), mapping: make(map[string]string)}
 	for _, model := range strings.Split(channel.Models, ",") {
 		if err := ctx.Err(); err != nil {
 			return references, err
 		}
-		if channel.Type == constant.ChannelTypeTaskPlugin {
-			model = strings.TrimSpace(model)
-		}
-		references.models[model] = true
+		references.models[channel.advertisedModelName(model)] = true
 	}
 	references.mappingValid = channel.ModelMapping == nil || *channel.ModelMapping == "" ||
 		common.UnmarshalJsonStr(*channel.ModelMapping, &references.mapping) == nil

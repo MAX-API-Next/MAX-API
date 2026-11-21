@@ -122,6 +122,7 @@ import {
   channelsQueryKeys,
   invalidateChannelConfiguration,
   transformChannelToFormDefaults,
+  taskPluginMetadataPatch,
   type ChannelFormValues,
   deduplicateKeys,
   getChannelTypeIcon,
@@ -220,6 +221,7 @@ export function ChannelMutateDrawer({
   const [isCodexCredentialRefreshing, setIsCodexCredentialRefreshing] =
     useState(false)
   const initialModelsRef = useRef<string[]>([])
+  const initialPluginForm = useRef<ChannelFormValues | null>(null)
   const initialModelMappingRef = useRef<string>('')
   const initialStatusCodeMappingRef = useRef<string>('')
   const [statusCodeRiskOpen, setStatusCodeRiskOpen] = useState(false)
@@ -862,6 +864,8 @@ export function ChannelMutateDrawer({
       initializedEditorRef.current = channelId
       setInitializedEditorId(channelId)
       const defaults = transformChannelToFormDefaults(channelData.data)
+      initialPluginForm.current =
+        defaults.type === CHANNEL_TYPE_TASK_PLUGIN ? defaults : null
       const shouldOpenAdvancedSettings =
         readAdvancedSettingsPreference() ||
         hasAdvancedSettingsValues(defaults) ||
@@ -1142,9 +1146,19 @@ export function ChannelMutateDrawer({
   // Submit handler
   const onSubmit = useCallback(
     async (data: ChannelFormValues) => {
-      if (data.type === CHANNEL_TYPE_TASK_PLUGIN) {
+      const metadataPatch =
+        isEditing &&
+        channelId &&
+        initializedEditorRef.current === channelId &&
+        initialPluginForm.current
+          ? taskPluginMetadataPatch(data, initialPluginForm.current, channelId)
+          : undefined
+      if (data.type === CHANNEL_TYPE_TASK_PLUGIN && !canConfigureTaskPlugins) {
+        toast.error(t('Task plugin channel configuration requires root access'))
+        return
+      }
+      if (data.type === CHANNEL_TYPE_TASK_PLUGIN && !metadataPatch) {
         if (
-          !canConfigureTaskPlugins ||
           !selectedTaskPlugin ||
           data.expected_task_plugin_digest !== selectedTaskPlugin.digest
         ) {
@@ -1272,7 +1286,7 @@ export function ChannelMutateDrawer({
         }
       }
 
-      await channelMutation.mutateAsync(data)
+      await channelMutation.mutateAsync({ data, metadataPatch })
     },
     [
       isEditing,
@@ -1280,6 +1294,7 @@ export function ChannelMutateDrawer({
       confirmMissingModelMappings,
       confirmStatusCodeRisk,
       channelMutation,
+      channelId,
       canConfigureTaskPlugins,
       selectedTaskPlugin,
       t,

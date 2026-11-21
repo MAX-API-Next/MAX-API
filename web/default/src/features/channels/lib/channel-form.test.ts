@@ -26,6 +26,7 @@ import { channelSchema } from '../types'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
   channelFormSchema,
+  taskPluginMetadataPatch,
   transformChannelToFormDefaults,
   transformFormDataToCreatePayload,
   transformFormDataToUpdatePayload,
@@ -75,6 +76,34 @@ describe('channel form settings round trip', () => {
     )
     assert.equal(reopened.key, '')
     assert.equal(reopened.expected_task_plugin_digest, undefined)
+    const initial = { ...reopened, other: 'us', remark: 'before' }
+    assert.deepEqual(
+      taskPluginMetadataPatch(
+        { ...initial, remark: '', expected_task_plugin_digest: 'refreshed' },
+        initial,
+        8
+      ),
+      { remark: '' }
+    )
+    for (const changed of [
+      { other: '' },
+      { key: 'replacement-fixture' },
+      { models: 'other' },
+      { base_url: 'https://new.example' },
+      { model_mapping: '{}' },
+      {
+        setting: JSON.stringify({ ...pluginSettings, task_plugin_config: {} }),
+      },
+    ]) {
+      assert.equal(
+        taskPluginMetadataPatch({ ...initial, ...changed }, initial, 8),
+        undefined
+      )
+    }
+    assert.equal(
+      transformFormDataToUpdatePayload({ ...initial, other: '' }, 8).other,
+      ''
+    )
     reopened.expected_task_plugin_digest = 'refreshed-digest'
     const update = transformFormDataToUpdatePayload(reopened, 8)
     const savedSettings = JSON.parse(update.settings ?? '{}')

@@ -66,23 +66,22 @@ export function ModelPricingFields(props: {
   const hasTaskDefault = base.contexts.some(
     (context) => context.profile === 'new-api-task@1' && !context.preview_only
   )
-  const schema = plugin
-    ? selected?.available
-      ? selected.usage_schema
-      : undefined
-    : undefined
-  const defaultSchemas = [...contexts.values()].flatMap((context) =>
-    context.usage_schema && !Object.hasOwn(variants, context.plugin_key ?? '')
+  const schemas = [...contexts.values()].flatMap((context) =>
+    context.usage_schema &&
+    (plugin
+      ? context.plugin_key === plugin
+      : !Object.hasOwn(variants, context.plugin_key ?? ''))
       ? [context.usage_schema]
       : []
   )
-  const defaultTaskSchema =
-    !plugin &&
-    (hasTaskDefault || hasTaskUsageCall(expression)) &&
-    defaultSchemas.length
+  const hasVisualSchema = plugin
+    ? selected?.available && selected.usage_schema
+    : hasTaskDefault || hasTaskUsageCall(expression)
+  const schema =
+    hasVisualSchema && schemas.length
       ? Object.fromEntries(
-          Object.entries(defaultSchemas[0]).filter(([key, field]) =>
-            defaultSchemas.every((candidate) => {
+          Object.entries(schemas[0]).filter(([key, field]) =>
+            schemas.every((candidate) => {
               const other = Object.hasOwn(candidate, key)
                 ? candidate[key]
                 : undefined
@@ -229,7 +228,7 @@ export function ModelPricingFields(props: {
         id={`${id}-expression`}
         expression={expression}
         plugin={Boolean(plugin)}
-        schema={schema ?? defaultTaskSchema}
+        schema={schema}
         explicitTaskUnits={Boolean(plugin) || hasTaskDefault}
         onChange={setExpression}
       />

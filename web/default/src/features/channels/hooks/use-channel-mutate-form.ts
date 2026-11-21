@@ -64,12 +64,17 @@ export function useChannelMutateForm(props: UseChannelMutateFormParams) {
   const { t } = useTranslation()
 
   return useMutation({
-    mutationFn: async (data: ChannelFormValues): Promise<string> => {
+    mutationFn: async ({
+      data,
+      metadataPatch,
+    }: {
+      data: ChannelFormValues
+      metadataPatch?: Partial<Channel>
+    }): Promise<string> => {
       if (props.isEditing && props.currentRow) {
-        const payload = transformFormDataToUpdatePayload(
-          data,
-          props.currentRow.id
-        )
+        const payload =
+          metadataPatch ??
+          transformFormDataToUpdatePayload(data, props.currentRow.id)
         const payloadWithKeyMode =
           props.isMultiKeyChannel && data.key_mode
             ? {

@@ -66,8 +66,8 @@ func InitChannelCache() {
 		newGroup2model2channels[group] = make(map[string][]int)
 	}
 	for _, channel := range channels {
-		if channel.Status != common.ChannelStatusEnabled {
-			continue // skip disabled channels
+		if channel.Status != common.ChannelStatusEnabled || channel.Type == constant.ChannelTypeTaskPlugin {
+			continue
 		}
 		groups := strings.Split(channel.Group, ",")
 		for _, group := range groups {
