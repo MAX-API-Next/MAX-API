@@ -197,6 +197,22 @@ func TestTaskPluginChannelConfigAndPricingLifecycle(t *testing.T) {
 		status("enabled", adminCookies, enabled, disabled)
 		status("enabled", rootCookies, enabled, enabled)
 	})
+	t.Run("root bulk model edit includes legacy channels without a type", func(t *testing.T) {
+		tag := "review-null-type"
+		legacy := model.Channel{
+			Name: "legacy-type", Type: constant.ChannelTypeOpenAI, Key: "fixture-only",
+			Tag: &tag, Models: "original-model", Group: "default",
+		}
+		require.NoError(t, legacy.Insert())
+		t.Cleanup(func() { require.NoError(t, legacy.Delete()) })
+		require.NoError(t, db.Model(&legacy).UpdateColumn("type", nil).Error)
+		response := call("PUT", "/api/channel/tag", map[string]string{
+			"tag": tag, "models": "updated-model",
+		}, rootCookies)
+		require.Contains(t, response.Body.String(), `"success":true`)
+		require.NoError(t, db.First(&legacy, legacy.Id).Error)
+		require.Equal(t, "updated-model", legacy.Models)
+	})
 	var count int64
 	require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", stored.Id).Count(&count).Error)
 	require.Zero(t, count, "preview channels cannot enter production routing")

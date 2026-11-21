@@ -1096,7 +1096,7 @@ func EditChannelByTag(tag string, includeTaskPlugins bool, newTag *string, model
 		if pluginChannels > 0 {
 			return errors.New("Edit task plugin model mappings on the individual channel")
 		}
-		query = query.Where("type <> ?", constant.ChannelTypeTaskPlugin)
+		query = channelsByTagForWrite(tag, false)
 	}
 	err := query.Updates(updateData).Error
 	if err != nil {
