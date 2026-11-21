@@ -125,6 +125,26 @@ test('shows a removed upstream until a declared replacement is explicitly select
   assert.equal(data.expected_task_plugin_digest, next.digest)
 })
 
+test('retains a saved region until it is cleared after a plugin upgrade', () => {
+  const view = render(
+    <Fixture options={[{ ...plugin, region_parameter: true }]} />
+  )
+  fireEvent.change(view.getByLabelText('Task Plugin'), {
+    target: { value: plugin.key },
+  })
+  const label = 'Region or model-to-region JSON'
+  fireEvent.change(view.getByLabelText(label), { target: { value: 'eu' } })
+  view.rerender(<Fixture options={[{ ...plugin, digest: 'digest-two' }]} />)
+  fireEvent.click(view.getByRole('button', { name: 'Use active version' }))
+  const retained = view.getByLabelText(label) as HTMLInputElement
+  assert.equal(retained.value, 'eu')
+  fireEvent.change(retained, { target: { value: '' } })
+  assert.equal(view.queryByLabelText(label), null)
+  const data = JSON.parse(view.getByLabelText('Form values').textContent ?? '')
+  assert.equal(data.other, '')
+  assert.equal(data.expected_task_plugin_digest, 'digest-two')
+})
+
 test('rejects the reserved plugin type typed into an existing channel selector', () => {
   function ExistingChannel() {
     const form = useForm<ChannelFormValues>({

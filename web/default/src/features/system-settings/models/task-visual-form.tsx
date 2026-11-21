@@ -1,6 +1,7 @@
 // Copyright (C) 2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 // UI reference: QuantumNous/new-api 8542c9d6, task-usage-pricing-editor.tsx
 // (AGPL-3.0-or-later).
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -22,7 +23,10 @@ function AmountInput(props: {
   value: number | undefined
   onChange: (value: number | undefined) => void
   placeholder?: string
+  blankZero?: boolean
 }) {
+  const [enteredZero, setEnteredZero] = useState(false)
+  const blank = props.blankZero && props.value === 0 && !enteredZero
   return (
     <Input
       type='number'
@@ -30,9 +34,11 @@ function AmountInput(props: {
       max={Number.MAX_SAFE_INTEGER}
       step='any'
       placeholder={props.placeholder}
-      value={props.value ?? ''}
+      value={blank ? '' : (props.value ?? '')}
+      onBlur={() => setEnteredZero(false)}
       onChange={(event) => {
         if (event.target.validity.badInput) return
+        if (props.blankZero) setEnteredZero(event.target.valueAsNumber === 0)
         if (event.target.value === '') props.onChange(undefined)
         else if (
           event.target.validity.valid &&
@@ -180,7 +186,8 @@ export function TaskVisualForm(props: {
               <label className='grid gap-1 text-xs'>
                 {t('Base fee (USD)')}
                 <AmountInput
-                  value={tier.flat || undefined}
+                  value={tier.flat}
+                  blankZero
                   placeholder='0'
                   onChange={(value) =>
                     updateTier(index, { ...tier, flat: value ?? 0 })

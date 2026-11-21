@@ -682,7 +682,17 @@ test('visual plugin pricing generates, saves and reopens an editable tier withou
   fireEvent.change(f.getByLabelText('Value'), { target: { value: '1' } })
   const [highFee, fallbackFee] = f.getAllByLabelText('Base fee (USD)')
   assert.equal((fallbackFee as HTMLInputElement).value, '')
-  fireEvent.change(highFee, { target: { value: '0.05' } })
+  const fee = highFee as HTMLInputElement
+  fireEvent.change(fee, { target: { value: '0.1' } })
+  fireEvent.change(fee, { target: { value: '' } })
+  assert.equal(fee.value, '')
+  fireEvent.change(fee, { target: { value: '0' } })
+  assert.equal(fee.value, '0')
+  // A native number input exposes the decimal separator with its next digit.
+  fireEvent.change(fee, { target: { value: fee.value + '.0' } })
+  assert.equal(fee.value, '0.0')
+  fireEvent.change(fee, { target: { value: fee.value + '5' } })
+  assert.equal(fee.value, '0.05')
   fireEvent.change(f.getAllByLabelText('units (USD / credit)')[0], {
     target: { value: '0.2' },
   })

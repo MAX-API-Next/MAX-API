@@ -126,6 +126,7 @@ export function TaskPluginChannelFields(props: {
   const { control, setValue, getValues, register } =
     useFormContext<ChannelFormValues>()
   const setting = useWatch({ control, name: 'setting' })
+  const region = useWatch({ control, name: 'other' })
   const observed = useWatch({ control, name: 'expected_task_plugin_digest' })
   const settings = readTaskPluginSettings(setting)
   const key = settings.task_plugin_key
@@ -281,7 +282,7 @@ export function TaskPluginChannelFields(props: {
           {selected.key_hint && (
             <p className='text-muted-foreground text-sm'>{selected.key_hint}</p>
           )}
-          {selected.region_parameter && (
+          {(selected.region_parameter || Boolean(region)) && (
             <label className='grid gap-1 text-sm'>
               {t('Region or model-to-region JSON')}
               <Input {...register('other')} placeholder='global' />
