@@ -55,6 +55,8 @@ type Channel struct {
 
 	OtherSettings string `json:"settings" gorm:"column:settings"` // 其他设置，存储azure版本等不需要检索的信息，详见dto.ChannelOtherSettings
 
+	TaskPluginExpectedDigest string `json:"expected_task_plugin_digest,omitempty" gorm:"-"`
+
 	// cache info
 	Keys []string `json:"-" gorm:"-"`
 }
@@ -610,6 +612,15 @@ func cloneChannelForUpdate(channel *Channel) *Channel {
 }
 
 func (channel *Channel) UpdateFields(fields ...string) error {
+	return channel.updateFields(nil, fields)
+}
+
+// UpdateTaskPluginFields protects the channel snapshot used to authorize the edit.
+func (channel *Channel) UpdateTaskPluginFields(observed *Channel, fields ...string) error {
+	return channel.updateFields(observed, fields)
+}
+
+func (channel *Channel) updateFields(observed *Channel, fields []string) error {
 	if channel.Id == 0 {
 		return errors.New("channel ID is 0")
 	}
@@ -692,12 +703,18 @@ func (channel *Channel) UpdateFields(fields ...string) error {
 	}
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if workingChannel.Type == constant.ChannelTypeTaskPlugin {
+			if err := validateTaskPluginChannelUpdate(tx, workingChannel, observed, updates); err != nil {
+				return err
+			}
+		}
 		if err := tx.Model(&Channel{}).Where("id = ?", workingChannel.Id).Updates(updates).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&Channel{}).First(workingChannel, "id = ?", workingChannel.Id).Error; err != nil {
 			return err
 		}
+		workingChannel.TaskPluginExpectedDigest = ""
 		if keySelected {
 			workingChannel.Keys = nil
 		}
@@ -1011,8 +1028,16 @@ func updateChannelStatus(channelId int, usingKey string, status int, reason stri
 	return changed
 }
 
-func EnableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
+func channelsByTagForWrite(tag string, includeTaskPlugins bool) *gorm.DB {
+	query := DB.Model(&Channel{}).Where("tag = ?", tag)
+	if !includeTaskPlugins {
+		query = query.Where("(type <> ? OR type IS NULL)", constant.ChannelTypeTaskPlugin)
+	}
+	return query
+}
+
+func EnableChannelByTag(tag string, includeTaskPlugins bool) error {
+	err := channelsByTagForWrite(tag, includeTaskPlugins).Update("status", common.ChannelStatusEnabled).Error
 	if err != nil {
 		return err
 	}
@@ -1020,8 +1045,8 @@ func EnableChannelByTag(tag string) error {
 	return err
 }
 
-func DisableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusManuallyDisabled).Error
+func DisableChannelByTag(tag string, includeTaskPlugins bool) error {
+	err := channelsByTagForWrite(tag, includeTaskPlugins).Update("status", common.ChannelStatusManuallyDisabled).Error
 	if err != nil {
 		return err
 	}
@@ -1029,7 +1054,7 @@ func DisableChannelByTag(tag string) error {
 	return err
 }
 
-func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
+func EditChannelByTag(tag string, includeTaskPlugins bool, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
 	updateData := Channel{}
 	shouldReCreateAbilities := false
 	updatedTag := tag
@@ -1062,7 +1087,18 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 		updateData.HeaderOverride = headerOverride
 	}
 
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Updates(updateData).Error
+	query := channelsByTagForWrite(tag, includeTaskPlugins)
+	if includeTaskPlugins && (updateData.Models != "" || updateData.ModelMapping != nil) {
+		var pluginChannels int64
+		if err := DB.Model(&Channel{}).Where("tag = ? AND type = ?", tag, constant.ChannelTypeTaskPlugin).Count(&pluginChannels).Error; err != nil {
+			return err
+		}
+		if pluginChannels > 0 {
+			return errors.New("Edit task plugin model mappings on the individual channel")
+		}
+		query = query.Where("type <> ?", constant.ChannelTypeTaskPlugin)
+	}
+	err := query.Updates(updateData).Error
 	if err != nil {
 		return err
 	}
@@ -1070,6 +1106,9 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 		channels, err := GetChannelsByTag(updatedTag, false, false)
 		if err == nil {
 			for _, channel := range channels {
+				if !includeTaskPlugins && channel.Type == constant.ChannelTypeTaskPlugin {
+					continue
+				}
 				err = channel.UpdateAbilities(nil)
 				if err != nil {
 					common.SysLog(fmt.Sprintf("failed to update abilities: channel_id=%d, tag=%s, error=%v", channel.Id, channel.GetTag(), err))

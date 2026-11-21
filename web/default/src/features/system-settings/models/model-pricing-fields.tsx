@@ -7,6 +7,7 @@ import type {
   ModelPricingDraftSession,
   PricingDraftView,
 } from './model-pricing-draft'
+import { ModelPricingExpression } from './model-pricing-expression'
 import { modelPricingNumericKeys } from './model-pricing-types'
 import type { TaskUsageField } from './task-pricing-contract'
 
@@ -17,6 +18,28 @@ function describeUsageField(
   if ('unit' in field) return field.unit
   if (field.type === 'boolean') return booleanLabel
   return field.enum.join('/')
+}
+
+function hasTaskUsageCall(expression: string): boolean {
+  const unquoted = expression.replace(
+    /"(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*'/g,
+    ' '
+  )
+  return /\bu\s*\(/.test(unquoted)
+}
+
+function matchesUsageField(field: TaskUsageField, other: TaskUsageField) {
+  if ('unit' in field)
+    return (
+      'unit' in other && field.type === other.type && field.unit === other.unit
+    )
+  if ('enum' in field)
+    return (
+      'enum' in other &&
+      field.enum.length === other.enum.length &&
+      field.enum.every((value) => other.enum.includes(value))
+    )
+  return other.type === field.type
 }
 
 export function ModelPricingFields(props: {
@@ -37,6 +60,37 @@ export function ModelPricingFields(props: {
     selected?.plugin_key ??
     (d.source.startsWith('plugin:') ? d.source.slice(7) : '')
   const variants = pricing['billing_setting.plugin_billing_expr'] ?? {}
+  const expression = plugin
+    ? (variants[plugin] ?? '')
+    : (pricing['billing_setting.billing_expr'] ?? '')
+  const hasTaskDefault = base.contexts.some(
+    (context) => context.profile === 'new-api-task@1' && !context.preview_only
+  )
+  const schema = plugin
+    ? selected?.available
+      ? selected.usage_schema
+      : undefined
+    : undefined
+  const defaultSchemas = [...contexts.values()].flatMap((context) =>
+    context.usage_schema && !Object.hasOwn(variants, context.plugin_key ?? '')
+      ? [context.usage_schema]
+      : []
+  )
+  const defaultTaskSchema =
+    !plugin &&
+    (hasTaskDefault || hasTaskUsageCall(expression)) &&
+    defaultSchemas.length
+      ? Object.fromEntries(
+          Object.entries(defaultSchemas[0]).filter(([key, field]) =>
+            defaultSchemas.every((candidate) => {
+              const other = Object.hasOwn(candidate, key)
+                ? candidate[key]
+                : undefined
+              return other && matchesUsageField(field, other)
+            })
+          )
+        )
+      : undefined
   const sources = new Map([...contexts.keys()].map((id) => [id, id]))
   for (const key of Object.keys(variants))
     sources.set(`plugin:${key}`, `plugin:${key}`)
@@ -170,26 +224,15 @@ export function ModelPricingFields(props: {
           </div>
         </>
       )}
-      <label className='grid gap-1 text-sm' htmlFor={`${id}-expression`}>
-        {plugin ? t('Plugin expression override') : t('Default expression')}
-        <Textarea
-          id={`${id}-expression`}
-          rows={4}
-          value={
-            plugin
-              ? (variants[plugin] ?? '')
-              : (pricing['billing_setting.billing_expr'] ?? '')
-          }
-          placeholder={
-            plugin
-              ? t(
-                  'Empty inherits the default expression; 0 is explicitly free.'
-                )
-              : ''
-          }
-          onChange={(e) => setExpression(e.target.value)}
-        />
-      </label>
+      <ModelPricingExpression
+        key={`${base.model_name}:${d.source}`}
+        id={`${id}-expression`}
+        expression={expression}
+        plugin={Boolean(plugin)}
+        schema={schema ?? defaultTaskSchema}
+        explicitTaskUnits={Boolean(plugin) || hasTaskDefault}
+        onChange={setExpression}
+      />
       {plugin && (
         <p className='text-muted-foreground text-xs'>
           {t('Effective expression')}:{' '}

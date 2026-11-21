@@ -609,6 +609,9 @@ func installCatalogPackagesContext(ctx context.Context, next *CatalogSnapshot, p
 		if p == nil || p.legacyRepeatedMembers || seen[p.manifest.Key] {
 			return ErrCatalogInvalid
 		}
+		if _, err := p.manifest.ChannelSchema(); err != nil {
+			return err
+		}
 		seen[p.manifest.Key] = true
 		var receiptMismatch bool
 		for _, receipt := range next.Deletions {
@@ -697,6 +700,11 @@ func activateCatalogVersion(ctx context.Context, next *CatalogSnapshot, key, ver
 			return ErrCatalogInvalid
 		}
 		if p.manifest.Key == key {
+			if i == index {
+				if _, err := p.manifest.ChannelSchema(); err != nil {
+					return err
+				}
+			}
 			next.Packages[i].Active = i == index
 		}
 	}
@@ -709,12 +717,23 @@ func (catalog *Catalog) SetEnabled(ctx context.Context, key string, enabled bool
 }
 
 func setCatalogEnabled(ctx context.Context, next *CatalogSnapshot, key string, enabled bool) error {
+	ctx = withRetainedPackageValidation(ctx)
 	index, err := catalogVersion(ctx, next, key, "", true)
 	if err != nil {
 		return err
 	}
-	if enabled && next.Packages[index].Revoked {
-		return ErrBindingRejected
+	if enabled {
+		entry := next.Packages[index]
+		if entry.Revoked {
+			return ErrBindingRejected
+		}
+		p, err := entry.LoadRetainedPackage(ctx)
+		if err != nil {
+			return err
+		}
+		if _, err := p.manifest.ChannelSchema(); err != nil {
+			return err
+		}
 	}
 	next.Packages[index].Enabled = enabled
 	return nil

@@ -35,6 +35,7 @@ export const channelInfoSchema = z.object({
 export type ChannelInfo = z.infer<typeof channelInfoSchema>
 
 export const channelSchema = z.object({
+  expected_task_plugin_digest: z.string().optional(),
   id: z.number(),
   type: z.number(),
   key: z.string(),

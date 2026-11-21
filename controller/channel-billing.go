@@ -357,6 +357,9 @@ func updateChannelMoonshotBalance(channel *model.Channel) (float64, error) {
 }
 
 func updateChannelBalance(channel *model.Channel) (float64, error) {
+	if channel.Type == constant.ChannelTypeTaskPlugin {
+		return 0, errors.New("Task plugin channel balance is unavailable")
+	}
 	baseURL := constant.ChannelBaseURLs[channel.Type]
 	if channel.GetBaseURL() == "" {
 		channel.BaseURL = &baseURL

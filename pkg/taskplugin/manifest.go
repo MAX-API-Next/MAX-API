@@ -20,6 +20,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 package taskplugin
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -46,17 +47,21 @@ var (
 // data-only. Format 3 derives these fields by bounded JavaScript evaluation;
 // a stored manifest cannot override the corresponding source declarations.
 type Manifest struct {
-	APIVersion    int
-	Key           string
-	Name          string
-	Version       string
-	Models        []string
-	ChannelTypes  []int `json:"channelTypes,omitempty"`
-	Protocols     []ProtocolClaim
-	Routes        []Route
-	BaseURL       string
-	AllowedHosts  []string
-	Upstreams     []string
+	APIVersion   int
+	Key          string
+	Name         string
+	Version      string
+	Models       []string
+	ChannelTypes []int `json:"channelTypes,omitempty"`
+	Protocols    []ProtocolClaim
+	Routes       []Route
+	BaseURL      string
+	AllowedHosts []string
+	Upstreams    []string
+	// Derived from digest-pinned JavaScript. Keeping these out of the package
+	// envelope preserves the existing key/version/digest on re-import.
+	ChannelConfig json.RawMessage `json:"-"`
+	KeyHint       string          `json:"-"`
 	UsageSchema   map[string]UsageField
 	UsageProfiles []UsageProfile `json:"usageProfiles,omitempty"`
 }

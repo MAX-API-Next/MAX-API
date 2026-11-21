@@ -1,5 +1,11 @@
 {
   "translation": {
+    "Invalid task plugin parameters: {{parameters}}": "Paramètres du plugin de tâches non valides : {{parameters}}",
+    "Choose a supported parameter value": "Choisissez une valeur de paramètre prise en charge",
+    "Set {{name}} to an empty string": "Définir {{name}} sur une chaîne vide",
+    "Unset {{name}}": "Supprimer la valeur de {{name}}",
+    "Fill in required task plugin parameters: {{parameters}}": "Renseignez les paramètres requis du plugin de tâches : {{parameters}}",
+    "Select an upstream supported by the active task plugin": "Sélectionnez un service amont pris en charge par le plugin de tâches actif",
     "Select a bundled JavaScript plugin or a MAX package. Compatibility revisions have explicit MAX versions and source hashes. Paid task admission requires separate verification.": "Sélectionnez un plugin JavaScript inclus ou un paquet MAX. Les révisions de compatibilité ont des versions MAX et des empreintes de code source explicites. L’acceptation des tâches payantes nécessite une vérification distincte.",
     "Bundled plugins": "Plugins inclus",
     "Select a bundled plugin version": "Sélectionnez une version de plugin incluse",

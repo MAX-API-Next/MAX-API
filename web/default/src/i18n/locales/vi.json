@@ -1,5 +1,11 @@
 {
   "translation": {
+    "Invalid task plugin parameters: {{parameters}}": "Tham số plugin tác vụ không hợp lệ: {{parameters}}",
+    "Choose a supported parameter value": "Chọn giá trị tham số được hỗ trợ",
+    "Set {{name}} to an empty string": "Đặt {{name}} thành chuỗi rỗng",
+    "Unset {{name}}": "Bỏ thiết lập {{name}}",
+    "Fill in required task plugin parameters: {{parameters}}": "Điền các tham số bắt buộc của plugin tác vụ: {{parameters}}",
+    "Select an upstream supported by the active task plugin": "Chọn dịch vụ thượng nguồn được plugin tác vụ đang hoạt động hỗ trợ",
     "Select a bundled JavaScript plugin or a MAX package. Compatibility revisions have explicit MAX versions and source hashes. Paid task admission requires separate verification.": "Chọn plugin JavaScript đi kèm hoặc gói MAX. Bản sửa tương thích có phiên bản MAX và mã băm nguồn riêng. Việc tiếp nhận tác vụ trả phí cần được xác minh riêng.",
     "Bundled plugins": "Plugin đi kèm",
     "Select a bundled plugin version": "Chọn phiên bản plugin đi kèm",

@@ -36,7 +36,11 @@ import {
   SideDrawerSectionHeader,
   sideDrawerSwitchItemClassName,
 } from '@/components/drawer-layout'
-import { FIELD_DESCRIPTIONS, FIELD_PLACEHOLDERS } from '../../../constants'
+import {
+  CHANNEL_TYPE_TASK_PLUGIN,
+  FIELD_DESCRIPTIONS,
+  FIELD_PLACEHOLDERS,
+} from '../../../constants'
 import {
   getChannelTypeScopedFieldDefaults,
   type ChannelFormValues,
@@ -45,6 +49,8 @@ import {
 type ChannelBasicSectionProps = {
   channelTypeOptions: ComboboxInputOption[]
   isEditing: boolean
+  lockType?: boolean
+  allowTaskPluginType: boolean
 }
 
 export function ChannelBasicSection(props: ChannelBasicSectionProps) {
@@ -82,34 +88,56 @@ export function ChannelBasicSection(props: ChannelBasicSectionProps) {
             <FormItem>
               <FormLabel>{t('Type *')}</FormLabel>
               <FormControl>
-                <Combobox
-                  options={props.channelTypeOptions}
-                  value={String(field.value)}
-                  onValueChange={(value) => {
-                    const nextType = Number(value)
-                    if (Number.isInteger(nextType) && nextType > 0) {
-                      field.onChange(nextType)
-                      if (!props.isEditing && nextType !== field.value) {
-                        const scopedDefaults =
-                          getChannelTypeScopedFieldDefaults(nextType)
-                        form.setValue('base_url', scopedDefaults.base_url, {
-                          shouldDirty: true,
-                          shouldTouch: true,
-                          shouldValidate: true,
-                        })
-                        form.setValue('other', scopedDefaults.other, {
-                          shouldDirty: true,
-                          shouldTouch: true,
-                          shouldValidate: true,
-                        })
+                {props.lockType ? (
+                  <Input value={t('Task Plugin')} readOnly />
+                ) : (
+                  <Combobox
+                    options={props.channelTypeOptions}
+                    value={String(field.value)}
+                    onValueChange={(value) => {
+                      const nextType = Number(value)
+                      if (
+                        nextType === CHANNEL_TYPE_TASK_PLUGIN &&
+                        !props.allowTaskPluginType
+                      )
+                        return
+                      if (Number.isInteger(nextType) && nextType > 0) {
+                        field.onChange(nextType)
+                        if (!props.isEditing && nextType !== field.value) {
+                          const scopedDefaults =
+                            getChannelTypeScopedFieldDefaults(nextType)
+                          if (nextType === CHANNEL_TYPE_TASK_PLUGIN) {
+                            const mode = form.getValues('multi_key_mode')
+                            if (
+                              mode === 'batch' ||
+                              mode === 'multi_to_single'
+                            ) {
+                              form.setValue('key', '', { shouldDirty: true })
+                            }
+                            form.setValue('multi_key_mode', 'single', {
+                              shouldDirty: true,
+                              shouldValidate: true,
+                            })
+                          }
+                          form.setValue('base_url', scopedDefaults.base_url, {
+                            shouldDirty: true,
+                            shouldTouch: true,
+                            shouldValidate: true,
+                          })
+                          form.setValue('other', scopedDefaults.other, {
+                            shouldDirty: true,
+                            shouldTouch: true,
+                            shouldValidate: true,
+                          })
+                        }
                       }
-                    }
-                  }}
-                  placeholder={t('Select channel type')}
-                  searchPlaceholder={t('Search channel type...')}
-                  emptyText={t('No channel type found.')}
-                  allowCustomValue
-                />
+                    }}
+                    placeholder={t('Select channel type')}
+                    searchPlaceholder={t('Search channel type...')}
+                    emptyText={t('No channel type found.')}
+                    allowCustomValue
+                  />
+                )}
               </FormControl>
               <FormMessage />
             </FormItem>

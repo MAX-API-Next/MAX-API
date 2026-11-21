@@ -188,6 +188,10 @@ func Distribute() func(c *gin.Context) {
 				}
 			}
 		}
+		if channel != nil && channel.Type == constant.ChannelTypeTaskPlugin {
+			abortWithOpenAiMessage(c, http.StatusForbidden, "task plugin channel admission is unavailable", types.ErrorCodeGetChannelFailed)
+			return
+		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
 		c.Next()
@@ -451,6 +455,9 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	c.Set("original_model", modelName) // for retry
 	if channel == nil {
 		return types.NewError(errors.New("channel is nil"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	if channel.Type == constant.ChannelTypeTaskPlugin {
+		return types.NewError(errors.New("task plugin channel admission is unavailable"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	common.SetContextKey(c, constant.ContextKeyChannelId, channel.Id)
 	common.SetContextKey(c, constant.ContextKeyChannelName, channel.Name)
