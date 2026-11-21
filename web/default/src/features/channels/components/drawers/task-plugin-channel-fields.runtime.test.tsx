@@ -317,7 +317,9 @@ test('identifies a retained invalid parameter and aligns integer input bounds', 
   const retries = view.getByLabelText('retries') as HTMLInputElement
   const scale = view.getByLabelText('scale') as HTMLInputElement
   assert.equal(retries.getAttribute('aria-invalid'), 'true')
-  assert.ok(view.getByText('Invalid task plugin parameters: retries'))
+  const error = view.getByText('Invalid task plugin parameters: retries')
+  assert.ok(error.id)
+  assert.equal(retries.getAttribute('aria-describedby'), error.id)
   assert.equal(retries.min, '1')
   assert.equal(retries.max, '3')
   assert.equal(scale.min, '0.5')
@@ -329,6 +331,7 @@ test('identifies a retained invalid parameter and aligns integer input bounds', 
   fireEvent.click(view.getByRole('button', { name: 'Unset retries' }))
   fireEvent.change(retries, { target: { value: '1' } })
   assert.equal(retries.checkValidity(), true)
+  assert.equal(retries.hasAttribute('aria-describedby'), false)
   assert.equal(
     view.queryByText('Invalid task plugin parameters: retries'),
     null

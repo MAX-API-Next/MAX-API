@@ -1,7 +1,7 @@
 // Copyright (C) 2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 // Interaction reference: QuantumNous/new-api 8542c9d6, channel plugin config
 // fields and plugin option picker (AGPL-3.0-or-later).
-import { useEffect } from 'react'
+import { useEffect, useId } from 'react'
 import { useFormContext, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
@@ -24,7 +24,7 @@ type ParameterValue = string | number | boolean
 function ParameterInput(props: {
   field: TaskPluginParameterField
   required: boolean
-  invalid: boolean
+  errorId?: string
   value?: ParameterValue
   onChange: (value?: ParameterValue) => void
 }) {
@@ -35,13 +35,14 @@ function ParameterInput(props: {
     const options =
       field.type === 'boolean' ? [true, false] : (field.enum ?? [])
     const value = props.value === undefined ? '' : JSON.stringify(props.value)
-    const unavailable = props.invalid
+    const unavailable = Boolean(props.errorId)
     return (
       <select
         className={selectClass}
         required={props.required}
         value={value}
         aria-invalid={unavailable || undefined}
+        aria-describedby={props.errorId}
         ref={(select) => {
           select?.setCustomValidity(
             unavailable ? t('Choose a supported parameter value') : ''
@@ -74,7 +75,8 @@ function ParameterInput(props: {
       <Textarea
         required={props.required && props.value === undefined}
         aria-required={props.required}
-        aria-invalid={props.invalid || undefined}
+        aria-invalid={props.errorId ? true : undefined}
+        aria-describedby={props.errorId}
         value={String(props.value ?? '')}
         placeholder={placeholder}
         onChange={(event) => props.onChange(event.target.value || undefined)}
@@ -95,7 +97,8 @@ function ParameterInput(props: {
     <Input
       required={props.required && (numeric || props.value === undefined)}
       aria-required={props.required}
-      aria-invalid={props.invalid || undefined}
+      aria-invalid={props.errorId ? true : undefined}
+      aria-describedby={props.errorId}
       type={numeric ? 'number' : 'text'}
       min={minimum}
       max={maximum}
@@ -119,6 +122,7 @@ export function TaskPluginChannelFields(props: {
   refresh: () => void
 }) {
   const { t } = useTranslation()
+  const parameterId = useId()
   const { control, setValue, getValues, register } =
     useFormContext<ChannelFormValues>()
   const setting = useWatch({ control, name: 'setting' })
@@ -289,6 +293,7 @@ export function TaskPluginChannelFields(props: {
             const label = field.title || name
             const invalid =
               value !== undefined && !acceptsTaskPluginParameter(field, value)
+            const errorId = invalid ? `${parameterId}-${name}-error` : undefined
             const canToggleEmpty =
               field.type === 'string' &&
               !field.enum &&
@@ -301,7 +306,7 @@ export function TaskPluginChannelFields(props: {
                   <ParameterInput
                     field={field}
                     required={required}
-                    invalid={invalid}
+                    errorId={errorId}
                     value={value}
                     onChange={(next) => changeParameter(name, next)}
                   />
@@ -312,7 +317,7 @@ export function TaskPluginChannelFields(props: {
                   )}
                 </label>
                 {invalid && (
-                  <p className='text-destructive text-xs'>
+                  <p id={errorId} className='text-destructive text-xs'>
                     {t('Invalid task plugin parameters: {{parameters}}', {
                       parameters: label,
                     })}
