@@ -151,6 +151,12 @@ export function TaskVisualForm(props: {
 }) {
   const { t } = useTranslation()
   const tiers = props.config.tiers
+  const rateLabels = {
+    second: t('USD / second'),
+    count: t('USD / count'),
+    credit: t('USD / credit'),
+    token: t('USD / 1M tokens'),
+  }
   const fields = Object.entries(props.schema)
   const firstField = fields[0]
   const updateTiers = (next: TaskTier[]) =>
@@ -199,10 +205,7 @@ export function TaskVisualForm(props: {
                 .map(([name, definition]) => (
                   <label className='grid gap-1 text-xs' key={name}>
                     {name} (
-                    {'unit' in definition &&
-                      (definition.unit === 'token'
-                        ? t('USD / 1M tokens')
-                        : t('USD / {{unit}}', { unit: definition.unit }))}
+                    {'unit' in definition && rateLabels[definition.unit]}
                     )
                     <AmountInput
                       value={

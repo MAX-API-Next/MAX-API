@@ -2,6 +2,7 @@
 import { act, useEffect } from 'react'
 import { useForm, type UseFormReturn } from 'react-hook-form'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import zh from '@/i18n/locales/zh.json'
 import { createReactTestEnvironment } from '@/test/react'
 import i18next from 'i18next'
 import assert from 'node:assert/strict'
@@ -46,6 +47,7 @@ const { render, cleanup, fireEvent, waitFor } =
   await import('@testing-library/react/pure')
 const { ModelPricingWorkspace } = await import('./model-pricing-workspace')
 const { ModelPricingFields } = await import('./model-pricing-fields')
+const { TaskVisualForm } = await import('./task-visual-form')
 const { RatioSettingsCard } = await import('./ratio-settings-card')
 const { SettingsPageProvider } =
   await import('../components/settings-page-context')
@@ -646,6 +648,36 @@ test('full JSON editing retains formatting through valid intermediate decimal in
   fireEvent.click(f.getByRole('button', { name: 'Save model pricing' }))
   await waitFor(() => assert.ok(f.queryByText('Database commit acknowledged.')))
   assert.equal(f.writes[0][0].pricing.ModelPrice, 0.05)
+})
+
+test('task rate inputs name all four billing units in the selected language', async () => {
+  const i18n = i18next.createInstance()
+  await i18n.init({ lng: 'zh', resources: { zh } })
+  const view = render(
+    <I18nextProvider i18n={i18n}>
+      <TaskVisualForm
+        config={{
+          prefix: '',
+          tiers: [{ label: 'base', flat: 0, rates: {}, conditions: [] }],
+        }}
+        schema={{
+          duration: { type: 'number', unit: 'second' },
+          images: { type: 'number', unit: 'count' },
+          credits: { type: 'number', unit: 'credit' },
+          tokens: { type: 'number', unit: 'token' },
+        }}
+        onChange={() => undefined}
+      />
+    </I18nextProvider>
+  )
+  for (const name of [
+    'duration (美元 / 秒)',
+    'images (美元 / 次)',
+    'credits (美元 / 积分)',
+    'tokens (美元 / 百万 Token)',
+  ]) {
+    assert.ok(view.getByRole('spinbutton', { name }))
+  }
 })
 
 test('visual plugin pricing generates, saves and reopens an editable tier without rewriting complex code', async () => {
