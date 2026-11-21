@@ -175,7 +175,7 @@ export function TaskPluginChannelFields(props: {
   }
 
   return (
-    <div className='space-y-3'>
+    <div className='space-y-3' data-task-plugin-binding>
       <p className='text-muted-foreground text-sm'>
         {t(
           'The channel follows the active plugin version. Production task admission is unavailable.'

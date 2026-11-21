@@ -158,61 +158,122 @@ async function renderPage(content: ReactElement, queryClient: QueryClient) {
   return { ...view, router }
 }
 
-test(
-  'root can save only changed metadata when the channel plugin is offline',
-  { timeout: 60_000 },
-  async () => {
-    const queryClient = client()
-    const adapter = api.defaults.adapter
-    const previousUser = useAuthStore.getState().auth.user
-    const row = {
-      ...channel(11),
-      type: CHANNEL_TYPE_TASK_PLUGIN,
-      base_url: 'https://provider.example',
-      setting:
-        '{"task_plugin_key":"offline","task_plugin_upstream":"vendor","task_plugin_config":{}}',
-    }
-    const writes: unknown[] = []
-    api.defaults.adapter = async (config) => {
-      if (config.method === 'put') writes.push(JSON.parse(String(config.data)))
-      let data: unknown = []
-      if (config.url === '/api/channel/11') data = row
-      if (config.url === '/api/task_plugins')
-        data = { revision: '1', entries: [] }
-      return {
-        config,
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        data: { success: true, data },
+for (const active of [false, true]) {
+  test(
+    active
+      ? 'root can save only changed metadata when a saved plugin parameter is invalid'
+      : 'root can save only changed metadata when the channel plugin is offline',
+    { timeout: 60_000 },
+    async () => {
+      const queryClient = client()
+      const adapter = api.defaults.adapter
+      const previousUser = useAuthStore.getState().auth.user
+      const row = {
+        ...channel(11),
+        type: CHANNEL_TYPE_TASK_PLUGIN,
+        base_url: 'https://provider.example',
+        setting:
+          '{"task_plugin_key":"fixture","task_plugin_upstream":"vendor","task_plugin_config":{"region":"us"}}',
+      }
+      const writes: unknown[] = []
+      api.defaults.adapter = async (config) => {
+        if (config.method === 'put')
+          writes.push(JSON.parse(String(config.data)))
+        let data: unknown = []
+        if (config.url === '/api/channel/11') data = row
+        if (config.url === '/api/task_plugins')
+          data = {
+            revision: '1',
+            entries: active
+              ? [
+                  {
+                    key: 'fixture',
+                    name: 'Fixture',
+                    version: '2.0.0',
+                    digest: 'a'.repeat(64),
+                    format_version: 3,
+                    active: true,
+                    enabled: true,
+                    revoked: false,
+                    channel_configurable: true,
+                    models: [row.models],
+                    protocols: [],
+                    routes: [],
+                    usage_schema: {},
+                    usage_profiles: [],
+                    execution_ready: false,
+                    admission_ready: false,
+                    channel_config: {
+                      properties: {
+                        region: { type: 'string', enum: ['eu'] },
+                        retries: { type: 'integer' },
+                      },
+                    },
+                  },
+                ]
+              : [],
+          }
+        return {
+          config,
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          data: { success: true, data },
+        }
+      }
+      useAuthStore
+        .getState()
+        .auth.setUser({ id: 11, role: 100, username: 'test-root' })
+      const view = await renderPage(
+        <ChannelMutateDrawer open onOpenChange={() => {}} currentRow={row} />,
+        queryClient
+      )
+      try {
+        const body = within(env.dom.window.document.body)
+        if (active) {
+          const region = (await body.findByLabelText(
+            'region'
+          )) as HTMLSelectElement
+          assert.equal(region.validity.customError, true)
+          const retries = body.getByLabelText('retries')
+          await act(async () =>
+            fireEvent.change(retries, { target: { value: '2' } })
+          )
+          await view.click(
+            body.getByText('Update Channel', { selector: 'button' })
+          )
+          assert.deepEqual(
+            writes,
+            [],
+            'stale parameters must block binding changes'
+          )
+          await act(async () =>
+            fireEvent.change(retries, { target: { value: '' } })
+          )
+        } else {
+          await waitFor(() =>
+            assert.ok(body.queryByText(/The saved task plugin is unavailable/))
+          )
+        }
+        const input = body.getByLabelText('Configured priority')
+        await act(async () =>
+          fireEvent.change(input, { target: { value: '20' } })
+        )
+        await view.click(
+          body.getByText('Update Channel', { selector: 'button' })
+        )
+        await waitFor(() =>
+          assert.deepEqual(writes, [{ id: 11, priority: 20 }])
+        )
+      } finally {
+        await view.unmount()
+        queryClient.clear()
+        api.defaults.adapter = adapter
+        useAuthStore.getState().auth.setUser(previousUser)
       }
     }
-    useAuthStore
-      .getState()
-      .auth.setUser({ id: 11, role: 100, username: 'test-root' })
-    const view = await renderPage(
-      <ChannelMutateDrawer open onOpenChange={() => {}} currentRow={row} />,
-      queryClient
-    )
-    try {
-      const body = within(env.dom.window.document.body)
-      await waitFor(() =>
-        assert.ok(body.queryByText(/The saved task plugin is unavailable/))
-      )
-      const input = body.getByLabelText('Configured priority')
-      await act(async () =>
-        fireEvent.change(input, { target: { value: '20' } })
-      )
-      await view.click(body.getByText('Update Channel', { selector: 'button' }))
-      await waitFor(() => assert.deepEqual(writes, [{ id: 11, priority: 20 }]))
-    } finally {
-      await view.unmount()
-      queryClient.clear()
-      api.defaults.adapter = adapter
-      useAuthStore.getState().auth.setUser(previousUser)
-    }
-  }
-)
+  )
+}
 
 test(
   'runtime polling updates the real editor card while draft and detail invalidations remain isolated',

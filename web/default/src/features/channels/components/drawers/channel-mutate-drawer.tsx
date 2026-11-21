@@ -1157,6 +1157,19 @@ export function ChannelMutateDrawer({
         toast.error(t('Task plugin channel configuration requires root access'))
         return
       }
+      if (isEditing && savedTaskPlugin && channelFormRef.current) {
+        // A metadata-only PATCH omits the binding. Its retained parameters may
+        // no longer satisfy the current catalog, while other controls still apply.
+        const invalidControls = channelFormRef.current.querySelectorAll<
+          HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+        >('input:invalid, select:invalid, textarea:invalid')
+        for (const control of invalidControls) {
+          if (metadataPatch && control.closest('[data-task-plugin-binding]'))
+            continue
+          control.reportValidity()
+          return
+        }
+      }
       if (data.type === CHANNEL_TYPE_TASK_PLUGIN && !metadataPatch) {
         if (
           !selectedTaskPlugin ||
@@ -1295,6 +1308,7 @@ export function ChannelMutateDrawer({
       confirmStatusCodeRisk,
       channelMutation,
       channelId,
+      savedTaskPlugin,
       canConfigureTaskPlugins,
       selectedTaskPlugin,
       t,
@@ -1506,6 +1520,7 @@ export function ChannelMutateDrawer({
             <form
               id='channel-form'
               ref={channelFormRef}
+              noValidate={isEditing && savedTaskPlugin}
               onSubmit={form.handleSubmit(onSubmit, onInvalid)}
               className={sideDrawerFormClassName('gap-5')}
             >
