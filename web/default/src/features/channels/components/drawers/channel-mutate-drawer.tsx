@@ -147,6 +147,7 @@ import {
   collectNewDisallowedStatusCodeRedirects,
 } from '../../lib/status-code-risk-guard'
 import {
+  missingTaskPluginParameters,
   readTaskPluginSettings,
   taskPluginUpstreams,
 } from '../../lib/task-plugin-channel'
@@ -498,7 +499,10 @@ export function ChannelMutateDrawer({
 
   // Helper computed values
   const isBatchMode =
-    multiKeyMode === 'batch' || multiKeyMode === 'multi_to_single'
+    !isTaskPlugin &&
+    (multiKeyMode === 'batch' || multiKeyMode === 'multi_to_single')
+  const showMultiKeyStrategy =
+    !isEditing && isBatchMode && multiKeyMode === 'multi_to_single'
   const isChannelDetailLoading = isEditing && initializedEditorId !== channelId
   const advancedCustomStats = useMemo(
     () => getAdvancedCustomStats(currentAdvancedCustom),
@@ -1146,14 +1150,29 @@ export function ChannelMutateDrawer({
           toast.error(t('Refresh task plugin options before saving'))
           return
         }
-        const upstream = readTaskPluginSettings(
-          data.setting
-        ).task_plugin_upstream
+        const settings = readTaskPluginSettings(data.setting)
         if (
-          !taskPluginUpstreams(selectedTaskPlugin.upstreams).includes(upstream)
+          !taskPluginUpstreams(selectedTaskPlugin.upstreams).includes(
+            settings.task_plugin_upstream
+          )
         ) {
           toast.error(
             t('Select an upstream supported by the active task plugin')
+          )
+          return
+        }
+        const schema = selectedTaskPlugin.channel_config
+        const missing = missingTaskPluginParameters(
+          schema,
+          settings.task_plugin_config
+        )
+        if (missing.length) {
+          toast.error(
+            t('Fill in required task plugin parameters: {{parameters}}', {
+              parameters: missing
+                .map((name) => schema?.properties[name]?.title || name)
+                .join(', '),
+            })
           )
           return
         }
@@ -2550,7 +2569,7 @@ export function ChannelMutateDrawer({
                             />
                           )}
 
-                          {!isEditing && multiKeyMode === 'multi_to_single' && (
+                          {showMultiKeyStrategy && (
                             <FormField
                               control={form.control}
                               name='multi_key_type'
@@ -2562,7 +2581,10 @@ export function ChannelMutateDrawer({
                                   <Select
                                     items={[
                                       { value: 'random', label: t('Random') },
-                                      { value: 'polling', label: t('Polling') },
+                                      {
+                                        value: 'polling',
+                                        label: t('Polling'),
+                                      },
                                     ]}
                                     onValueChange={field.onChange}
                                     value={field.value}

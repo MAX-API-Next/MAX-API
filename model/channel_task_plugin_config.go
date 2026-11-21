@@ -53,6 +53,9 @@ func (channel *Channel) TaskPluginModels() (map[string]string, error) {
 		if name == "" || len(name) > 255 {
 			return nil, taskplugin.ErrBindingRejected
 		}
+		if _, exists := models[name]; exists {
+			continue
+		}
 		target, mapped := mapping[name]
 		if !mapped {
 			target = name

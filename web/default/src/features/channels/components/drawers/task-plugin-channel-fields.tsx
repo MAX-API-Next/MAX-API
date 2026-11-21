@@ -11,18 +11,17 @@ import type { PluginEntry } from '@/features/task-plugins/api'
 import type { ChannelFormValues } from '../../lib'
 import {
   readTaskPluginSettings,
+  requiredTaskPluginParameters,
   taskPluginUpstreams,
+  type TaskPluginParameterField,
 } from '../../lib/task-plugin-channel'
 
 const selectClass = 'bg-background w-full rounded-md border p-2'
 
 type ParameterValue = string | number | boolean
-type ParameterField = NonNullable<
-  PluginEntry['channel_config']
->['properties'][string]
-
 function ParameterInput(props: {
-  field: ParameterField
+  field: TaskPluginParameterField
+  required: boolean
   value?: ParameterValue
   onChange: (value?: ParameterValue) => void
 }) {
@@ -35,6 +34,7 @@ function ParameterInput(props: {
     return (
       <select
         className={selectClass}
+        required={props.required}
         value={props.value === undefined ? '' : JSON.stringify(props.value)}
         onChange={(event) =>
           props.onChange(
@@ -56,6 +56,7 @@ function ParameterInput(props: {
   if (field.format === 'textarea') {
     return (
       <Textarea
+        required={props.required}
         value={String(props.value ?? '')}
         placeholder={placeholder}
         onChange={(event) => props.onChange(event.target.value || undefined)}
@@ -65,6 +66,7 @@ function ParameterInput(props: {
   const numeric = field.type === 'number' || field.type === 'integer'
   return (
     <Input
+      required={props.required}
       type={numeric ? 'number' : 'text'}
       min={field.minimum}
       max={field.maximum}
@@ -98,6 +100,7 @@ export function TaskPluginChannelFields(props: {
   const upstreams = taskPluginUpstreams(selected?.upstreams)
   const upstreamUnavailable = !upstreams.includes(settings.task_plugin_upstream)
   const schema = selected?.channel_config
+  const requiredParameters = requiredTaskPluginParameters(schema)
   const config = settings.task_plugin_config
   const dirty = { shouldDirty: true, shouldValidate: true }
 
@@ -253,14 +256,14 @@ export function TaskPluginChannelFields(props: {
           )}
           {Object.entries(schema?.properties ?? {}).map(([name, field]) => {
             const value = Object.hasOwn(config, name) ? config[name] : undefined
-            const required =
-              schema?.required?.includes(name) && field.default === undefined
+            const required = requiredParameters.includes(name)
             return (
               <label className='grid gap-1 text-sm' key={name}>
                 {field.title || name}
                 {required ? ' *' : ''}
                 <ParameterInput
                   field={field}
+                  required={required}
                   value={value}
                   onChange={(next) => changeParameter(name, next)}
                 />

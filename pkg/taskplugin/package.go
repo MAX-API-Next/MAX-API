@@ -199,6 +199,11 @@ func loadPackageContext(ctx context.Context, reader io.Reader, expectedSHA256 st
 			}
 			return nil, ErrPluginCompile
 		}
+		if !retained {
+			if _, err := compiled.ChannelSchema(); err != nil {
+				return nil, err
+			}
+		}
 		document.Manifest.ChannelConfig, document.Manifest.KeyHint = compiled.ChannelConfig, compiled.KeyHint
 	}
 	if err := ctx.Err(); err != nil {

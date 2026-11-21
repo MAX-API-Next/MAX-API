@@ -1046,7 +1046,7 @@ func DisableChannelByTag(tag string) error {
 	return err
 }
 
-func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
+func EditChannelByTag(tag string, includeTaskPlugins bool, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
 	updateData := Channel{}
 	shouldReCreateAbilities := false
 	updatedTag := tag
@@ -1080,7 +1080,9 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 	}
 
 	query := DB.Model(&Channel{}).Where("tag = ?", tag)
-	if updateData.Models != "" || updateData.ModelMapping != nil {
+	if !includeTaskPlugins {
+		query = query.Where("type <> ?", constant.ChannelTypeTaskPlugin)
+	} else if updateData.Models != "" || updateData.ModelMapping != nil {
 		var pluginChannels int64
 		if err := DB.Model(&Channel{}).Where("tag = ? AND type = ?", tag, constant.ChannelTypeTaskPlugin).Count(&pluginChannels).Error; err != nil {
 			return err
@@ -1098,6 +1100,9 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 		channels, err := GetChannelsByTag(updatedTag, false, false)
 		if err == nil {
 			for _, channel := range channels {
+				if !includeTaskPlugins && channel.Type == constant.ChannelTypeTaskPlugin {
+					continue
+				}
 				err = channel.UpdateAbilities(nil)
 				if err != nil {
 					common.SysLog(fmt.Sprintf("failed to update abilities: channel_id=%d, tag=%s, error=%v", channel.Id, channel.GetTag(), err))

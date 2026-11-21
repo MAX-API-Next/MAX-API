@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Fill in required task plugin parameters: {{parameters}}": "请填写必填的任务插件参数：{{parameters}}",
     "Select an upstream supported by the active task plugin": "请选择当前启用的任务插件支持的上游",
     "Task Plugin": "任务插件",
     "The channel follows the active plugin version. Production task admission is unavailable.": "渠道跟随插件当前激活版本。生产任务准入暂不可用。",

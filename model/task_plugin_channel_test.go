@@ -470,7 +470,7 @@ func TestTaskPluginChannelReferencesCannotOutliveDeletion(t *testing.T) {
 	safe.Tag = &tag
 	require.NoError(t, safe.UpdateFields("tag"))
 	deletedModel := "catalog-model"
-	require.ErrorIs(t, EditChannelByTag(tag, nil, nil, &deletedModel, nil, nil, nil, nil, nil), taskplugin.ErrBindingRejected)
+	require.ErrorIs(t, EditChannelByTag(tag, true, nil, nil, &deletedModel, nil, nil, nil, nil, nil), taskplugin.ErrBindingRejected)
 	safe.Name = "rename"
 	require.NoError(t, safe.UpdateFields("name"), "metadata changes do not need a plugin")
 	require.NoError(t, catalog.Install(t.Context(), pkg), "explicit identical reimport restores model availability")

@@ -106,6 +106,19 @@ export function ChannelBasicSection(props: ChannelBasicSectionProps) {
                         if (!props.isEditing && nextType !== field.value) {
                           const scopedDefaults =
                             getChannelTypeScopedFieldDefaults(nextType)
+                          if (nextType === CHANNEL_TYPE_TASK_PLUGIN) {
+                            const mode = form.getValues('multi_key_mode')
+                            if (
+                              mode === 'batch' ||
+                              mode === 'multi_to_single'
+                            ) {
+                              form.setValue('key', '', { shouldDirty: true })
+                            }
+                            form.setValue('multi_key_mode', 'single', {
+                              shouldDirty: true,
+                              shouldValidate: true,
+                            })
+                          }
                           form.setValue('base_url', scopedDefaults.base_url, {
                             shouldDirty: true,
                             shouldTouch: true,

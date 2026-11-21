@@ -253,6 +253,9 @@ func (channel pricingChannel) pricingModelReferences(ctx context.Context) (prici
 		if err := ctx.Err(); err != nil {
 			return references, err
 		}
+		if channel.Type == constant.ChannelTypeTaskPlugin {
+			model = strings.TrimSpace(model)
+		}
 		references.models[model] = true
 	}
 	references.mappingValid = channel.ModelMapping == nil || *channel.ModelMapping == "" ||

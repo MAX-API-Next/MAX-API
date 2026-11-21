@@ -104,8 +104,9 @@ func TestTaskPluginChannelConfigAndPricingLifecycle(t *testing.T) {
 	}))
 	defer supplier.Close()
 	channel := map[string]any{
-		"type": constant.ChannelTypeTaskPlugin, "name": "isolated-channel", "models": alias,
+		"type": constant.ChannelTypeTaskPlugin, "name": "isolated-channel", "models": " " + alias + " , " + alias,
 		"model_mapping": `{"isolated-kling":"kling-v2-5-turbo"}`, "group": "default", "status": 1,
+		"tag":     "review-bulk-tag",
 		"setting": `{"task_plugin_key":"kling","task_plugin_upstream":"vendor","task_plugin_config":{}}`,
 		"key":     credential, "base_url": supplier.URL, "expected_task_plugin_digest": first.Digest(),
 	}
@@ -127,6 +128,30 @@ func TestTaskPluginChannelConfigAndPricingLifecycle(t *testing.T) {
 	require.NoError(t, db.First(&stored, "name = ?", channel["name"]).Error)
 	require.Empty(t, stored.TaskPluginExpectedDigest)
 	require.NotContains(t, *stored.Setting, first.Digest())
+	t.Run("bulk metadata edits include plugin channels only for root", func(t *testing.T) {
+		ordinary := model.Channel{
+			Name: "ordinary-tagged", Type: constant.ChannelTypeOpenAI, Key: "fixture-only",
+			Tag: stored.Tag, Models: "ordinary-model", Group: "default",
+		}
+		require.NoError(t, ordinary.Insert())
+		t.Cleanup(func() { require.NoError(t, ordinary.Delete()) })
+		const group = "review-group"
+		body := map[string]any{"tag": *stored.Tag, "groups": group}
+		var pluginRow model.Channel
+		response := call("PUT", "/api/channel/tag", body, adminCookies)
+		require.Contains(t, response.Body.String(), `"success":true`)
+		require.NoError(t, db.First(&ordinary, ordinary.Id).Error)
+		require.Equal(t, group, ordinary.Group)
+		require.NoError(t, db.First(&pluginRow, stored.Id).Error)
+		require.Equal(t, "default", pluginRow.Group)
+		response = call("PUT", "/api/channel/tag", body, rootCookies)
+		require.Contains(t, response.Body.String(), `"success":true`)
+		require.NoError(t, db.First(&pluginRow, stored.Id).Error)
+		require.Equal(t, group, pluginRow.Group)
+		body["groups"] = "default"
+		response = call("PUT", "/api/channel/tag", body, rootCookies)
+		require.Contains(t, response.Body.String(), `"success":true`)
+	})
 	var count int64
 	require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", stored.Id).Count(&count).Error)
 	require.Zero(t, count, "preview channels cannot enter production routing")
@@ -176,7 +201,7 @@ func TestTaskPluginChannelConfigAndPricingLifecycle(t *testing.T) {
 		require.Equal(t, newAlias, committed.Models)
 		require.Equal(t, newMapping, *committed.ModelMapping)
 		require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", stored.Id).
-			UpdateColumns(map[string]any{"models": alias, "model_mapping": stored.ModelMapping}).Error)
+			UpdateColumns(map[string]any{"models": stored.Models, "model_mapping": stored.ModelMapping}).Error)
 	})
 
 	actor := taskplugin.Actor{UserID: root.Id, TokenID: 2, ChannelID: stored.Id, RequestID: "isolated-request"}
@@ -236,6 +261,15 @@ func TestTaskPluginChannelConfigAndPricingLifecycle(t *testing.T) {
 	snapshot, err := model.GetModelPricingSnapshot([]string{alias})
 	require.NoError(t, err)
 	entry := snapshot.Entries[0]
+	channelContextID := fmt.Sprintf("channel:%d", stored.Id)
+	require.Condition(t, func() bool {
+		for _, context := range entry.Contexts {
+			if context.ID == channelContextID && context.MappedModel == upstreamModel {
+				return true
+			}
+		}
+		return false
+	}, "whitespace and duplicates must preserve the normalized alias's channel context")
 	require.Contains(t, entry.PluginVariants[0].Schema, "units")
 	require.False(t, entry.PluginVariants[0].ExecutionReady)
 	expr := `u("units") >= 1 ? tier("tier-1", 0.05 + u("units") * 0.2) : tier("default", u("units") * 0.1)`

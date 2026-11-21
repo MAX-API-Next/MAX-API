@@ -3,7 +3,9 @@ package taskplugin
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -25,6 +27,32 @@ func TestTaskPluginChannelConfigIsDerivedFromRetainedSource(t *testing.T) {
 	value, err := restored.Manifest().ResolveChannelConfig(nil, "vendor")
 	require.NoError(t, err)
 	require.JSONEq(t, `{"region":"global"}`, string(value))
+}
+
+func TestInvalidTaskPluginChannelSchemaRejectsNewImportsAndActivation(t *testing.T) {
+	valid := syntheticExecutable(t, "")
+	var envelope PackageDocument
+	require.NoError(t, common.Unmarshal(valid.Document(), &envelope))
+	envelope.Source += `; meta.channelConfig = {type:"object", properties:null};`
+	wire, err := common.Marshal(envelope)
+	require.NoError(t, err)
+
+	_, err = LoadUpload(bytes.NewBufferString(envelope.Source), "")
+	require.ErrorIs(t, err, ErrPluginSDK)
+	_, err = LoadUpload(bytes.NewReader(wire), "")
+	require.ErrorIs(t, err, ErrPluginSDK)
+
+	// A preexisting package can still be read for catalog and historical task recovery.
+	legacy := StoredPackage{Document: wire, Digest: fmt.Sprintf("%x", sha256.Sum256(wire))}
+	pkg, err := legacy.LoadRetainedPackage(t.Context())
+	require.NoError(t, err)
+	next := CatalogSnapshot{Packages: []StoredPackage{legacy}}
+	require.ErrorIs(t, activateCatalogVersion(t.Context(), &next, "synthetic", "1.0.0"), ErrPluginSDK)
+	require.False(t, next.Packages[0].Active)
+	require.ErrorIs(t, installCatalogPackagesContext(t.Context(), &next, pkg), ErrPluginSDK)
+	next.Packages[0].Active = true // A legacy catalog may already have selected the disabled version.
+	require.ErrorIs(t, setCatalogEnabled(t.Context(), &next, "synthetic", true), ErrPluginSDK)
+	require.False(t, next.Packages[0].Enabled)
 }
 
 func TestTaskPluginChannelConfigSchema(t *testing.T) {

@@ -51,6 +51,9 @@ func LoadJavaScriptContext(ctx context.Context, reader io.Reader, expectedSHA256
 		}
 		return nil, err
 	}
+	if _, err := m.ChannelSchema(); err != nil {
+		return nil, err
+	}
 	document, err := common.Marshal(PackageDocument{FormatVersion: 3, Manifest: m, Source: string(data)})
 	if err != nil || len(document) > MaxPackageBytes {
 		return nil, ErrPluginCompile

@@ -7,6 +7,7 @@ import { after, afterEach, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
 import type { PluginEntry } from '@/features/task-plugins/api'
 import { CHANNEL_FORM_DEFAULT_VALUES, type ChannelFormValues } from '../../lib'
+import { missingTaskPluginParameters } from '../../lib/task-plugin-channel'
 
 const env = createReactTestEnvironment()
 await env.setup()
@@ -146,4 +147,90 @@ test('rejects the reserved plugin type typed into an existing channel selector',
   assert.equal(view.getByLabelText('Channel type').textContent, '1')
   fireEvent.change(input, { target: { value: '1000' } })
   assert.equal(view.getByLabelText('Channel type').textContent, '1000')
+})
+
+test('switching a new batch draft to Task Plugin clears the batch credentials and mode', () => {
+  function BatchChannel() {
+    const form = useForm<ChannelFormValues>({
+      defaultValues: {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        type: 1,
+        multi_key_mode: 'multi_to_single',
+        key: 'fixture-one\nfixture-two',
+      },
+    })
+    const values = form.watch()
+    return (
+      <I18nextProvider i18n={env.i18n}>
+        <FormProvider {...form}>
+          <ChannelBasicSection
+            channelTypeOptions={[
+              { value: '1', label: 'OpenAI' },
+              { value: '61', label: 'Task Plugin' },
+            ]}
+            isEditing={false}
+            allowTaskPluginType
+          />
+          <output aria-label='Channel draft'>
+            {JSON.stringify([values.type, values.multi_key_mode, values.key])}
+          </output>
+        </FormProvider>
+      </I18nextProvider>
+    )
+  }
+  const view = render(<BatchChannel />)
+  fireEvent.change(view.getByRole('combobox'), { target: { value: '61' } })
+  assert.deepEqual(
+    JSON.parse(view.getByLabelText('Channel draft').textContent ?? ''),
+    [61, 'single', '']
+  )
+})
+
+test('requires unset plugin parameters and accepts zero, false and declared defaults', () => {
+  const schema: NonNullable<PluginEntry['channel_config']> = {
+    required: ['retries', 'flag', 'region', 'withDefault'],
+    properties: {
+      retries: { type: 'integer' },
+      flag: { type: 'boolean' },
+      region: { type: 'string', format: 'textarea' },
+      withDefault: { type: 'integer', default: 0 },
+    },
+  }
+  const view = render(
+    <Fixture options={[{ ...plugin, channel_config: schema }]} />
+  )
+  fireEvent.change(view.getByLabelText('Task Plugin'), {
+    target: { value: plugin.key },
+  })
+  for (const name of ['retries', 'flag', 'region']) {
+    assert.equal(
+      view.getByLabelText(name + ' *').hasAttribute('required'),
+      true
+    )
+  }
+  assert.equal(
+    view.getByLabelText('withDefault').hasAttribute('required'),
+    false
+  )
+  assert.deepEqual(missingTaskPluginParameters(schema, {}), [
+    'retries',
+    'flag',
+    'region',
+  ])
+  assert.deepEqual(
+    missingTaskPluginParameters(schema, {
+      retries: 0,
+      flag: false,
+      region: '',
+    }),
+    ['region']
+  )
+  assert.deepEqual(
+    missingTaskPluginParameters(schema, {
+      retries: 0,
+      flag: false,
+      region: 'us',
+    }),
+    []
+  )
 })
