@@ -128,7 +128,7 @@ func TestTaskPluginChannelConfigAndPricingLifecycle(t *testing.T) {
 	require.NoError(t, db.First(&stored, "name = ?", channel["name"]).Error)
 	require.Empty(t, stored.TaskPluginExpectedDigest)
 	require.NotContains(t, *stored.Setting, first.Digest())
-	t.Run("bulk metadata edits include plugin channels only for root", func(t *testing.T) {
+	t.Run("bulk tag edits include plugin channels only for root", func(t *testing.T) {
 		ordinary := model.Channel{
 			Name: "ordinary-tagged", Type: constant.ChannelTypeOpenAI, Key: "fixture-only",
 			Tag: stored.Tag, Models: "ordinary-model", Group: "default",
@@ -151,6 +151,21 @@ func TestTaskPluginChannelConfigAndPricingLifecycle(t *testing.T) {
 		body["groups"] = "default"
 		response = call("PUT", "/api/channel/tag", body, rootCookies)
 		require.Contains(t, response.Body.String(), `"success":true`)
+
+		status := func(path string, cookies []*http.Cookie, ordinaryStatus, pluginStatus int) {
+			t.Helper()
+			response := call("POST", "/api/channel/tag/"+path, map[string]string{"tag": *stored.Tag}, cookies)
+			require.Contains(t, response.Body.String(), `"success":true`)
+			require.NoError(t, db.First(&ordinary, ordinary.Id).Error)
+			require.NoError(t, db.First(&pluginRow, stored.Id).Error)
+			require.Equal(t, ordinaryStatus, ordinary.Status)
+			require.Equal(t, pluginStatus, pluginRow.Status)
+		}
+		enabled, disabled := common.ChannelStatusEnabled, common.ChannelStatusManuallyDisabled
+		status("disabled", adminCookies, disabled, enabled)
+		status("disabled", rootCookies, disabled, disabled)
+		status("enabled", adminCookies, enabled, disabled)
+		status("enabled", rootCookies, enabled, enabled)
 	})
 	var count int64
 	require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", stored.Id).Count(&count).Error)

@@ -38,8 +38,6 @@ export function missingTaskPluginParameters(
   config: ReturnType<typeof readTaskPluginSettings>['task_plugin_config']
 ): string[] {
   return requiredTaskPluginParameters(schema).filter(
-    (name) =>
-      !Object.hasOwn(config, name) ||
-      (config[name] === '' && !schema?.properties[name]?.enum?.includes(''))
+    (name) => !Object.hasOwn(config, name)
   )
 }

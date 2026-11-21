@@ -809,7 +809,7 @@ func DisableTagChannels(c *gin.Context) {
 		})
 		return
 	}
-	err = model.DisableChannelByTag(channelTag.Tag)
+	err = model.DisableChannelByTag(channelTag.Tag, c.GetInt("role") == common.RoleRootUser)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -835,7 +835,7 @@ func EnableTagChannels(c *gin.Context) {
 		})
 		return
 	}
-	err = model.EnableChannelByTag(channelTag.Tag)
+	err = model.EnableChannelByTag(channelTag.Tag, c.GetInt("role") == common.RoleRootUser)
 	if err != nil {
 		common.ApiError(c, err)
 		return

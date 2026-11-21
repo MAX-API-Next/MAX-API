@@ -1,5 +1,8 @@
 {
   "translation": {
+    "Choose a supported parameter value": "请选择受支持的参数值",
+    "Set {{name}} to an empty string": "将 {{name}} 设置为空字符串",
+    "Unset {{name}}": "取消设置 {{name}}",
     "Fill in required task plugin parameters: {{parameters}}": "请填写必填的任务插件参数：{{parameters}}",
     "Select an upstream supported by the active task plugin": "请选择当前启用的任务插件支持的上游",
     "Task Plugin": "任务插件",

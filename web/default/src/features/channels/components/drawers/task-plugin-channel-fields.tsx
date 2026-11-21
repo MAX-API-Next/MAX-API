@@ -16,7 +16,8 @@ import {
   type TaskPluginParameterField,
 } from '../../lib/task-plugin-channel'
 
-const selectClass = 'bg-background w-full rounded-md border p-2'
+const selectClass =
+  'bg-background w-full rounded-md border p-2 aria-invalid:border-destructive'
 
 type ParameterValue = string | number | boolean
 function ParameterInput(props: {
@@ -31,11 +32,21 @@ function ParameterInput(props: {
   if (field.type === 'boolean' || field.enum) {
     const options =
       field.type === 'boolean' ? [true, false] : (field.enum ?? [])
+    const value = props.value === undefined ? '' : JSON.stringify(props.value)
+    const unavailable =
+      props.value !== undefined &&
+      !options.some((option) => option === props.value)
     return (
       <select
         className={selectClass}
         required={props.required}
-        value={props.value === undefined ? '' : JSON.stringify(props.value)}
+        value={value}
+        aria-invalid={unavailable || undefined}
+        ref={(select) => {
+          select?.setCustomValidity(
+            unavailable ? t('Choose a supported parameter value') : ''
+          )
+        }}
         onChange={(event) =>
           props.onChange(
             options.find(
@@ -45,6 +56,11 @@ function ParameterInput(props: {
         }
       >
         <option value=''>{placeholder || t('Not configured')}</option>
+        {unavailable && (
+          <option value={value} disabled>
+            {String(props.value)} ({t('Unavailable')})
+          </option>
+        )}
         {options.map((option) => (
           <option key={String(option)} value={JSON.stringify(option)}>
             {String(option)}
@@ -56,7 +72,8 @@ function ParameterInput(props: {
   if (field.format === 'textarea') {
     return (
       <Textarea
-        required={props.required}
+        required={props.required && props.value === undefined}
+        aria-required={props.required}
         value={String(props.value ?? '')}
         placeholder={placeholder}
         onChange={(event) => props.onChange(event.target.value || undefined)}
@@ -66,7 +83,8 @@ function ParameterInput(props: {
   const numeric = field.type === 'number' || field.type === 'integer'
   return (
     <Input
-      required={props.required}
+      required={props.required && (numeric || props.value === undefined)}
+      aria-required={props.required}
       type={numeric ? 'number' : 'text'}
       min={field.minimum}
       max={field.maximum}
@@ -257,22 +275,47 @@ export function TaskPluginChannelFields(props: {
           {Object.entries(schema?.properties ?? {}).map(([name, field]) => {
             const value = Object.hasOwn(config, name) ? config[name] : undefined
             const required = requiredParameters.includes(name)
+            const label = field.title || name
+            const canToggleEmpty =
+              field.type === 'string' &&
+              !field.enum &&
+              (value === undefined || value === '')
             return (
-              <label className='grid gap-1 text-sm' key={name}>
-                {field.title || name}
-                {required ? ' *' : ''}
-                <ParameterInput
-                  field={field}
-                  required={required}
-                  value={value}
-                  onChange={(next) => changeParameter(name, next)}
-                />
-                {field.description && (
-                  <span className='text-muted-foreground text-xs'>
-                    {field.description}
-                  </span>
+              <div key={name}>
+                <label className='grid gap-1 text-sm'>
+                  {label}
+                  {required ? ' *' : ''}
+                  <ParameterInput
+                    field={field}
+                    required={required}
+                    value={value}
+                    onChange={(next) => changeParameter(name, next)}
+                  />
+                  {field.description && (
+                    <span className='text-muted-foreground text-xs'>
+                      {field.description}
+                    </span>
+                  )}
+                </label>
+                {canToggleEmpty && (
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant='link'
+                    className='px-0'
+                    onClick={() =>
+                      changeParameter(
+                        name,
+                        value === undefined ? '' : undefined
+                      )
+                    }
+                  >
+                    {value === undefined
+                      ? t('Set {{name}} to an empty string', { name: label })
+                      : t('Unset {{name}}', { name: label })}
+                  </Button>
                 )}
-              </label>
+              </div>
             )
           })}
           {Object.keys(config)

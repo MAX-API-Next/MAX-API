@@ -223,7 +223,7 @@ test('requires unset plugin parameters and accepts zero, false and declared defa
       flag: false,
       region: '',
     }),
-    ['region']
+    []
   )
   assert.deepEqual(
     missingTaskPluginParameters(schema, {
@@ -233,4 +233,57 @@ test('requires unset plugin parameters and accepts zero, false and declared defa
     }),
     []
   )
+  const config = () => {
+    const data = JSON.parse(
+      view.getByLabelText('Form values').textContent ?? ''
+    )
+    return JSON.parse(data.setting).task_plugin_config
+  }
+  const region = view.getByLabelText('region *') as HTMLTextAreaElement
+  fireEvent.click(
+    view.getByRole('button', { name: 'Set region to an empty string' })
+  )
+  assert.equal(config().region, '')
+  assert.equal(region.checkValidity(), true)
+  fireEvent.change(region, { target: { value: 'us' } })
+  fireEvent.change(region, { target: { value: '' } })
+  assert.equal(Object.hasOwn(config(), 'region'), false)
+  fireEvent.click(
+    view.getByRole('button', { name: 'Set region to an empty string' })
+  )
+  assert.equal(config().region, '')
+  fireEvent.click(view.getByRole('button', { name: 'Unset region' }))
+  assert.equal(Object.hasOwn(config(), 'region'), false)
+  assert.equal(region.checkValidity(), false)
+})
+
+test('keeps an unavailable parameter choice visible until explicitly replaced', () => {
+  const original: PluginEntry = {
+    ...plugin,
+    channel_config: {
+      properties: { region: { type: 'string', enum: ['us'] } },
+    },
+  }
+  const next: PluginEntry = {
+    ...original,
+    digest: 'digest-two',
+    channel_config: {
+      properties: { region: { type: 'string', enum: ['eu'], default: 'eu' } },
+    },
+  }
+  const view = render(<Fixture options={[original]} />)
+  fireEvent.change(view.getByLabelText('Task Plugin'), {
+    target: { value: plugin.key },
+  })
+  const select = view.getByLabelText('region') as HTMLSelectElement
+  fireEvent.change(select, { target: { value: '"us"' } })
+  view.rerender(<Fixture options={[next]} />)
+  assert.equal(select.value, '"us"')
+  assert.equal(select.selectedOptions[0].disabled, true)
+  assert.equal(select.getAttribute('aria-invalid'), 'true')
+  assert.equal(select.checkValidity(), false)
+  fireEvent.change(select, { target: { value: '"eu"' } })
+  assert.equal(select.checkValidity(), true)
+  const data = JSON.parse(view.getByLabelText('Form values').textContent ?? '')
+  assert.equal(JSON.parse(data.setting).task_plugin_config.region, 'eu')
 })

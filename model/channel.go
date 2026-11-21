@@ -1028,8 +1028,16 @@ func updateChannelStatus(channelId int, usingKey string, status int, reason stri
 	return changed
 }
 
-func EnableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
+func channelsByTagForWrite(tag string, includeTaskPlugins bool) *gorm.DB {
+	query := DB.Model(&Channel{}).Where("tag = ?", tag)
+	if !includeTaskPlugins {
+		query = query.Where("(type <> ? OR type IS NULL)", constant.ChannelTypeTaskPlugin)
+	}
+	return query
+}
+
+func EnableChannelByTag(tag string, includeTaskPlugins bool) error {
+	err := channelsByTagForWrite(tag, includeTaskPlugins).Update("status", common.ChannelStatusEnabled).Error
 	if err != nil {
 		return err
 	}
@@ -1037,8 +1045,8 @@ func EnableChannelByTag(tag string) error {
 	return err
 }
 
-func DisableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusManuallyDisabled).Error
+func DisableChannelByTag(tag string, includeTaskPlugins bool) error {
+	err := channelsByTagForWrite(tag, includeTaskPlugins).Update("status", common.ChannelStatusManuallyDisabled).Error
 	if err != nil {
 		return err
 	}
@@ -1079,10 +1087,8 @@ func EditChannelByTag(tag string, includeTaskPlugins bool, newTag *string, model
 		updateData.HeaderOverride = headerOverride
 	}
 
-	query := DB.Model(&Channel{}).Where("tag = ?", tag)
-	if !includeTaskPlugins {
-		query = query.Where("type <> ?", constant.ChannelTypeTaskPlugin)
-	} else if updateData.Models != "" || updateData.ModelMapping != nil {
+	query := channelsByTagForWrite(tag, includeTaskPlugins)
+	if includeTaskPlugins && (updateData.Models != "" || updateData.ModelMapping != nil) {
 		var pluginChannels int64
 		if err := DB.Model(&Channel{}).Where("tag = ? AND type = ?", tag, constant.ChannelTypeTaskPlugin).Count(&pluginChannels).Error; err != nil {
 			return err

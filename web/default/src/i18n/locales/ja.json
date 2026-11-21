@@ -1,5 +1,8 @@
 {
   "translation": {
+    "Choose a supported parameter value": "対応しているパラメーター値を選択してください",
+    "Set {{name}} to an empty string": "{{name}} を空文字列に設定",
+    "Unset {{name}}": "{{name}} の設定を解除",
     "Fill in required task plugin parameters: {{parameters}}": "必須のタスクプラグインパラメーターを入力してください：{{parameters}}",
     "Select an upstream supported by the active task plugin": "現在有効なタスクプラグインが対応する上流サービスを選択してください",
     "Select a bundled JavaScript plugin or a MAX package. Compatibility revisions have explicit MAX versions and source hashes. Paid task admission requires separate verification.": "同梱の JavaScript プラグインまたは MAX パッケージを選択してください。互換性修正版には明示的な MAX バージョンとソースハッシュがあります。有料タスクの受付には別途検証が必要です。",
