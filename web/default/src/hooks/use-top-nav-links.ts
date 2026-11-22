@@ -19,40 +19,14 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
+import { getCustomNavLinks } from '@/lib/custom-nav-links'
 import { parseHeaderNavModulesFromStatus } from '@/lib/nav-modules'
 import { useStatus } from '@/hooks/use-status'
+import type { TopNavItem } from '@/components/layout/types'
 
-export type TopNavLink = {
-  title: string
-  href: string
-  disabled?: boolean
-  requiresAuth?: boolean
-  external?: boolean
-  literalTitle?: boolean
-}
+export type { TopNavLink } from '@/components/layout/types'
 
-function isExternalHref(href: string): boolean {
-  return /^https?:\/\//i.test(href)
-}
-
-function isSupportedHref(href: string): boolean {
-  return href.startsWith('/') || isExternalHref(href)
-}
-
-/**
- * Generate top navigation links based on HeaderNavModules configuration from backend /api/status
- * Backend format example (stringified JSON):
- * {
- *   home: true,
- *   console: true,
- *   pricing: { enabled: true, requireAuth: false },
- *   rankings: { enabled: true, requireAuth: false },
- *   docs: true,
- *   about: true,
- *   custom: { enabled: false, title: "", href: "" }
- * }
- */
-export function useTopNavLinks(): TopNavLink[] {
+export function useTopNavLinks(): TopNavItem[] {
   const { t } = useTranslation()
   const { status } = useStatus()
   const { auth } = useAuthStore()
@@ -69,7 +43,7 @@ export function useTopNavLinks(): TopNavLink[] {
 
   const isAuthed = !!auth?.user
 
-  const links: TopNavLink[] = []
+  const links: TopNavItem[] = []
 
   // Home
   if (modules?.home !== false) {
@@ -109,19 +83,5 @@ export function useTopNavLinks(): TopNavLink[] {
     links.push({ title: t('About'), href: '/about' })
   }
 
-  const custom = modules?.custom
-  if (custom?.enabled) {
-    const title = custom.title.trim()
-    const href = custom.href.trim()
-    if (title && href && isSupportedHref(href)) {
-      links.push({
-        title,
-        href,
-        external: isExternalHref(href),
-        literalTitle: true,
-      })
-    }
-  }
-
-  return links
+  return [...links, ...getCustomNavLinks(modules.custom)]
 }

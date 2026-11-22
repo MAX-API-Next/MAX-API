@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useMemo } from 'react'
 import { Link } from '@tanstack/react-router'
 import { Menu } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -26,13 +25,13 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
-  DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { type TopNavLink } from '../types'
+import type { TopNavItem } from '../types'
+import { TopNavGroupMenu, TopNavMenuLink } from './top-nav-group'
 
 type TopNavProps = React.HTMLAttributes<HTMLElement> & {
-  links: TopNavLink[]
+  links: TopNavItem[]
 }
 
 /**
@@ -41,17 +40,6 @@ type TopNavProps = React.HTMLAttributes<HTMLElement> & {
  */
 export function TopNav({ className, links, ...props }: TopNavProps) {
   const { t } = useTranslation()
-  // 规范化链接，确保所有可选属性都有默认值
-  const normalizedLinks = useMemo(
-    () =>
-      links.map((link) => ({
-        isActive: false,
-        disabled: false,
-        external: false,
-        ...link,
-      })),
-    [links]
-  )
 
   return (
     <>
@@ -70,34 +58,17 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
             <Menu />
             <span className='sr-only'>{t('Toggle navigation menu')}</span>
           </DropdownMenuTrigger>
-          <DropdownMenuContent side='bottom' align='start'>
+          <DropdownMenuContent
+            side='bottom'
+            align='start'
+            className='w-max max-w-[min(20rem,var(--available-width))]'
+          >
             <DropdownMenuGroup>
-              {normalizedLinks.map(
-                ({ title, href, isActive, disabled, external }) => (
-                  <DropdownMenuItem
-                    key={`${title}-${href}`}
-                    disabled={disabled}
-                    render={
-                      external ? (
-                        <a
-                          href={href}
-                          target='_blank'
-                          rel='noopener noreferrer'
-                          className={!isActive ? 'text-muted-foreground' : ''}
-                        >
-                          {title}
-                        </a>
-                      ) : (
-                        <Link
-                          to={href}
-                          className={!isActive ? 'text-muted-foreground' : ''}
-                          disabled={disabled}
-                        >
-                          {title}
-                        </Link>
-                      )
-                    }
-                  />
+              {links.map((link, index) =>
+                'children' in link ? (
+                  <TopNavGroupMenu key={index} group={link} nested />
+                ) : (
+                  <TopNavMenuLink key={index} link={link} />
                 )
               )}
             </DropdownMenuGroup>
@@ -108,33 +79,44 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
       {/* 桌面端水平导航 */}
       <nav
         className={cn(
-          'hidden items-center space-x-4 lg:flex lg:space-x-4 xl:space-x-6',
+          'hidden items-center gap-4 overflow-x-auto whitespace-nowrap lg:flex xl:gap-6',
           className
         )}
         {...props}
       >
-        {normalizedLinks.map(({ title, href, isActive, disabled, external }) =>
-          external ? (
+        {links.map((link, index) => {
+          const linkClass =
+            'text-muted-foreground hover:text-primary shrink-0 text-sm font-medium transition-colors'
+          if ('children' in link)
+            return (
+              <TopNavGroupMenu key={index} group={link} className={linkClass} />
+            )
+          const className = cn(
+            linkClass,
+            'max-w-48 truncate',
+            link.isActive && 'text-foreground'
+          )
+          return link.external ? (
             <a
-              key={`${title}-${href}`}
-              href={href}
+              key={index}
+              href={link.href}
               target='_blank'
               rel='noopener noreferrer'
-              className={`hover:text-primary text-sm font-medium transition-colors ${isActive ? '' : 'text-muted-foreground'}`}
+              className={className}
             >
-              {title}
+              {link.title}
             </a>
           ) : (
             <Link
-              key={`${title}-${href}`}
-              to={href}
-              disabled={disabled}
-              className={`hover:text-primary text-sm font-medium transition-colors ${isActive ? '' : 'text-muted-foreground'}`}
+              key={index}
+              to={link.href}
+              disabled={link.disabled}
+              className={className}
             >
-              {title}
+              {link.title}
             </Link>
           )
-        )}
+        })}
       </nav>
     </>
   )

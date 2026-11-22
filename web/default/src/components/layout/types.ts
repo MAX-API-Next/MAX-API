@@ -94,6 +94,13 @@ export type TopNavLink = {
   literalTitle?: boolean
 }
 
+export type TopNavGroup = {
+  title: string
+  children: TopNavLink[]
+}
+
+export type TopNavItem = TopNavLink | TopNavGroup
+
 /**
  * Back-navigation descriptor for a nested sidebar view
  */

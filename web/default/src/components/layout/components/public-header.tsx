@@ -19,6 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useMediaQuery } from '@/hooks'
+import { ChevronDown } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { IconGithub } from '@/assets/brand-icons'
 import { useAuthStore } from '@/stores/auth-store'
@@ -44,6 +45,8 @@ import { defaultTopNavLinks } from '../config/top-nav.config'
 import type { TopNavLink } from '../types'
 import { HeaderLogo } from './header-logo'
 import { PublicHeaderToolsMenu } from './header-tools-menu'
+import { NavLinkItem } from './nav-link-item'
+import { TopNavGroupMenu } from './top-nav-group'
 
 const AUTH_PROMPT_SECONDS = 5
 const MAX_API_GITHUB_URL = 'https://github.com/MAX-API-Next/MAX-API'
@@ -242,47 +245,57 @@ export function PublicHeader(props: PublicHeaderProps) {
             </Link>
 
             {/* Desktop nav */}
-            <div className='hidden items-center gap-0.5 lg:flex'>
-              {links.map((link, i) => {
-                const isActive = pathname === link.href
-                if (link.external) {
+            <div className='hidden min-w-0 items-center gap-0.5 lg:flex'>
+              <div className='flex min-w-0 items-center gap-0.5 overflow-x-auto whitespace-nowrap'>
+                {links.map((link, i) => {
+                  if ('children' in link) {
+                    return (
+                      <TopNavGroupMenu
+                        key={i}
+                        group={link}
+                        className='text-muted-foreground hover:text-foreground shrink-0 rounded-lg px-3 py-1.5 text-[13px] font-medium'
+                      />
+                    )
+                  }
+                  const isActive = pathname === link.href
+                  if (link.external) {
+                    return (
+                      <a
+                        key={i}
+                        href={link.href}
+                        target='_blank'
+                        rel='noopener noreferrer'
+                        aria-disabled={link.disabled}
+                        tabIndex={link.disabled ? -1 : undefined}
+                        onClick={(event) => handleNavLinkClick(event, link)}
+                        className={cn(
+                          'text-muted-foreground hover:text-foreground max-w-48 shrink-0 truncate rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors duration-200',
+                          link.disabled && 'pointer-events-none opacity-50'
+                        )}
+                      >
+                        {getLinkTitle(link)}
+                      </a>
+                    )
+                  }
                   return (
-                    <a
+                    <Link
                       key={i}
-                      href={link.href}
-                      target='_blank'
-                      rel='noopener noreferrer'
-                      aria-disabled={link.disabled}
-                      tabIndex={link.disabled ? -1 : undefined}
+                      to={link.href}
+                      disabled={link.disabled}
                       onClick={(event) => handleNavLinkClick(event, link)}
                       className={cn(
-                        'text-muted-foreground hover:text-foreground rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors duration-200',
+                        'max-w-48 shrink-0 truncate rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors duration-200',
+                        isActive
+                          ? 'text-foreground'
+                          : 'text-muted-foreground hover:text-foreground',
                         link.disabled && 'pointer-events-none opacity-50'
                       )}
                     >
                       {getLinkTitle(link)}
-                    </a>
+                    </Link>
                   )
-                }
-                return (
-                  <Link
-                    key={i}
-                    to={link.href}
-                    disabled={link.disabled}
-                    onClick={(event) => handleNavLinkClick(event, link)}
-                    className={cn(
-                      'rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors duration-200',
-                      isActive
-                        ? 'text-foreground'
-                        : 'text-muted-foreground hover:text-foreground',
-                      link.disabled && 'pointer-events-none opacity-50'
-                    )}
-                  >
-                    {getLinkTitle(link)}
-                  </Link>
-                )
-              })}
-
+                })}
+              </div>
               <div className='bg-border/40 mx-2 h-4 w-px' />
 
               <GitHubLinkButton />
@@ -381,6 +394,7 @@ export function PublicHeader(props: PublicHeaderProps) {
 
       {/* Mobile full-screen overlay */}
       <div
+        inert={!mobileOpen}
         className={cn(
           'bg-background/98 fixed inset-0 z-40 backdrop-blur-2xl transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] lg:pointer-events-none lg:hidden',
           mobileOpen
@@ -388,12 +402,37 @@ export function PublicHeader(props: PublicHeaderProps) {
             : 'pointer-events-none opacity-0'
         )}
       >
-        <div className='flex h-full flex-col justify-between px-8 pt-20 pb-10'>
+        <div className='flex h-full flex-col justify-between gap-4 overflow-y-auto px-8 pt-20 pb-10'>
           <nav className='flex flex-col gap-1'>
             {links.map((link, i) => {
+              if ('children' in link) {
+                return (
+                  <details key={i} className='group'>
+                    <summary className='text-muted-foreground flex cursor-pointer list-none items-center justify-between gap-2 py-3 text-base font-medium'>
+                      <span className='[overflow-wrap:anywhere]'>
+                        {link.title}
+                      </span>
+                      <ChevronDown
+                        className='size-4 shrink-0 group-open:rotate-180'
+                        aria-hidden='true'
+                      />
+                    </summary>
+                    <div className='flex flex-col border-l pl-4'>
+                      {link.children.map((child, index) => (
+                        <NavLinkItem
+                          key={index}
+                          link={child}
+                          className='py-2 text-sm [overflow-wrap:anywhere]'
+                          onClick={() => setMobileOpen(false)}
+                        />
+                      ))}
+                    </div>
+                  </details>
+                )
+              }
               const isActive = pathname === link.href
               const linkClassName = cn(
-                'flex items-center gap-3 py-3 text-base font-medium transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]',
+                'flex items-center gap-3 py-3 text-base font-medium [overflow-wrap:anywhere] transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]',
                 mobileOpen
                   ? 'translate-y-0 opacity-100'
                   : 'translate-y-4 opacity-0',
@@ -401,7 +440,9 @@ export function PublicHeader(props: PublicHeaderProps) {
                 link.disabled && 'pointer-events-none opacity-50'
               )
               const transitionStyle = {
-                transitionDelay: mobileOpen ? `${100 + i * 50}ms` : '0ms',
+                transitionDelay: mobileOpen
+                  ? `${100 + Math.min(i, 5) * 50}ms`
+                  : '0ms',
               }
               if (link.external) {
                 return (
