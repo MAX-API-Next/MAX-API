@@ -230,10 +230,29 @@ for (const active of [false, true]) {
       )
       try {
         const body = within(env.dom.window.document.body)
+        // Wait for the catalog response and React's corresponding form update.
+        await waitFor(
+          () => {
+            const catalog = queryClient.getQueryState([
+              'task-plugin-channel-options',
+            ])
+            assert.equal(catalog?.status, 'success')
+            assert.equal(catalog?.fetchStatus, 'idle')
+            const binding = env.dom.window.document.querySelector<HTMLElement>(
+              '[data-task-plugin-binding]'
+            )
+            assert.ok(binding)
+            const fields = within(binding)
+            assert.ok(
+              active
+                ? fields.queryByLabelText('region')
+                : fields.queryByText(/The saved task plugin is unavailable/)
+            )
+          },
+          { timeout: 15_000 }
+        )
         if (active) {
-          const region = (await body.findByLabelText(
-            'region'
-          )) as HTMLSelectElement
+          const region = body.getByLabelText('region') as HTMLSelectElement
           assert.equal(region.validity.customError, true)
           const retries = body.getByLabelText('retries')
           await act(async () =>
@@ -249,10 +268,6 @@ for (const active of [false, true]) {
           )
           await act(async () =>
             fireEvent.change(retries, { target: { value: '' } })
-          )
-        } else {
-          await waitFor(() =>
-            assert.ok(body.queryByText(/The saved task plugin is unavailable/))
           )
         }
         const input = body.getByLabelText('Configured priority')
