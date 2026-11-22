@@ -22,6 +22,7 @@ export type HeaderNavAccessConfig = {
 }
 
 export type CustomNavLink = {
+  id?: string
   title: string
   href: string
 }
@@ -146,6 +147,7 @@ function parseCustomLink(raw: unknown): CustomNavLink | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const record = raw as Record<string, unknown>
   return {
+    ...(typeof record.id === 'string' && record.id ? { id: record.id } : {}),
     title: typeof record.title === 'string' ? record.title.trim() : '',
     href: typeof record.href === 'string' ? record.href.trim() : '',
   }

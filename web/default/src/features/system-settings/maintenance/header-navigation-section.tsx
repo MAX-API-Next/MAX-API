@@ -19,6 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { nanoid } from 'nanoid'
 import { useTranslation } from 'react-i18next'
 import { handleServerError } from '@/lib/handle-server-error'
 import {
@@ -124,7 +125,14 @@ export function HeaderNavigationSection({
           about: values.about,
           custom: {
             enabled: values.customEnabled,
-            items: values.customItems,
+            items: values.customItems.map((item) => ({
+              ...item,
+              id: item.id ?? nanoid(),
+              children: item.children.map((child) => ({
+                ...child,
+                id: child.id ?? nanoid(),
+              })),
+            })),
           },
           pricing: {
             ...(current.pricing ?? HEADER_NAV_DEFAULT.pricing),

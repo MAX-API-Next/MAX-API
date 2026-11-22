@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { keyedTopNavItems } from '@/components/layout/config/top-nav.config'
 import { getCustomNavLinks, isSupportedNavHref } from './custom-nav-links'
 import {
   parseHeaderNavModules,
@@ -134,4 +135,63 @@ test('groups keep their optional landing link and ordered children; invalid entr
       },
     ]
   )
+})
+
+test('saved identity survives reordering same-name groups and removing an earlier child', () => {
+  const group = (id: string) => ({
+    id,
+    title: 'Resources',
+    href: '',
+    children: [
+      { id: id + '-1', title: 'Docs', href: '/docs' },
+      { id: id + '-2', title: 'Docs', href: '/docs' },
+    ],
+  })
+  const first = group('first')
+  const second = group('second')
+  const entries = (items: (typeof first)[]) => {
+    const saved = serializeHeaderNavModules(
+      parseHeaderNavModules({ custom: { enabled: true, items } })
+    )
+    return keyedTopNavItems(
+      getCustomNavLinks(parseHeaderNavModules(saved).custom)
+    )
+  }
+  const before = entries([first, second])
+  const after = entries([
+    second,
+    { ...first, children: first.children.slice(1) },
+  ])
+  assert.notEqual(before[0].key, before[1].key)
+  assert.deepEqual(
+    after.map((entry) => entry.key),
+    [before[1].key, before[0].key]
+  )
+  const original = before[0].link
+  const changed = after[1].link
+  assert.ok('children' in original && 'children' in changed)
+  const children = keyedTopNavItems(original.children)
+  assert.notEqual(children[0].key, children[1].key)
+  assert.equal(keyedTopNavItems(changed.children)[0].key, children[1].key)
+})
+
+test('legacy groups stay keyed while children change and duplicate destinations get unique keys', () => {
+  const docs = { title: 'Docs', href: '/docs' }
+  const faq = { title: 'FAQ', href: '/faq' }
+  const group = { title: 'Resources', children: [docs, faq] }
+  const other = { title: 'Resources', children: [faq] }
+  assert.equal(
+    keyedTopNavItems([group])[0].key,
+    keyedTopNavItems([other])[0].key
+  )
+  const groups = keyedTopNavItems([group, other])
+  assert.notEqual(groups[0].key, groups[1].key)
+  assert.deepEqual(
+    keyedTopNavItems([other, group]).map((x) => x.key),
+    [groups[1].key, groups[0].key]
+  )
+  const keys = (links: (typeof docs)[]) =>
+    keyedTopNavItems(links).map((x) => x.key)
+  assert.deepEqual(keys([docs, faq, faq]).slice(1), keys([faq, faq]))
+  assert.notEqual(keys([faq, faq])[0], keys([faq, faq])[1])
 })

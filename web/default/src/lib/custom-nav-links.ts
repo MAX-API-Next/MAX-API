@@ -46,9 +46,16 @@ export function getCustomNavLinks(custom: HeaderNavCustomConfig): TopNavItem[] {
   if (!custom.enabled) return []
   return custom.items.flatMap((item): TopNavItem[] => {
     if (!item.title) return []
-    const parent = toTopNavLink({ title: item.title, href: item.href })
-    const children = item.children.flatMap(toTopNavLink)
+    const { children: sublinks, ...link } = item
+    const parent = toTopNavLink(link)
+    const children = sublinks.flatMap(toTopNavLink)
     if (!children.length) return parent
-    return [{ title: item.title, children: [...parent, ...children] }]
+    return [
+      {
+        ...(item.id ? { id: item.id } : {}),
+        title: item.title,
+        children: [...parent, ...children],
+      },
+    ]
   })
 }

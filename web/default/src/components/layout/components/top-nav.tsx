@@ -27,6 +27,7 @@ import {
   DropdownMenuGroup,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { keyedTopNavItems } from '../config/top-nav.config'
 import type { TopNavItem } from '../types'
 import { TopNavGroupMenu, TopNavMenuLink } from './top-nav-group'
 
@@ -40,6 +41,7 @@ type TopNavProps = React.HTMLAttributes<HTMLElement> & {
  */
 export function TopNav({ className, links, ...props }: TopNavProps) {
   const { t } = useTranslation()
+  const keyedLinks = keyedTopNavItems(links)
 
   return (
     <>
@@ -64,11 +66,11 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
             className='w-max max-w-[min(20rem,var(--available-width))]'
           >
             <DropdownMenuGroup>
-              {links.map((link, index) =>
+              {keyedLinks.map(({ link, key }) =>
                 'children' in link ? (
-                  <TopNavGroupMenu key={index} group={link} nested />
+                  <TopNavGroupMenu key={key} group={link} nested />
                 ) : (
-                  <TopNavMenuLink key={index} link={link} />
+                  <TopNavMenuLink key={key} link={link} />
                 )
               )}
             </DropdownMenuGroup>
@@ -84,12 +86,12 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
         )}
         {...props}
       >
-        {links.map((link, index) => {
+        {keyedLinks.map(({ link, key }) => {
           const linkClass =
             'text-muted-foreground hover:text-primary shrink-0 text-sm font-medium transition-colors'
           if ('children' in link)
             return (
-              <TopNavGroupMenu key={index} group={link} className={linkClass} />
+              <TopNavGroupMenu key={key} group={link} className={linkClass} />
             )
           const className = cn(
             linkClass,
@@ -98,7 +100,7 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
           )
           return link.external ? (
             <a
-              key={index}
+              key={key}
               href={link.href}
               target='_blank'
               rel='noopener noreferrer'
@@ -108,7 +110,7 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
             </a>
           ) : (
             <Link
-              key={index}
+              key={key}
               to={link.href}
               disabled={link.disabled}
               className={className}

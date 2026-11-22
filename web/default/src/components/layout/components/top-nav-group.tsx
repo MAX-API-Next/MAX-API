@@ -28,6 +28,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
 } from '@/components/ui/dropdown-menu'
+import { keyedTopNavItems } from '../config/top-nav.config'
 import type { TopNavGroup, TopNavLink } from '../types'
 
 export function TopNavMenuLink({ link }: { link: TopNavLink }) {
@@ -56,8 +57,8 @@ export function TopNavGroupMenu(props: {
   nested?: boolean
   className?: string
 }) {
-  const items = props.group.children.map((link, index) => (
-    <TopNavMenuLink key={index} link={link} />
+  const items = keyedTopNavItems(props.group.children).map(({ link, key }) => (
+    <TopNavMenuLink key={key} link={link} />
   ))
   const contentClass = 'w-max max-w-[min(20rem,var(--available-width))]'
   if (props.nested) {

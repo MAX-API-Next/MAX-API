@@ -85,6 +85,7 @@ export type SidebarData = {
  * Top navigation link type
  */
 export type TopNavLink = {
+  id?: string
   title: string
   href: string
   isActive?: boolean
@@ -95,6 +96,7 @@ export type TopNavLink = {
 }
 
 export type TopNavGroup = {
+  id?: string
   title: string
   children: TopNavLink[]
 }

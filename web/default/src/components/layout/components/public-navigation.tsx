@@ -18,7 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { cn } from '@/lib/utils'
 import { useTopNavLinks } from '@/hooks/use-top-nav-links'
-import { defaultTopNavLinks } from '../config/top-nav.config'
+import { defaultTopNavLinks, keyedTopNavItems } from '../config/top-nav.config'
 import type { TopNavLink } from '../types'
 import { NavLinkItem } from './nav-link-item'
 import { TopNavGroupMenu } from './top-nav-group'
@@ -47,6 +47,7 @@ export function PublicNavigation({
   const dynamicLinks = useTopNavLinks()
   const defaultLinks = providedLinks || defaultTopNavLinks
   const links = dynamicLinks.length > 0 ? dynamicLinks : defaultLinks
+  const keyedLinks = keyedTopNavItems(links)
 
   return (
     <nav
@@ -55,13 +56,13 @@ export function PublicNavigation({
         className
       )}
     >
-      {links.map((link, index) => {
+      {keyedLinks.map(({ link, key }) => {
         const itemClass =
           'text-muted-foreground hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground inline-flex h-9 shrink-0 items-center rounded-md px-4 py-2 text-sm font-medium'
         return 'children' in link ? (
-          <TopNavGroupMenu key={index} group={link} className={itemClass} />
+          <TopNavGroupMenu key={key} group={link} className={itemClass} />
         ) : (
-          <NavLinkItem key={index} link={link} className={itemClass} />
+          <NavLinkItem key={key} link={link} className={itemClass} />
         )
       })}
     </nav>

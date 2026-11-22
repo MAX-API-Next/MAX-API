@@ -20,7 +20,11 @@ import * as z from 'zod'
 import { isSupportedNavHref } from '@/lib/custom-nav-links'
 import type { CustomNavLink } from '@/lib/header-nav-modules'
 
-const navLink = z.object({ title: z.string().trim(), href: z.string().trim() })
+const navLink = z.object({
+  id: z.string().optional(),
+  title: z.string().trim(),
+  href: z.string().trim(),
+})
 
 export const headerNavSchema = z
   .object({

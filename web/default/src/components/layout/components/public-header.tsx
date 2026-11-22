@@ -41,7 +41,7 @@ import { LanguageSwitcher } from '@/components/language-switcher'
 import { NotificationPopover } from '@/components/notification-popover'
 import { ProfileDropdown } from '@/components/profile-dropdown'
 import { ThemeSwitch } from '@/components/theme-switch'
-import { defaultTopNavLinks } from '../config/top-nav.config'
+import { defaultTopNavLinks, keyedTopNavItems } from '../config/top-nav.config'
 import type { TopNavLink } from '../types'
 import { HeaderLogo } from './header-logo'
 import { PublicHeaderToolsMenu } from './header-tools-menu'
@@ -111,6 +111,7 @@ export function PublicHeader(props: PublicHeaderProps) {
   const isAuthenticated = !!user
   const displaySiteName = customSiteName || systemName
   const links = dynamicLinks.length > 0 ? dynamicLinks : navLinks
+  const keyedLinks = keyedTopNavItems(links)
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 20)
@@ -247,11 +248,11 @@ export function PublicHeader(props: PublicHeaderProps) {
             {/* Desktop nav */}
             <div className='hidden min-w-0 items-center gap-0.5 lg:flex'>
               <div className='flex min-w-0 items-center gap-0.5 overflow-x-auto whitespace-nowrap'>
-                {links.map((link, i) => {
+                {keyedLinks.map(({ link, key }) => {
                   if ('children' in link) {
                     return (
                       <TopNavGroupMenu
-                        key={i}
+                        key={key}
                         group={link}
                         className='text-muted-foreground hover:text-foreground shrink-0 rounded-lg px-3 py-1.5 text-[13px] font-medium'
                       />
@@ -261,7 +262,7 @@ export function PublicHeader(props: PublicHeaderProps) {
                   if (link.external) {
                     return (
                       <a
-                        key={i}
+                        key={key}
                         href={link.href}
                         target='_blank'
                         rel='noopener noreferrer'
@@ -279,7 +280,7 @@ export function PublicHeader(props: PublicHeaderProps) {
                   }
                   return (
                     <Link
-                      key={i}
+                      key={key}
                       to={link.href}
                       disabled={link.disabled}
                       onClick={(event) => handleNavLinkClick(event, link)}
@@ -404,10 +405,10 @@ export function PublicHeader(props: PublicHeaderProps) {
       >
         <div className='flex h-full flex-col justify-between gap-4 overflow-y-auto px-8 pt-20 pb-10'>
           <nav className='flex flex-col gap-1'>
-            {links.map((link, i) => {
+            {keyedLinks.map(({ link, key }, i) => {
               if ('children' in link) {
                 return (
-                  <details key={i} className='group'>
+                  <details key={key} className='group'>
                     <summary className='text-muted-foreground flex cursor-pointer list-none items-center justify-between gap-2 py-3 text-base font-medium'>
                       <span className='[overflow-wrap:anywhere]'>
                         {link.title}
@@ -418,14 +419,16 @@ export function PublicHeader(props: PublicHeaderProps) {
                       />
                     </summary>
                     <div className='flex flex-col border-l pl-4'>
-                      {link.children.map((child, index) => (
-                        <NavLinkItem
-                          key={index}
-                          link={child}
-                          className='py-2 text-sm [overflow-wrap:anywhere]'
-                          onClick={() => setMobileOpen(false)}
-                        />
-                      ))}
+                      {keyedTopNavItems(link.children).map(
+                        ({ link: child, key }) => (
+                          <NavLinkItem
+                            key={key}
+                            link={child}
+                            className='py-2 text-sm [overflow-wrap:anywhere]'
+                            onClick={() => setMobileOpen(false)}
+                          />
+                        )
+                      )}
                     </div>
                   </details>
                 )
@@ -447,7 +450,7 @@ export function PublicHeader(props: PublicHeaderProps) {
               if (link.external) {
                 return (
                   <a
-                    key={i}
+                    key={key}
                     href={link.href}
                     target='_blank'
                     rel='noopener noreferrer'
@@ -463,7 +466,7 @@ export function PublicHeader(props: PublicHeaderProps) {
               }
               return (
                 <Link
-                  key={i}
+                  key={key}
                   to={link.href}
                   disabled={link.disabled}
                   onClick={(event) => handleNavLinkClick(event, link, true)}
