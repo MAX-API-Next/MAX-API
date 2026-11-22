@@ -8,8 +8,12 @@ import type {
   PricingDraftView,
 } from './model-pricing-draft'
 import { ModelPricingExpression } from './model-pricing-expression'
-import { modelPricingNumericKeys } from './model-pricing-types'
+import {
+  modelPricingNumericKeys,
+  type ModelPricingEntry,
+} from './model-pricing-types'
 import type { TaskUsageField } from './task-pricing-contract'
+import type { TaskVisualSchema } from './task-visual-expression'
 
 function describeUsageField(
   field: TaskUsageField,
@@ -42,6 +46,30 @@ function matchesUsageField(field: TaskUsageField, other: TaskUsageField) {
   return other.type === field.type
 }
 
+function resolveTaskSchema(
+  contexts: Iterable<ModelPricingEntry['contexts'][number]>,
+  plugin: string,
+  variants: Record<string, string>
+): TaskVisualSchema | undefined {
+  const schemas: TaskVisualSchema[] = []
+  for (const context of contexts) {
+    if (!context.usage_schema) continue
+    if (plugin && context.plugin_key !== plugin) continue
+    if (!plugin && Object.hasOwn(variants, context.plugin_key ?? '')) continue
+    schemas.push(context.usage_schema)
+  }
+  if (!schemas.length) return undefined
+  return Object.fromEntries(
+    Object.entries(schemas[0]).filter(([key, field]) =>
+      schemas.every(
+        (candidate) =>
+          Object.hasOwn(candidate, key) &&
+          matchesUsageField(field, candidate[key])
+      )
+    )
+  )
+}
+
 export function ModelPricingFields(props: {
   document: PricingDraftView
   session: ModelPricingDraftSession
@@ -66,30 +94,12 @@ export function ModelPricingFields(props: {
   const hasTaskDefault = base.contexts.some(
     (context) => context.profile === 'new-api-task@1' && !context.preview_only
   )
-  const schemas = [...contexts.values()].flatMap((context) =>
-    context.usage_schema &&
-    (plugin
-      ? context.plugin_key === plugin
-      : !Object.hasOwn(variants, context.plugin_key ?? ''))
-      ? [context.usage_schema]
-      : []
-  )
   const hasVisualSchema = plugin
     ? selected?.available && selected.usage_schema
     : hasTaskDefault || hasTaskUsageCall(expression)
-  const schema =
-    hasVisualSchema && schemas.length
-      ? Object.fromEntries(
-          Object.entries(schemas[0]).filter(([key, field]) =>
-            schemas.every((candidate) => {
-              const other = Object.hasOwn(candidate, key)
-                ? candidate[key]
-                : undefined
-              return other && matchesUsageField(field, other)
-            })
-          )
-        )
-      : undefined
+  const schema = hasVisualSchema
+    ? resolveTaskSchema(contexts.values(), plugin, variants)
+    : undefined
   const sources = new Map([...contexts.keys()].map((id) => [id, id]))
   for (const key of Object.keys(variants))
     sources.set(`plugin:${key}`, `plugin:${key}`)
