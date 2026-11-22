@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
@@ -14,6 +15,31 @@ import (
 	"gorm.io/gorm/clause"
 	"gorm.io/gorm/schema"
 )
+
+func TestTaskPluginOnlyGroupAllowsOrdinaryRouteCacheRefresh(t *testing.T) {
+	clearPreferredOwnerTables(t)
+	enabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() {
+		clearPreferredOwnerTables(t)
+		InitChannelCache()
+		common.MemoryCacheEnabled = enabled
+	})
+	insertChannelSelectionCandidate(t, 41, constant.ChannelTypeOpenAI, "", "ordinary-model", "default", 1)
+	plugin := &Channel{Id: 42, Type: constant.ChannelTypeTaskPlugin, Status: common.ChannelStatusEnabled,
+		Name: "configuration only", Group: "plugin-only", Models: "preview-model"}
+	// Seed a persisted channel without requiring the catalog writer in this cache fixture.
+	require.NoError(t, DB.Exec("INSERT INTO channels (id, type, status, name, "+commonGroupCol+", models, "+commonKeyCol+") VALUES (?, ?, ?, ?, ?, ?, ?)",
+		plugin.Id, plugin.Type, plugin.Status, plugin.Name, plugin.Group, plugin.Models, "fixture").Error)
+	InitChannelCache()
+	cached, err := CacheGetChannel(plugin.Id)
+	require.NoError(t, err)
+	require.Equal(t, plugin.Name, cached.Name)
+	ordinary, err := GetRandomSatisfiedChannel("default", "ordinary-model", 0, "/v1/chat/completions")
+	require.NoError(t, err)
+	require.Equal(t, 41, ordinary.Id)
+	require.Empty(t, group2model2channels["plugin-only"])
+}
 
 func TestQuotedUnrelatedTableAcceptsMapCreate(t *testing.T) {
 	db := deletionDB(t)
@@ -470,7 +496,7 @@ func TestTaskPluginChannelReferencesCannotOutliveDeletion(t *testing.T) {
 	safe.Tag = &tag
 	require.NoError(t, safe.UpdateFields("tag"))
 	deletedModel := "catalog-model"
-	require.ErrorIs(t, EditChannelByTag(tag, nil, nil, &deletedModel, nil, nil, nil, nil, nil), taskplugin.ErrBindingRejected)
+	require.ErrorIs(t, EditChannelByTag(tag, true, nil, nil, &deletedModel, nil, nil, nil, nil, nil), taskplugin.ErrBindingRejected)
 	safe.Name = "rename"
 	require.NoError(t, safe.UpdateFields("name"), "metadata changes do not need a plugin")
 	require.NoError(t, catalog.Install(t.Context(), pkg), "explicit identical reimport restores model availability")

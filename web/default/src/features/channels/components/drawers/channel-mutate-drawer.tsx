@@ -40,11 +40,13 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/auth-store'
 import {
   parseChannelConnectionInfo,
   type ChannelConnectionInfo,
 } from '@/lib/channel-connection-info'
 import { getLobeIcon } from '@/lib/lobe-icon'
+import { ROLE } from '@/lib/roles'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -91,6 +93,7 @@ import {
   SecureVerificationDialog,
   useSecureVerification,
 } from '@/features/auth/secure-verification'
+import { taskPluginAPI } from '@/features/task-plugins/api'
 import {
   fetchModels,
   getAllModels,
@@ -105,6 +108,7 @@ import {
   CHANNEL_STATUS_LABELS,
   CHANNEL_TYPE_DOUBAO_VIDEO,
   CHANNEL_TYPE_OPTIONS,
+  CHANNEL_TYPE_TASK_PLUGIN,
   CHANNEL_TYPE_WARNINGS,
   ERROR_MESSAGES,
   FIELD_DESCRIPTIONS,
@@ -118,6 +122,7 @@ import {
   channelsQueryKeys,
   invalidateChannelConfiguration,
   transformChannelToFormDefaults,
+  taskPluginMetadataPatch,
   type ChannelFormValues,
   deduplicateKeys,
   getChannelTypeIcon,
@@ -142,6 +147,12 @@ import {
   collectInvalidStatusCodeEntries,
   collectNewDisallowedStatusCodeRedirects,
 } from '../../lib/status-code-risk-guard'
+import {
+  invalidTaskPluginParameters,
+  missingTaskPluginParameters,
+  readTaskPluginSettings,
+  taskPluginUpstreams,
+} from '../../lib/task-plugin-channel'
 import type { Channel } from '../../types'
 import { ChannelCapabilityMatrix } from '../channel-capability-matrix'
 import { ChannelRoutingHealthCard } from '../channel-routing-health-card'
@@ -187,6 +198,7 @@ import {
   ChannelEditorLoadingState,
   ChannelModelsSection,
 } from './sections'
+import { TaskPluginChannelFields } from './task-plugin-channel-fields'
 
 type ChannelMutateDrawerProps = {
   open: boolean
@@ -209,6 +221,7 @@ export function ChannelMutateDrawer({
   const [isCodexCredentialRefreshing, setIsCodexCredentialRefreshing] =
     useState(false)
   const initialModelsRef = useRef<string[]>([])
+  const initialPluginForm = useRef<ChannelFormValues | null>(null)
   const initialModelMappingRef = useRef<string>('')
   const initialStatusCodeMappingRef = useRef<string>('')
   const [statusCodeRiskOpen, setStatusCodeRiskOpen] = useState(false)
@@ -330,6 +343,33 @@ export function ChannelMutateDrawer({
   const keyMode = form.watch('key_mode')
   const currentGroups = form.watch('group')
   const currentType = Number(form.watch('type') || 0)
+  const isTaskPlugin = currentType === CHANNEL_TYPE_TASK_PLUGIN
+  const savedTaskPlugin =
+    (channelData?.data?.type ?? currentRow?.type) === CHANNEL_TYPE_TASK_PLUGIN
+  const canConfigureTaskPlugins = useAuthStore(
+    (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
+  )
+  const taskPluginQuery = useQuery({
+    queryKey: ['task-plugin-channel-options'],
+    queryFn: ({ signal }) => taskPluginAPI.read(signal),
+    enabled: open && isTaskPlugin && canConfigureTaskPlugins,
+    retry: false,
+    gcTime: 0,
+  })
+  const pluginOptions = taskPluginQuery.isError
+    ? []
+    : (taskPluginQuery.data?.entries ?? []).filter(
+        (entry) =>
+          entry.channel_configurable &&
+          entry.active &&
+          entry.enabled &&
+          !entry.revoked
+      )
+  const selectedTaskPlugin = pluginOptions.find(
+    (entry) =>
+      entry.key ===
+      readTaskPluginSettings(form.watch('setting')).task_plugin_key
+  )
   const currentBaseUrl = form.watch('base_url')
   const currentModels = form.watch('models')
   const currentName = form.watch('name')
@@ -462,7 +502,10 @@ export function ChannelMutateDrawer({
 
   // Helper computed values
   const isBatchMode =
-    multiKeyMode === 'batch' || multiKeyMode === 'multi_to_single'
+    !isTaskPlugin &&
+    (multiKeyMode === 'batch' || multiKeyMode === 'multi_to_single')
+  const showMultiKeyStrategy =
+    !isEditing && isBatchMode && multiKeyMode === 'multi_to_single'
   const isChannelDetailLoading = isEditing && initializedEditorId !== channelId
   const advancedCustomStats = useMemo(
     () => getAdvancedCustomStats(currentAdvancedCustom),
@@ -521,7 +564,11 @@ export function ChannelMutateDrawer({
   )
 
   const channelTypeOptions = useMemo(() => {
-    const options = CHANNEL_TYPE_OPTIONS.map((option) => ({
+    const options = CHANNEL_TYPE_OPTIONS.filter(
+      (option) =>
+        option.value !== CHANNEL_TYPE_TASK_PLUGIN ||
+        (canConfigureTaskPlugins && !isEditing)
+    ).map((option) => ({
       value: String(option.value),
       label: t(option.label),
       icon: getLobeIcon(`${getChannelTypeIcon(option.value)}.Color`, 16),
@@ -534,7 +581,7 @@ export function ChannelMutateDrawer({
       })
     }
     return options
-  }, [currentType, t])
+  }, [currentType, canConfigureTaskPlugins, isEditing, t])
 
   const formErrors = form.formState.errors
   const identityHasErrors = Boolean(
@@ -817,6 +864,8 @@ export function ChannelMutateDrawer({
       initializedEditorRef.current = channelId
       setInitializedEditorId(channelId)
       const defaults = transformChannelToFormDefaults(channelData.data)
+      initialPluginForm.current =
+        defaults.type === CHANNEL_TYPE_TASK_PLUGIN ? defaults : null
       const shouldOpenAdvancedSettings =
         readAdvancedSettingsPreference() ||
         hasAdvancedSettingsValues(defaults) ||
@@ -1097,6 +1146,79 @@ export function ChannelMutateDrawer({
   // Submit handler
   const onSubmit = useCallback(
     async (data: ChannelFormValues) => {
+      const metadataPatch =
+        isEditing &&
+        channelId &&
+        initializedEditorRef.current === channelId &&
+        initialPluginForm.current
+          ? taskPluginMetadataPatch(data, initialPluginForm.current, channelId)
+          : undefined
+      if (data.type === CHANNEL_TYPE_TASK_PLUGIN && !canConfigureTaskPlugins) {
+        toast.error(t('Task plugin channel configuration requires root access'))
+        return
+      }
+      if (isEditing && savedTaskPlugin && channelFormRef.current) {
+        // A metadata-only PATCH omits the binding. Its retained parameters may
+        // no longer satisfy the current catalog, while other controls still apply.
+        const invalidControls = channelFormRef.current.querySelectorAll<
+          HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+        >('input:invalid, select:invalid, textarea:invalid')
+        for (const control of invalidControls) {
+          if (metadataPatch && control.closest('[data-task-plugin-binding]'))
+            continue
+          control.reportValidity()
+          return
+        }
+      }
+      if (data.type === CHANNEL_TYPE_TASK_PLUGIN && !metadataPatch) {
+        if (
+          !selectedTaskPlugin ||
+          data.expected_task_plugin_digest !== selectedTaskPlugin.digest
+        ) {
+          toast.error(t('Refresh task plugin options before saving'))
+          return
+        }
+        const settings = readTaskPluginSettings(data.setting)
+        if (
+          !taskPluginUpstreams(selectedTaskPlugin.upstreams).includes(
+            settings.task_plugin_upstream
+          )
+        ) {
+          toast.error(
+            t('Select an upstream supported by the active task plugin')
+          )
+          return
+        }
+        const schema = selectedTaskPlugin.channel_config
+        const missing = missingTaskPluginParameters(
+          schema,
+          settings.task_plugin_config
+        )
+        if (missing.length) {
+          toast.error(
+            t('Fill in required task plugin parameters: {{parameters}}', {
+              parameters: missing
+                .map((name) => schema?.properties[name]?.title || name)
+                .join(', '),
+            })
+          )
+          return
+        }
+        const invalid = invalidTaskPluginParameters(
+          schema,
+          settings.task_plugin_config
+        )
+        if (invalid.length) {
+          toast.error(
+            t('Invalid task plugin parameters: {{parameters}}', {
+              parameters: invalid
+                .map((name) => schema?.properties[name]?.title || name)
+                .join(', '),
+            })
+          )
+          return
+        }
+      }
       // Validate key is required when creating
       if (!isEditing && !data.key?.trim()) {
         form.setError('key', {
@@ -1177,7 +1299,7 @@ export function ChannelMutateDrawer({
         }
       }
 
-      await channelMutation.mutateAsync(data)
+      await channelMutation.mutateAsync({ data, metadataPatch })
     },
     [
       isEditing,
@@ -1185,6 +1307,10 @@ export function ChannelMutateDrawer({
       confirmMissingModelMappings,
       confirmStatusCodeRisk,
       channelMutation,
+      channelId,
+      savedTaskPlugin,
+      canConfigureTaskPlugins,
+      selectedTaskPlugin,
       t,
     ]
   )
@@ -1394,6 +1520,7 @@ export function ChannelMutateDrawer({
             <form
               id='channel-form'
               ref={channelFormRef}
+              noValidate={isEditing && savedTaskPlugin}
               onSubmit={form.handleSubmit(onSubmit, onInvalid)}
               className={sideDrawerFormClassName('gap-5')}
             >
@@ -1444,6 +1571,10 @@ export function ChannelMutateDrawer({
                       <ChannelBasicSection
                         channelTypeOptions={channelTypeOptions}
                         isEditing={isEditing}
+                        lockType={savedTaskPlugin}
+                        allowTaskPluginType={
+                          canConfigureTaskPlugins && !isEditing
+                        }
                       />
 
                       <ChannelCapabilityMatrix
@@ -1458,6 +1589,25 @@ export function ChannelMutateDrawer({
                       className='scroll-mt-4'
                     >
                       <ChannelApiAccessSection>
+                        {isTaskPlugin && canConfigureTaskPlugins && (
+                          <TaskPluginChannelFields
+                            options={pluginOptions}
+                            loading={taskPluginQuery.isFetching}
+                            failed={taskPluginQuery.isError}
+                            refresh={() => {
+                              void taskPluginQuery.refetch()
+                            }}
+                          />
+                        )}
+                        {isTaskPlugin && !canConfigureTaskPlugins && (
+                          <Alert>
+                            <AlertDescription>
+                              {t(
+                                'Task plugin channel configuration requires root access'
+                              )}
+                            </AlertDescription>
+                          </Alert>
+                        )}
                         {CHANNEL_TYPE_WARNINGS[currentType] && (
                           <Alert>
                             <AlertDescription>
@@ -2154,7 +2304,7 @@ export function ChannelMutateDrawer({
                         )}
 
                         <ChannelAuthSection>
-                          {!isEditing && (
+                          {!isEditing && !isTaskPlugin && (
                             <FormField
                               control={form.control}
                               name='multi_key_mode'
@@ -2464,7 +2614,7 @@ export function ChannelMutateDrawer({
                             />
                           )}
 
-                          {!isEditing && multiKeyMode === 'multi_to_single' && (
+                          {showMultiKeyStrategy && (
                             <FormField
                               control={form.control}
                               name='multi_key_type'
@@ -2476,7 +2626,10 @@ export function ChannelMutateDrawer({
                                   <Select
                                     items={[
                                       { value: 'random', label: t('Random') },
-                                      { value: 'polling', label: t('Polling') },
+                                      {
+                                        value: 'polling',
+                                        label: t('Polling'),
+                                      },
                                     ]}
                                     onValueChange={field.onChange}
                                     value={field.value}
@@ -2525,13 +2678,17 @@ export function ChannelMutateDrawer({
                       className='scroll-mt-4'
                     >
                       <ChannelModelsSection
-                        allModels={allModelsList}
-                        basicModels={basicModels}
+                        allModels={
+                          isTaskPlugin
+                            ? (selectedTaskPlugin?.models ?? [])
+                            : allModelsList
+                        }
+                        basicModels={isTaskPlugin ? [] : basicModels}
                         groupOptions={groupOptions}
                         isLoadingGroups={isLoadingGroups}
                         isSubmitting={isSubmitting}
                         onFetchModels={handleFetchModels}
-                        prefillGroups={prefillGroups}
+                        prefillGroups={isTaskPlugin ? [] : prefillGroups}
                       />
                     </div>
 

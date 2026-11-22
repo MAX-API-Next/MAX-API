@@ -76,6 +76,7 @@ func getModelPricingSnapshot(db *gorm.DB, names []string) (*ModelPricingSnapshot
 			}
 			for _, channel := range a.channels {
 				for _, name := range strings.Split(channel.Models, ",") {
+					name = channel.advertisedModelName(name)
 					if name != "" {
 						set[name] = true
 					}

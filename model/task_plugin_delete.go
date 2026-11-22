@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
@@ -331,15 +332,16 @@ func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 	if err != nil {
 		return err
 	}
-	// MAX currently derives plugin contexts from declared/mapped channel models,
-	// rather than a dedicated channel plugin-version column. Disabled channels
-	// also retain these configurations, so do not filter them out.
+	// Include explicit key references and legacy model/mapping references.
+	// Disabled channels retain their configuration.
 	var channels []struct {
 		ID           int
+		Type         int
+		Setting      *string
 		Models       string
 		ModelMapping *string
 	}
-	if err := tx.Model(&Channel{}).Select("id", "models", "model_mapping").Find(&channels).Error; err != nil {
+	if err := tx.Model(&Channel{}).Select("id", "type", "setting", "models", "model_mapping").Find(&channels).Error; err != nil {
 		return err
 	}
 	models := map[string]bool{}
@@ -347,6 +349,15 @@ func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 		models[model] = true
 	}
 	for _, channel := range channels {
+		if channel.Type == constant.ChannelTypeTaskPlugin {
+			settings, err := ReadTaskPluginChannelSettings(channel.Setting)
+			if err != nil {
+				return taskplugin.ErrCatalogInvalid
+			}
+			if settings.Key == m.Key {
+				return taskplugin.ErrCatalogInUse
+			}
+		}
 		for _, model := range strings.Split(channel.Models, ",") {
 			if models[strings.TrimSpace(model)] {
 				return taskplugin.ErrCatalogInUse

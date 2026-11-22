@@ -254,6 +254,7 @@ func routeSpecificity(path string) int {
 }
 
 func cloneManifest(manifest Manifest) Manifest {
+	manifest.ChannelConfig = append([]byte(nil), manifest.ChannelConfig...)
 	manifest.Models = append([]string(nil), manifest.Models...)
 	manifest.ChannelTypes = append([]int(nil), manifest.ChannelTypes...)
 	manifest.Protocols = append([]ProtocolClaim(nil), manifest.Protocols...)

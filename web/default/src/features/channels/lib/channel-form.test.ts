@@ -18,16 +18,109 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { CHANNEL_TYPE_DOUBAO_VIDEO } from '../constants'
+import {
+  CHANNEL_TYPE_DOUBAO_VIDEO,
+  CHANNEL_TYPE_TASK_PLUGIN,
+} from '../constants'
 import { channelSchema } from '../types'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
   channelFormSchema,
+  taskPluginMetadataPatch,
   transformChannelToFormDefaults,
+  transformFormDataToCreatePayload,
   transformFormDataToUpdatePayload,
 } from './channel-form'
 
 describe('channel form settings round trip', () => {
+  test('task plugin writes keep options outside the stored settings and reopen without secrets', () => {
+    const pluginSettings = {
+      task_plugin_key: 'fixture',
+      task_plugin_upstream: 'vendor',
+      task_plugin_config: { retries: 0, highQuality: false },
+    }
+    const form = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      type: CHANNEL_TYPE_TASK_PLUGIN,
+      multi_key_mode: 'batch' as const,
+      name: 'plugin',
+      models: 'alias',
+      model_mapping: '{"alias":"declared-model"}',
+      base_url: 'https://provider.example',
+      setting: JSON.stringify(pluginSettings),
+      key: 'synthetic-only',
+      expected_task_plugin_digest: 'observed-digest',
+    }
+    const { mode, channel } = transformFormDataToCreatePayload(form)
+    assert.equal(mode, 'single')
+    assert.equal(channel.expected_task_plugin_digest, 'observed-digest')
+    assert.ok(channel.setting)
+    assert.equal(
+      JSON.parse(channel.setting).task_plugin_key,
+      pluginSettings.task_plugin_key
+    )
+    assert.equal(channel.setting.includes('observed-digest'), false)
+    const reopened = transformChannelToFormDefaults(
+      channelSchema.parse({
+        ...channel,
+        settings:
+          '{"upstream_model_update_check_enabled":true,"upstream_model_update_auto_sync_enabled":true}',
+        id: 8,
+        created_time: 1,
+        test_time: 0,
+        response_time: 0,
+        balance_updated_time: 0,
+        other: '',
+        remark: '',
+      })
+    )
+    assert.equal(reopened.key, '')
+    assert.equal(reopened.expected_task_plugin_digest, undefined)
+    const initial = { ...reopened, other: 'us', remark: 'before' }
+    assert.deepEqual(
+      taskPluginMetadataPatch(
+        { ...initial, remark: '', expected_task_plugin_digest: 'refreshed' },
+        initial,
+        8
+      ),
+      { remark: '' }
+    )
+    for (const changed of [
+      { other: '' },
+      { key: 'replacement-fixture' },
+      { models: 'other' },
+      { base_url: 'https://new.example' },
+      { model_mapping: '{}' },
+      {
+        setting: JSON.stringify({ ...pluginSettings, task_plugin_config: {} }),
+      },
+    ]) {
+      assert.equal(
+        taskPluginMetadataPatch({ ...initial, ...changed }, initial, 8),
+        undefined
+      )
+    }
+    assert.equal(
+      transformFormDataToUpdatePayload({ ...initial, other: '' }, 8).other,
+      ''
+    )
+    reopened.expected_task_plugin_digest = 'refreshed-digest'
+    const update = transformFormDataToUpdatePayload(reopened, 8)
+    const savedSettings = JSON.parse(update.settings ?? '{}')
+    assert.equal(savedSettings.upstream_model_update_check_enabled, undefined)
+    assert.equal(
+      savedSettings.upstream_model_update_auto_sync_enabled,
+      undefined
+    )
+    assert.equal(update.key, undefined)
+    assert.equal(update.model_mapping, form.model_mapping)
+    assert.equal(update.expected_task_plugin_digest, 'refreshed-digest')
+    assert.deepEqual(
+      JSON.parse(update.setting ?? '{}').task_plugin_config,
+      pluginSettings.task_plugin_config
+    )
+  })
+
   test('preserves status mapping and all configured video response paths', () => {
     const channel = channelSchema.parse({
       id: 7,

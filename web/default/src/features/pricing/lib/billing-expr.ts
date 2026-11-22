@@ -279,7 +279,7 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
   if (!exprStr) return []
   try {
     const { body } = stripExprVersion(exprStr)
-    const tierRe = /^tier\("([^"]*)",\s*([\s\S]+)\)$/
+    const tierRe = /^tier\(("(?:[^"\\]|\\.)*"),\s*([\s\S]+)\)$/
     const tiers: ParsedTier[] = []
     const branches = splitTopLevelExpression(
       unwrapConditionParens(body),
@@ -287,13 +287,13 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
       true
     )
     for (const [index, branch] of branches.entries()) {
-      const parts = branch.match(/^(.*?)\s*\?\s*(tier\("[^"]*",[\s\S]+\))$/)
+      const parts = splitTopLevelExpression(branch, '?', true)
       // A complete ternary chain ends in exactly one unconditional fallback.
       const expectsCondition = index < branches.length - 1
-      if (Boolean(parts) !== expectsCondition) return []
-      const condStr = parts?.[1]?.trim() || ''
-      const tierMatch = tierRe.exec(parts?.[2] || branch)
-      if (!tierMatch || (parts && !condStr)) return []
+      if (parts.length !== (expectsCondition ? 2 : 1) || !parts[0]) return []
+      const condStr = expectsCondition ? parts[0] : ''
+      const tierMatch = tierRe.exec(expectsCondition ? parts[1] : parts[0])
+      if (!tierMatch) return []
       const conditionGroups: TierCondition[][] = []
       let isUnconditional = false
       const groups = condStr
@@ -335,7 +335,7 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
       if (!prices) return []
       const tier: ParsedTier = {
         ...prices,
-        label: tierMatch[1],
+        label: JSON.parse(tierMatch[1]) as string,
         conditions: isUnconditional ? [] : conditionGroups.flat(),
       }
       if (!isUnconditional && conditionGroups.length > 1) {

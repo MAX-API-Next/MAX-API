@@ -7,8 +7,13 @@ import type {
   ModelPricingDraftSession,
   PricingDraftView,
 } from './model-pricing-draft'
-import { modelPricingNumericKeys } from './model-pricing-types'
+import { ModelPricingExpression } from './model-pricing-expression'
+import {
+  modelPricingNumericKeys,
+  type ModelPricingEntry,
+} from './model-pricing-types'
 import type { TaskUsageField } from './task-pricing-contract'
+import type { TaskVisualSchema } from './task-visual-expression'
 
 function describeUsageField(
   field: TaskUsageField,
@@ -17,6 +22,52 @@ function describeUsageField(
   if ('unit' in field) return field.unit
   if (field.type === 'boolean') return booleanLabel
   return field.enum.join('/')
+}
+
+function hasTaskUsageCall(expression: string): boolean {
+  const unquoted = expression.replace(
+    /"(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*'/g,
+    ' '
+  )
+  return /\bu\s*\(/.test(unquoted)
+}
+
+function matchesUsageField(field: TaskUsageField, other: TaskUsageField) {
+  if ('unit' in field)
+    return (
+      'unit' in other && field.type === other.type && field.unit === other.unit
+    )
+  if ('enum' in field)
+    return (
+      'enum' in other &&
+      field.enum.length === other.enum.length &&
+      field.enum.every((value) => other.enum.includes(value))
+    )
+  return other.type === field.type
+}
+
+function resolveTaskSchema(
+  contexts: Iterable<ModelPricingEntry['contexts'][number]>,
+  plugin: string,
+  variants: Record<string, string>
+): TaskVisualSchema | undefined {
+  const schemas: TaskVisualSchema[] = []
+  for (const context of contexts) {
+    if (!context.usage_schema) continue
+    if (plugin && context.plugin_key !== plugin) continue
+    if (!plugin && Object.hasOwn(variants, context.plugin_key ?? '')) continue
+    schemas.push(context.usage_schema)
+  }
+  if (!schemas.length) return undefined
+  return Object.fromEntries(
+    Object.entries(schemas[0]).filter(([key, field]) =>
+      schemas.every(
+        (candidate) =>
+          Object.hasOwn(candidate, key) &&
+          matchesUsageField(field, candidate[key])
+      )
+    )
+  )
 }
 
 export function ModelPricingFields(props: {
@@ -37,6 +88,18 @@ export function ModelPricingFields(props: {
     selected?.plugin_key ??
     (d.source.startsWith('plugin:') ? d.source.slice(7) : '')
   const variants = pricing['billing_setting.plugin_billing_expr'] ?? {}
+  const expression = plugin
+    ? (variants[plugin] ?? '')
+    : (pricing['billing_setting.billing_expr'] ?? '')
+  const hasTaskDefault = base.contexts.some(
+    (context) => context.profile === 'new-api-task@1' && !context.preview_only
+  )
+  const hasVisualSchema = plugin
+    ? selected?.available && selected.usage_schema
+    : hasTaskDefault || hasTaskUsageCall(expression)
+  const schema = hasVisualSchema
+    ? resolveTaskSchema(contexts.values(), plugin, variants)
+    : undefined
   const sources = new Map([...contexts.keys()].map((id) => [id, id]))
   for (const key of Object.keys(variants))
     sources.set(`plugin:${key}`, `plugin:${key}`)
@@ -170,26 +233,15 @@ export function ModelPricingFields(props: {
           </div>
         </>
       )}
-      <label className='grid gap-1 text-sm' htmlFor={`${id}-expression`}>
-        {plugin ? t('Plugin expression override') : t('Default expression')}
-        <Textarea
-          id={`${id}-expression`}
-          rows={4}
-          value={
-            plugin
-              ? (variants[plugin] ?? '')
-              : (pricing['billing_setting.billing_expr'] ?? '')
-          }
-          placeholder={
-            plugin
-              ? t(
-                  'Empty inherits the default expression; 0 is explicitly free.'
-                )
-              : ''
-          }
-          onChange={(e) => setExpression(e.target.value)}
-        />
-      </label>
+      <ModelPricingExpression
+        key={`${base.model_name}:${d.source}`}
+        id={`${id}-expression`}
+        expression={expression}
+        plugin={Boolean(plugin)}
+        schema={schema}
+        explicitTaskUnits={Boolean(plugin) || hasTaskDefault}
+        onChange={setExpression}
+      />
       {plugin && (
         <p className='text-muted-foreground text-xs'>
           {t('Effective expression')}:{' '}

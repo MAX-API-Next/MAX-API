@@ -299,6 +299,9 @@ func filterAbilityRowsByRequestPath(abilityRows []AbilityWithChannel, requestPat
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {
+	if channel.Type == constant.ChannelTypeTaskPlugin {
+		return nil
+	}
 	models_ := strings.Split(channel.Models, ",")
 	groups_ := strings.Split(channel.Group, ",")
 	abilitySet := make(map[string]struct{})
@@ -368,6 +371,13 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 			tx.Rollback()
 		}
 		return err
+	}
+
+	if channel.Type == constant.ChannelTypeTaskPlugin {
+		if isNewTx {
+			return tx.Commit().Error
+		}
+		return nil
 	}
 
 	// Then add new abilities

@@ -66,8 +66,8 @@ func InitChannelCache() {
 		newGroup2model2channels[group] = make(map[string][]int)
 	}
 	for _, channel := range channels {
-		if channel.Status != common.ChannelStatusEnabled {
-			continue // skip disabled channels
+		if channel.Status != common.ChannelStatusEnabled || channel.Type == constant.ChannelTypeTaskPlugin {
+			continue
 		}
 		groups := strings.Split(channel.Group, ",")
 		for _, group := range groups {
@@ -287,6 +287,9 @@ func filterChannelsByRequestPath(channels []int, requestPath string) ([]int, err
 }
 
 func channelTypeSupportsRequestPath(channelType int, requestPath string) bool {
+	if channelType == constant.ChannelTypeTaskPlugin {
+		return false
+	}
 	if requestPath != "/v1/alpha/search" {
 		return true
 	}
@@ -412,6 +415,9 @@ func cacheUpdateChannelStatusLocked(id int, status int) {
 }
 
 func appendChannelRoutingEntries(routing map[string]map[string][]int, channel *Channel) {
+	if channel.Type == constant.ChannelTypeTaskPlugin {
+		return
+	}
 	seen := make(map[[2]string]bool)
 	for _, group := range strings.Split(channel.Group, ",") {
 		if routing[group] == nil {

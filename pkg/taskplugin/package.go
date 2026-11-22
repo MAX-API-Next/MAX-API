@@ -186,12 +186,25 @@ func loadPackageContext(ctx context.Context, reader io.Reader, expectedSHA256 st
 	var program *Program
 	if document.FormatVersion == 3 {
 		program, err = compileJavaScriptContext(ctx, document.Source, RuntimeOptions{})
-		if err != nil || !program.matchesManifestContext(ctx, document.Manifest) {
+		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			return nil, ErrPluginCompile
 		}
+		compiled, err := program.Manifest(ctx)
+		if err != nil || !matchesManifestContract(compiled, document.Manifest) {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, ErrPluginCompile
+		}
+		if !retained {
+			if _, err := compiled.ChannelSchema(); err != nil {
+				return nil, err
+			}
+		}
+		document.Manifest.ChannelConfig, document.Manifest.KeyHint = compiled.ChannelConfig, compiled.KeyHint
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

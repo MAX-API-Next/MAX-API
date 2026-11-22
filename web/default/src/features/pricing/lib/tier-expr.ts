@@ -257,10 +257,10 @@ export function generateExprFromVisualConfig(
   if (tiers.length === 1) {
     const tier = tiers[0]
     const label = tier.label || 'default'
-    const body = `tier("${label}", ${buildTierBodyExpr(tier)})`
+    const body = `tier(${JSON.stringify(label)}, ${buildTierBodyExpr(tier)})`
     const cond = buildConditionExpr(tier)
     if (cond) {
-      return `${cond} ? ${body} : tier("${label}_fallback", ${buildTierBodyExpr(tier)})`
+      return `${cond} ? ${body} : tier(${JSON.stringify(label + '_fallback')}, ${buildTierBodyExpr(tier)})`
     }
     return body
   }
@@ -269,7 +269,7 @@ export function generateExprFromVisualConfig(
   for (let i = 0; i < tiers.length; i++) {
     const tier = tiers[i]
     const label = tier.label || `tier_${i + 1}`
-    const body = `tier("${label}", ${buildTierBodyExpr(tier)})`
+    const body = `tier(${JSON.stringify(label)}, ${buildTierBodyExpr(tier)})`
     const cond = buildConditionExpr(tier)
 
     if (cond) {
@@ -283,7 +283,7 @@ export function generateExprFromVisualConfig(
   const last = tiers[tiers.length - 1]
   if (buildConditionExpr(last)) {
     parts.push(
-      `tier("${last.label || 'fallback'}_fallback", ${buildTierBodyExpr(last)})`
+      `tier(${JSON.stringify((last.label || 'fallback') + '_fallback')}, ${buildTierBodyExpr(last)})`
     )
   }
   return parts.join(' : ')
@@ -356,14 +356,16 @@ export function tryParseVisualConfig(
 
     const bodyPat = `p\\s*\\*\\s*([\\d.eE+-]+)\\s*\\+\\s*c\\s*\\*\\s*([\\d.eE+-]+)${optCacheStr}`
 
-    const singleRe = new RegExp(`^tier\\("([^"]*)",\\s*${bodyPat}\\)$`)
-    const simple = body.match(singleRe)
+    const tierRe = new RegExp(
+      String.raw`^tier\(("(?:[^"\\]|\\.)*"),\s*${bodyPat}\)$`
+    )
+    const simple = body.match(tierRe)
     if (simple) {
       const tier: Record<string, unknown> = {
         conditions: [],
         input_unit_cost: Number(simple[2]),
         output_unit_cost: Number(simple[3]),
-        label: simple[1],
+        label: JSON.parse(simple[1]) as string,
       }
       BILLING_CACHE_VAR_MAP.forEach((cv, i) => {
         const val = simple[4 + i]
@@ -380,7 +382,6 @@ export function tryParseVisualConfig(
         : null
     }
 
-    const tierRe = new RegExp(`^tier\\("([^"]*)",\\s*${bodyPat}\\)$`)
     const tiers: VisualTier[] = []
     const branches = splitTopLevelExpression(body, ':')
     // The splitter omits empty parts. Reject missing branches before comparing
@@ -392,11 +393,15 @@ export function tryParseVisualConfig(
       return null
     const comparisonBranches: string[] = []
     for (const branch of branches) {
-      const parts = branch.match(/^(.*?)\s*\?\s*(tier\("[^"]*",[\s\S]+\))$/)
-      const condStr = parts?.[1]?.trim() || ''
-      const tierSource = parts?.[2] || branch
+      const parts = splitTopLevelExpression(branch, '?', true)
+      if (parts.length > 2 || !parts[0]) return null
+      const conditional = parts.length === 2
+      const condStr = conditional ? parts[0] : ''
+      const tierSource = conditional ? parts[1] : branch
       comparisonBranches.push(
-        parts ? `${unwrapConditionParens(condStr)} ? ${tierSource}` : branch
+        conditional
+          ? `${unwrapConditionParens(condStr)} ? ${tierSource}`
+          : branch
       )
       const match = tierRe.exec(tierSource)
       if (!match) continue
@@ -407,7 +412,7 @@ export function tryParseVisualConfig(
         ...(conditionGroups.length > 1 ? { conditionGroups } : {}),
         input_unit_cost: Number(match[2]),
         output_unit_cost: Number(match[3]),
-        label: match[1],
+        label: JSON.parse(match[1]) as string,
       }
       BILLING_CACHE_VAR_MAP.forEach((cv, i) => {
         const val = match[4 + i]

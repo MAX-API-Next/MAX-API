@@ -19,7 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 // Split only outside calls and quoted strings; both pricing parsers share this contract.
 export function splitTopLevelExpression(
   source: string,
-  operator: ':' | '&&' | '||',
+  operator: ':' | '&&' | '||' | '?' | '+',
   preserveEmpty: boolean = false
 ): string[] {
   const parts: string[] = []

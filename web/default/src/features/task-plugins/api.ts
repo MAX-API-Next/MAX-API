@@ -51,6 +51,29 @@ export const pluginSchema = z.object({
   ),
   execution_ready: z.literal(false),
   admission_ready: z.literal(false),
+  channel_configurable: z.boolean().optional(),
+  base_url: z.string().optional(),
+  upstreams: z.array(z.string()).optional(),
+  key_hint: z.string().optional(),
+  region_parameter: z.boolean().optional(),
+  channel_config: z
+    .object({
+      properties: z.record(
+        z.string(),
+        z.object({
+          type: z.enum(['string', 'number', 'integer', 'boolean']),
+          title: z.string().optional(),
+          description: z.string().optional(),
+          format: z.string().optional(),
+          enum: z.array(z.string()).optional(),
+          default: z.union([z.string(), z.number(), z.boolean()]).optional(),
+          minimum: z.number().optional(),
+          maximum: z.number().optional(),
+        })
+      ),
+      required: z.array(z.string()).optional(),
+    })
+    .optional(),
 })
 export const snapshotSchema = z.object({
   revision,
