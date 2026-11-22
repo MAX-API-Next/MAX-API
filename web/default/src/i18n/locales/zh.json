@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Operator": "运算符",
     "Invalid task plugin parameters: {{parameters}}": "任务插件参数无效：{{parameters}}",
     "Choose a supported parameter value": "请选择受支持的参数值",
     "Set {{name}} to an empty string": "将 {{name}} 设置为空字符串",

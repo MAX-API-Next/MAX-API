@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Operator": "Оператор",
     "Task Plugin": "Плагин задач",
     "The channel follows the active plugin version. Production task admission is unavailable.": "Канал использует активную версию плагина. Приём задач в рабочей среде недоступен.",
     "Select a task plugin": "Выберите плагин задач",

@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Operator": "Operator",
     "Invalid task plugin parameters: {{parameters}}": "Invalid task plugin parameters: {{parameters}}",
     "Choose a supported parameter value": "Choose a supported parameter value",
     "Set {{name}} to an empty string": "Set {{name}} to an empty string",

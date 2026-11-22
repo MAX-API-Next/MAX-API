@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Operator": "Opérateur",
     "Task Plugin": "Plugin de tâches",
     "The channel follows the active plugin version. Production task admission is unavailable.": "Le canal suit la version active du plugin. La prise en charge des tâches en production est indisponible.",
     "Select a task plugin": "Sélectionnez un plugin de tâches",

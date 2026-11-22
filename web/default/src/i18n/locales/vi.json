@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Operator": "Toán tử",
     "Task Plugin": "Plugin tác vụ",
     "The channel follows the active plugin version. Production task admission is unavailable.": "Kênh sử dụng phiên bản plugin đang hoạt động. Hiện chưa thể tiếp nhận tác vụ trong môi trường vận hành thực tế.",
     "Select a task plugin": "Chọn plugin tác vụ",

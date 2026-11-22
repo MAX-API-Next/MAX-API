@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Operator": "演算子",
     "Task Plugin": "タスクプラグイン",
     "The channel follows the active plugin version. Production task admission is unavailable.": "このチャネルはプラグインの有効なバージョンを使用します。本番環境でのタスクの受け付けは利用できません。",
     "Select a task plugin": "タスクプラグインを選択",
