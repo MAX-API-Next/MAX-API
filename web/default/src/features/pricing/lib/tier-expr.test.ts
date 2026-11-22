@@ -38,6 +38,38 @@ const emptyExtraTokens: ExtraTokenValues = {
   audioOutputTokens: 0,
 }
 
+test('quoted and escaped tier labels round trip through editing and pricing display', () => {
+  const label = '阶梯 "A" \\ ? : tier('
+  const tier = normalizeVisualTier({
+    label,
+    input_unit_cost: 2,
+    output_unit_cost: 5,
+  })
+  const conditional = {
+    ...tier,
+    conditions: [{ var: 'len', op: '<', value: 10 } as const],
+  }
+  for (const tiers of [[tier], [conditional], [tier, conditional]]) {
+    const expression = generateExprFromVisualConfig({ tiers })
+    assert.ok(
+      expression.includes(`tier(${JSON.stringify(label)}, p * 2 + c * 5)`)
+    )
+    const labels = tiers.map((item) => item.label)
+    if (tiers.at(-1)?.conditions.length) labels.push(label + '_fallback')
+    const parsed = tryParseVisualConfig(expression)
+    assert.ok(parsed)
+    assert.deepEqual(
+      parsed.tiers.map((item) => item.label),
+      labels
+    )
+    assert.equal(generateExprFromVisualConfig(parsed), expression)
+    assert.deepEqual(
+      parseTiersFromExpr(expression).map((item) => item.label),
+      labels
+    )
+  }
+})
+
 for (const expression of [
   'tier("base", p * 0 + c * 15)',
   'len < 100 ? tier("low", p * 0 + c * 1) : tier("high", p * 2 + c * 3)',
