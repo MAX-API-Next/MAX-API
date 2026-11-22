@@ -22,7 +22,13 @@ import { normalizeInternalRedirect } from './safe-redirect'
 
 export function isSupportedNavHref(href: string): boolean {
   if (href.startsWith('/')) return Boolean(normalizeInternalRedirect(href, ''))
-  return /^https?:\/\//i.test(href) && URL.canParse(href)
+  if (!/^https?:\/\//i.test(href)) return false
+  try {
+    new URL(href)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function toTopNavLink(link: CustomNavLink): TopNavLink[] {

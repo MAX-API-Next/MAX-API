@@ -18,11 +18,23 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { getCustomNavLinks } from './custom-nav-links'
+import { getCustomNavLinks, isSupportedNavHref } from './custom-nav-links'
 import {
   parseHeaderNavModules,
   serializeHeaderNavModules,
 } from './header-nav-modules'
+
+test('external links work in browsers without URL.canParse', () => {
+  const descriptor = Object.getOwnPropertyDescriptor(URL, 'canParse')
+  Reflect.deleteProperty(URL, 'canParse')
+  try {
+    assert.equal(isSupportedNavHref('https://shop.example/products'), true)
+    assert.equal(isSupportedNavHref('http://'), false)
+    assert.equal(isSupportedNavHref('ftp://shop.example'), false)
+  } finally {
+    if (descriptor) Object.defineProperty(URL, 'canParse', descriptor)
+  }
+})
 
 test('legacy links survive editing and saving, including while hidden', () => {
   const config = parseHeaderNavModules(
