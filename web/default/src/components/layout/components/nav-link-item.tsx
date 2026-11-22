@@ -23,13 +23,14 @@ import type { TopNavLink } from '../types'
 interface NavLinkItemProps {
   link: TopNavLink
   className?: string
+  onClick?: React.MouseEventHandler<HTMLAnchorElement>
 }
 
 /**
  * Renders a single navigation link (internal or external)
  * Handles routing and proper link attributes
  */
-export function NavLinkItem({ link, className }: NavLinkItemProps) {
+export function NavLinkItem({ link, className, onClick }: NavLinkItemProps) {
   const linkClassName = cn(
     'text-muted-foreground hover:text-foreground transition-colors',
     link.disabled && 'pointer-events-none opacity-50',
@@ -40,6 +41,7 @@ export function NavLinkItem({ link, className }: NavLinkItemProps) {
     return (
       <a
         href={link.href}
+        onClick={onClick}
         target='_blank'
         rel='noopener noreferrer'
         className={linkClassName}
@@ -51,7 +53,12 @@ export function NavLinkItem({ link, className }: NavLinkItemProps) {
   }
 
   return (
-    <Link to={link.href} className={linkClassName} disabled={link.disabled}>
+    <Link
+      to={link.href}
+      onClick={onClick}
+      className={linkClassName}
+      disabled={link.disabled}
+    >
       {link.title}
     </Link>
   )

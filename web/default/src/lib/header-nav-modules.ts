@@ -21,10 +21,17 @@ export type HeaderNavAccessConfig = {
   requireAuth: boolean
 }
 
-export type HeaderNavCustomConfig = {
-  enabled: boolean
+export type CustomNavLink = {
+  id?: string
   title: string
   href: string
+}
+
+export type CustomNavItem = CustomNavLink & { children: CustomNavLink[] }
+
+export type HeaderNavCustomConfig = {
+  enabled: boolean
+  items: CustomNavItem[]
 }
 
 export type HeaderNavModule = 'rankings' | 'pricing'
@@ -55,8 +62,7 @@ export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
   about: true,
   custom: {
     enabled: false,
-    title: '',
-    href: '',
+    items: [],
   },
 }
 
@@ -91,7 +97,7 @@ function cloneHeaderNavDefault(): HeaderNavModulesConfig {
     ...HEADER_NAV_DEFAULT,
     pricing: { ...HEADER_NAV_DEFAULT.pricing },
     rankings: { ...HEADER_NAV_DEFAULT.rankings },
-    custom: { ...HEADER_NAV_DEFAULT.custom },
+    custom: { ...HEADER_NAV_DEFAULT.custom, items: [] },
   }
 }
 
@@ -137,20 +143,47 @@ export function parseHeaderNavAccess(
   return { ...fallback }
 }
 
+function parseCustomLink(raw: unknown): CustomNavLink | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const record = raw as Record<string, unknown>
+  return {
+    ...(typeof record.id === 'string' && record.id ? { id: record.id } : {}),
+    title: typeof record.title === 'string' ? record.title.trim() : '',
+    href: typeof record.href === 'string' ? record.href.trim() : '',
+  }
+}
+
+function parseCustomItem(raw: unknown): CustomNavItem[] {
+  const link = parseCustomLink(raw)
+  if (!link) return []
+  const children = (raw as Record<string, unknown>).children
+  return [
+    {
+      ...link,
+      children: Array.isArray(children)
+        ? children.map(parseCustomLink).filter((child) => child !== null)
+        : [],
+    },
+  ]
+}
+
 export function parseHeaderNavCustom(
   raw: unknown,
   fallback: HeaderNavCustomConfig
 ): HeaderNavCustomConfig {
-  if (!raw || typeof raw !== 'object') {
-    return { ...fallback }
-  }
-
+  if (!raw || typeof raw !== 'object') return { ...fallback }
   const record = raw as Record<string, unknown>
+  const legacy = parseCustomLink(record)
+  const items = Array.isArray(record.items)
+    ? record.items.flatMap(parseCustomItem)
+    : []
+  // A saved empty list takes precedence over the old single link.
+  if (!('items' in record) && legacy && (legacy.title || legacy.href)) {
+    items.push({ ...legacy, children: [] })
+  }
   return {
     enabled: parseHeaderNavBoolean(record.enabled, fallback.enabled),
-    title:
-      typeof record.title === 'string' ? record.title.trim() : fallback.title,
-    href: typeof record.href === 'string' ? record.href.trim() : fallback.href,
+    items,
   }
 }
 

@@ -85,6 +85,7 @@ export type SidebarData = {
  * Top navigation link type
  */
 export type TopNavLink = {
+  id?: string
   title: string
   href: string
   isActive?: boolean
@@ -93,6 +94,14 @@ export type TopNavLink = {
   external?: boolean
   literalTitle?: boolean
 }
+
+export type TopNavGroup = {
+  id?: string
+  title: string
+  children: TopNavLink[]
+}
+
+export type TopNavItem = TopNavLink | TopNavGroup
 
 /**
  * Back-navigation descriptor for a nested sidebar view

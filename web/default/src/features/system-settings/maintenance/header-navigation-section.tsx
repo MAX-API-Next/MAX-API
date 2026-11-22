@@ -17,22 +17,20 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { useMemo } from 'react'
-import * as z from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { nanoid } from 'nanoid'
 import { useTranslation } from 'react-i18next'
+import { handleServerError } from '@/lib/handle-server-error'
 import {
   Form,
   FormControl,
   FormDescription,
   FormField,
-  FormItem,
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
-import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
-import { handleServerError } from '@/lib/handle-server-error'
 import {
   SettingsControlChildren,
   SettingsForm,
@@ -48,24 +46,13 @@ import {
   type HeaderNavAccessConfig,
   type HeaderNavModulesConfig,
 } from './config'
+import { CustomNavigationEditor } from './custom-navigation-editor'
+import {
+  headerNavSchema,
+  type HeaderNavFormValues,
+} from './header-navigation-schema'
 import { useHeaderNavModulesOption } from './use-header-nav-modules-option'
 import { useRankingsModuleOption } from './use-rankings-module-option'
-
-const headerNavSchema = z.object({
-  home: z.boolean(),
-  console: z.boolean(),
-  pricingEnabled: z.boolean(),
-  pricingRequireAuth: z.boolean(),
-  rankingsEnabled: z.boolean(),
-  rankingsRequireAuth: z.boolean(),
-  docs: z.boolean(),
-  about: z.boolean(),
-  customEnabled: z.boolean(),
-  customTitle: z.string(),
-  customHref: z.string(),
-})
-
-type HeaderNavFormValues = z.infer<typeof headerNavSchema>
 
 type HeaderNavigationSectionProps = {
   config: HeaderNavModulesConfig
@@ -104,18 +91,8 @@ const toFormValues = (
     config.about === undefined
       ? HEADER_NAV_DEFAULT.about
       : Boolean(config.about),
-  customEnabled:
-    config.custom?.enabled === undefined
-      ? HEADER_NAV_DEFAULT.custom.enabled
-      : Boolean(config.custom.enabled),
-  customTitle:
-    config.custom?.title === undefined
-      ? HEADER_NAV_DEFAULT.custom.title
-      : config.custom.title,
-  customHref:
-    config.custom?.href === undefined
-      ? HEADER_NAV_DEFAULT.custom.href
-      : config.custom.href,
+  customEnabled: config.custom.enabled,
+  customItems: config.custom.items,
 })
 
 export function HeaderNavigationSection({
@@ -147,10 +124,15 @@ export function HeaderNavigationSection({
           docs: values.docs,
           about: values.about,
           custom: {
-            ...(current.custom ?? HEADER_NAV_DEFAULT.custom),
             enabled: values.customEnabled,
-            title: values.customTitle.trim(),
-            href: values.customHref.trim(),
+            items: values.customItems.map((item) => ({
+              ...item,
+              id: item.id ?? nanoid(),
+              children: item.children.map((child) => ({
+                ...child,
+                id: child.id ?? nanoid(),
+              })),
+            })),
           },
           pricing: {
             ...(current.pricing ?? HEADER_NAV_DEFAULT.pricing),
@@ -175,7 +157,7 @@ export function HeaderNavigationSection({
   const customEnabled = form.watch('customEnabled')
 
   const simpleModules: Array<{
-    key: keyof HeaderNavFormValues
+    key: 'home' | 'console' | 'docs' | 'about'
     title: string
     description: string
   }> = [
@@ -330,9 +312,9 @@ export function HeaderNavigationSection({
               render={({ field }) => (
                 <SettingsSwitchItem>
                   <SettingsSwitchContent>
-                    <FormLabel>{t('Custom navigation item')}</FormLabel>
+                    <FormLabel>{t('Custom navigation')}</FormLabel>
                     <FormDescription>
-                      {t('Show one custom link in the top navigation.')}
+                      {t('Add links and group related links in submenus.')}
                     </FormDescription>
                   </SettingsSwitchContent>
                   <FormControl>
@@ -346,51 +328,7 @@ export function HeaderNavigationSection({
               )}
             />
 
-            <SettingsControlChildren>
-              <div className='grid gap-4 md:grid-cols-2'>
-                <FormField
-                  control={form.control}
-                  name='customTitle'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t('Navigation name')}</FormLabel>
-                      <FormControl>
-                        <Input
-                          placeholder={t('Status')}
-                          disabled={!customEnabled}
-                          {...field}
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        {t('Displayed label in the top navigation.')}
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={form.control}
-                  name='customHref'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t('Navigation link')}</FormLabel>
-                      <FormControl>
-                        <Input
-                          placeholder={t('https://status.example.com')}
-                          disabled={!customEnabled}
-                          {...field}
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        {t('Destination path or URL.')}
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-            </SettingsControlChildren>
+            {customEnabled && <CustomNavigationEditor control={form.control} />}
           </SettingsControlGroup>
         </SettingsForm>
       </Form>
